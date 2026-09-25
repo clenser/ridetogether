@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#159447" />
+    <title>Offline - RideTogether</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background: #f4f8f5;
+        color: #1d2c23;
+      }
+      main {
+        max-width: 26rem;
+        text-align: center;
+        background: #fff;
+        border: 1px solid #dde8e0;
+        border-radius: 18px;
+        padding: 32px 28px;
+        box-shadow: 0 12px 32px rgba(21, 60, 38, .08);
+      }
+      .badge {
+        display: inline-grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        background: #e2f4e7;
+        color: #159447;
+        font-size: 24px;
+        margin-bottom: 14px;
+      }
+      h1 { margin: 0 0 8px; font-size: 1.3rem; }
+      p { margin: 0 0 18px; color: #5f6f66; font-size: .92rem; line-height: 1.6; }
+      button {
+        min-height: 44px;
+        padding: 0 22px;
+        border: 0;
+        border-radius: 12px;
+        background: #159447;
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:hover { background: #10813b; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #101711; color: #eef7f1; }
+        main { background: #18211b; border-color: #2b3a30; box-shadow: none; }
+        p { color: #a6b5ac; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="badge" aria-hidden="true">⚡</span>
+      <h1>You are offline</h1>
+      <p>
+        RideTogether needs a connection to load your rides, bookings and messages.
+        We will pick up exactly where you left off as soon as you are back online.
+      </p>
+      <button type="button" onclick="window.location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

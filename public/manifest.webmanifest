@@ -1,0 +1,56 @@
+{
+  "name": "RideTogether carpooling",
+  "short_name": "RideTogether",
+  "description": "Find and offer shared rides with people travelling your way.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f4f8f5",
+  "theme_color": "#159447",
+  "categories": ["travel", "social", "navigation"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Find a ride",
+      "short_name": "Find",
+      "url": "/find"
+    },
+    {
+      "name": "Offer a ride",
+      "short_name": "Offer",
+      "url": "/offer"
+    },
+    {
+      "name": "My bookings",
+      "short_name": "Bookings",
+      "url": "/bookings"
+    }
+  ]
+}

@@ -1,28 +1,36 @@
 # RideTogether - Supabase
 
-Server-side schema for RideTogether. **Supabase Auth is now the live sign-in
-mechanism**: users create an account with an email address, a `profiles` row is
+Server-side schema for RideTogether. **Supabase Auth is the sign-in mechanism**:
+users create an account with an email address (or Google), a `profiles` row is
 created automatically, and the authenticated `auth.users.id` is the identity the
 whole app runs on. The demo user switcher has been removed as an auth path.
 
-Ride, booking, chat, vehicle, safety, and notification data still lives in
-IndexedDB for now. `schema.sql` is the server-side target the data layer
-migrates to next, and it deliberately does not touch the local IndexedDB code.
+**Supabase is the only source of truth.** Rides, vehicles, bookings, chat,
+notifications, ratings, and safety contacts are all read from and written to
+Postgres through the repositories in `src/repositories`. The browser no longer
+keeps a writable local copy of any of them: `src/services/database.ts` exists
+only so the pre-cloud IndexedDB cache can be purged, and nothing in the app ever
+reads a record from it. That is deliberate - a stale local store is what allowed
+a cancelled ride to still look bookable.
 
 No demo or fake data is created by `schema.sql`. Auth users are created through
 Supabase Auth; a `profiles` row is created automatically when a user signs up.
 
 ## Environment variables
 
-The frontend needs only the two public values below (see `.env.example`):
+The frontend needs only public values (see `.env.example`):
 
 ```
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+VITE_AUTH_REDIRECT_URL=https://your-app.example.com/auth/callback   # optional
+VITE_VAPID_PUBLIC_KEY=<65-byte base64url P-256 point>                # optional
 ```
 
 Never put the service-role key in a `VITE_` variable - anything prefixed that
-way is bundled into the client and shipped to every browser.
+way is bundled into the client and shipped to every browser. The service-role
+key, the VAPID private key and the push dispatch secret are set with
+`supabase secrets set` and are only ever read by the Edge Function.
 
 ---
 
@@ -281,3 +289,188 @@ Run these in the browser after `npm run dev` with a valid `.env`.
 
 Also confirm: no password or token is written to `localStorage`/`sessionStorage`
 by app code, and no route is reachable without a Supabase session.
+
+---
+
+## Google sign-in
+
+Email/password works with no extra setup. To add Google:
+
+1. Google Cloud Console -> APIs & Services -> Credentials -> Create OAuth client
+   (type "Web application").
+2. Add your Supabase callback URL as an authorised redirect URI. Supabase shows
+   it under Authentication -> URL Configuration as
+   `https://<project-ref>.supabase.co/auth/v1/callback`.
+3. Supabase Dashboard -> Authentication -> Providers -> Google: paste the client
+   id and secret and enable it.
+4. Supabase Dashboard -> Authentication -> URL Configuration: add your app's
+   callback page to the redirect allow-list, e.g.
+   `https://your-app.example.com/auth/callback`.
+
+The browser calls `signInWithOAuth({ provider: "google" })` and returns to
+`VITE_AUTH_REDIRECT_URL`, or to the current origin when that variable is unset
+(which is what local development wants). The Google button only renders when a
+Supabase URL and publishable key are configured, so a misconfigured deployment
+shows the email form instead of a button that cannot work.
+
+---
+
+## Realtime
+
+`schema.sql` adds `rides`, `bookings`, `messages`, `notifications`, `vehicles`,
+`profiles`, `ratings` and `safety_contacts` to the `supabase_realtime`
+publication. The client subscribes to Postgres changes and **refetches** rather
+than trusting the event payload, so what a member sees is exactly what the
+database holds. Events are coalesced into a single trailing refetch, because one
+booking confirmation can fire several changes in quick succession and each
+`applySnapshot` is a batch of parallel queries.
+
+The wider table list is what makes "change something on one device, see it on the
+other" true for profile edits, vehicle changes, ratings and safety contacts, not
+just for the booking and chat flows.
+
+If the publication does not exist yet, the guarded `DO` block creates it; if it
+cannot, it raises a notice instead of failing the whole schema run. Enable it
+manually with:
+
+```sql
+alter publication supabase_realtime
+  add table rides, bookings, messages, notifications,
+            vehicles, profiles, ratings, safety_contacts;
+```
+
+Realtime honours RLS, so a client is only pushed rows it may `SELECT` - a rider
+is not pushed someone else's notifications, and non-participants are not pushed
+ride chat.
+
+---
+
+## Profile photos (Storage)
+
+`schema.sql` creates a public `avatars` bucket and locks writes down: the first
+path segment must equal `auth.uid()`, so a member can only write inside their own
+folder and can only update or delete their own objects. The bucket is public
+because avatars are shown on driver profiles and ride cards to other members.
+
+The service worker never caches `*.supabase.co` responses, so one member cannot
+see another's rides through a cached API response on a shared device.
+
+---
+
+## Web Push
+
+Push is optional. Without it the app is fully functional; members just have to
+have the app open to see a new notification.
+
+### 1. Generate a VAPID key pair
+
+```bash
+deno run --allow-env supabase/functions/send-push/generate-vapid.ts
+```
+
+The printed `VITE_VAPID_PUBLIC_KEY` is the **uncompressed P-256 point**
+(`0x04 || x || y`, 65 bytes, base64url). This is not the same as the bare `x`
+coordinate the JWK exposes, and it matters: `PushManager.subscribe()` rejects
+anything that is not a valid curve point, so using `x` on its own means every
+subscription silently fails.
+
+### 2. Set the secrets and the client value
+
+```bash
+supabase secrets set VAPID_PUBLIC_KEY_X=<x>
+supabase secrets set VAPID_PUBLIC_KEY_Y=<y>
+supabase secrets set VAPID_PRIVATE_KEY=<d>
+supabase secrets set VAPID_SUBJECT=mailto:you@example.com
+supabase secrets set PUSH_DISPATCH_SECRET=$(openssl rand -hex 32)
+```
+
+Put the public key in `.env` as `VITE_VAPID_PUBLIC_KEY`. Rotating any part of the
+pair invalidates every existing browser subscription, because the push service
+checks the key that signed it.
+
+### 3. Wire the database to the function
+
+The notification triggers write `public.notifications` rows, and a statement
+trigger forwards each new row to the Edge Function over `pg_net`, one request per
+recipient. The endpoint URL and the shared secret live in Vault, not in
+`schema.sql`:
+
+```sql
+create extension if not exists pg_net;
+select vault.create_secret('<the PUSH_DISPATCH_SECRET value>', 'push_dispatch_secret');
+select vault.create_secret(
+  'https://<project-ref>.supabase.co/functions/v1/send-push',
+  'push_function_url'
+);
+```
+
+If either secret is missing the trigger logs a warning and the notification row
+is still written - the row is the source of truth, push is best-effort.
+
+### 4. Why the function is locked down
+
+`send-push` holds the VAPID private key **and** uses the service role to read any
+member's subscription rows, so anyone who can call it can notify arbitrary
+members. It therefore:
+
+- requires `Authorization: Bearer <PUSH_DISPATCH_SECRET>`, compared in constant
+  time, and fails closed when the secret is unset;
+- serves no CORS headers, because it is not a browser endpoint;
+- validates `title`, `body` and `url` lengths, and rejects any `url` that is not
+  an in-app path, so a notification click cannot be used as an open redirect;
+- only sends to `https:` endpoints, so a poisoned subscription row cannot make the
+  function issue signed requests at an internal address;
+- derives the VAPID `aud` from the origin of the endpoint being called, and signs
+  with the combined public key.
+
+Encryption is RFC 8291 `aes128gcm`, derived explicitly with ECDH + HKDF rather
+than by importing the receiver's 65-byte public key as an AES key (which would
+fail with an invalid-key-length error). The record's `keyid` is the base64url
+*text* of the receiver's auth secret, so `idlen` is 22, not 16.
+
+### 5. Verify
+
+```bash
+supabase functions deploy send-push
+```
+
+Then, with the app closed, have another member request a seat. The
+`notifications_dispatch_push` trigger fires, the function logs one line per
+device, and a `signatureRejected` count above zero means the deployed
+`VAPID_*` secrets do not match `VITE_VAPID_PUBLIC_KEY`. Endpoints that answer
+404/410 are deleted automatically.
+
+---
+
+## Deployment
+
+`npm run build` produces a static `dist/`. It can be served from any static host
+as long as unknown paths fall back to `index.html`, because the app uses real
+paths (`/find`, `/rides/:id`, `/auth/callback`) and a hard refresh or a shared
+link would otherwise 404.
+
+For Cloudflare Pages:
+
+- Build command `npm run build`, output directory `dist`.
+- Add a rewrite of everything to `/index.html` (Pages: "Not found -> 200 OK" with
+  `/index.html`; or a `_redirects` file containing `/* /index.html 200`).
+- Set the `VITE_*` variables in the Pages environment, not in a committed file.
+- Serve over HTTPS: service workers, Web Push and Google OAuth all require it.
+
+`public/sw.js` is copied into `dist/` as-is and precaches the app shell plus the
+offline page. Map tiles are cached opportunistically, and Supabase traffic is
+never cached.
+
+## Static schema checks
+
+```bash
+npm run check:schema
+```
+
+Verifies, without a database connection, that `$$` quoting is balanced, that every
+`REVOKE`/`GRANT` names a function that exists with the same argument types, that
+every trigger fires a declared function, that no `SECURITY DEFINER` function is
+granted to `authenticated`, and that the `pg_net` dispatch trigger uses a
+transition table. It does **not** replace applying the schema to a real project:
+grants written through `execute format(...)` are invisible to it, and RLS
+behaviour is only provable against live data.

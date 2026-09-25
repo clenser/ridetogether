@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { MIN_PASSWORD_LENGTH, validateEmail, validateFullName, validatePassword } from "../../services/auth";
 import { AuthShell } from "./AuthShell";
+import { GoogleSignInButton } from "./GoogleSignInButton";
 
 type FieldName = "fullName" | "email" | "password" | "confirmPassword";
 type FieldErrors = Partial<Record<FieldName, string>>;
@@ -201,6 +202,8 @@ export function SignUpPage() {
               </>
             )}
           </button>
+
+          <GoogleSignInButton mode="signup" onError={setFormError} />
         </div>
       </form>
 

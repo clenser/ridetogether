@@ -386,10 +386,13 @@ export function SafetyPage() {
     };
     try {
       if (editingContact) {
-        await saveSafetyContact({ ...editingContact, ...contact });
+        await saveSafetyContact({ id: editingContact.id, ...contact });
         setFeedback({ type: "success", text: `${contact.name} was updated.` });
       } else {
-        await saveSafetyContact({ id: crypto.randomUUID(), ...contact, userId: activeUserId });
+        // No id and no userId: the repository inserts a row owned by the
+        // signed-in Supabase user. Generating an id here used to route the add
+        // through the UPDATE branch, so adding a contact always failed.
+        await saveSafetyContact(contact);
         setFeedback({ type: "success", text: `${contact.name} was added.` });
       }
       setFormOpen(false);

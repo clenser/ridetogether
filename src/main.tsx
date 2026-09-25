@@ -5,6 +5,7 @@ import App from "./App";
 import { AppProvider } from "./context/AppContext";
 import { AuthProvider } from "./context/AuthContext";
 import { isSupabaseConfigured } from "./services/supabase";
+import { registerServiceWorker, watchInstallPrompt } from "./services/pwa";
 import { initializeAppearance } from "./services/theme";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./index.css";
@@ -30,3 +31,8 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+// Both of these are fire-and-forget: the app must render whether or not the
+// browser supports a service worker.
+watchInstallPrompt();
+void registerServiceWorker();

@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle,
@@ -17,6 +24,7 @@ import {
 import { PageHeader } from "../components/PageHeader";
 import { Stars } from "../components/Stars";
 import { useApp } from "../context/AppContext";
+import { AVATAR_MAX_BYTES } from "../repositories/avatarRepository";
 
 interface ProfileForm {
   name: string;
@@ -195,9 +203,39 @@ const profileStyles = `
 .rt-profile-input:disabled { color: #6f7d74; background: #f2f6f3; cursor: not-allowed; }
 [data-theme="dark"] .rt-profile-hint { color: #9daba2; }
 [data-theme="dark"] .rt-profile-input:disabled { color: #9daba2; background: #1a241d; }
-.rt-profile-avatar-field { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 12px; align-items: center; }
+.rt-profile-avatar-field { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 12px; align-items: start; }
+.rt-profile-avatar-controls { display: grid; gap: 8px; min-width: 0; }
+.rt-profile-subfield { display: grid; gap: 5px; }
+.rt-profile-file {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px dashed #c2d8c9;
+  border-radius: 12px;
+  background: #f6fbf8;
+  color: #33513f;
+  font: inherit;
+  font-size: .82rem;
+  cursor: pointer;
+}
+.rt-profile-file:hover:not(:disabled) { border-color: #159447; background: #eaf6ee; }
+.rt-profile-file:disabled { cursor: progress; opacity: .65; }
+.rt-profile-file::file-selector-button {
+  margin-right: 10px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: #159447;
+  color: #fff;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
 .rt-profile-avatar-preview { width: 62px; height: 62px; border-radius: 16px; object-fit: cover; background: #e2f4e7; }
 .rt-profile-avatar-fallback-small { display: grid; place-items: center; color: #15823f; }
+[data-theme="dark"] .rt-profile-file { border-color: #2f4438; background: #16201a; color: #cdd9d1; }
+[data-theme="dark"] .rt-profile-file:hover:not(:disabled) { border-color: #159447; background: #1b2a20; }
 .rt-profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 2px; }
 .rt-profile-save {
   min-height: 44px;
@@ -291,11 +329,44 @@ export function ProfilePage() {
     ratings,
     safetyContacts,
     saveProfile,
+    uploadAvatar,
+    deleteAvatar,
   } = useApp();
   const [form, setForm] = useState<ProfileForm>(emptyProfile);
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Uploads the chosen photo and drops the returned URL into the form.
+   *
+   * The file is not submitted with the rest of the form: the upload has to
+   * finish first so the member sees a real image and a real error, instead of a
+   * "Save changes" that silently stores a broken link.
+   */
+  const handleAvatarFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Reset immediately so re-picking the same file still fires a change event.
+    event.target.value = "";
+    if (!file) return;
+
+    setUploadingAvatar(true);
+    setAvatarError("");
+    try {
+      const previous = form.avatar.trim();
+      const url = await uploadAvatar(file);
+      updateField("avatar", url);
+      setErrors((current) => ({ ...current, avatar: undefined }));
+      if (previous.startsWith("/storage/")) void deleteAvatar(previous);
+    } catch (error) {
+      setAvatarError(error instanceof Error ? error.message : "We could not upload that photo.");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   useEffect(() => {
     if (!activeUser) return;
@@ -540,25 +611,44 @@ export function ProfilePage() {
                   />
                   {errors.phone && <span className="rt-profile-error"><AlertCircle size={12} />{errors.phone}</span>}
                 </label>
-                <label className="rt-profile-field rt-profile-field-full">
-                  <span className="rt-profile-label">Profile photo URL <span>(optional)</span></span>
+                <div className="rt-profile-field rt-profile-field-full">
+                  <span className="rt-profile-label">Profile photo <span>(optional)</span></span>
                   <div className="rt-profile-avatar-field">
                     {form.avatar ? (
                       <img className="rt-profile-avatar-preview" src={form.avatar} alt="Profile preview" />
                     ) : (
                       <span className="rt-profile-avatar-preview rt-profile-avatar-fallback-small">{previewInitials}</span>
                     )}
-                    <input
-                      className="rt-profile-input"
-                      type="url"
-                      value={form.avatar}
-                      onChange={(event) => updateField("avatar", event.target.value)}
-                      placeholder="https://example.com/photo.jpg"
-                      aria-invalid={Boolean(errors.avatar)}
-                    />
+                    <div className="rt-profile-avatar-controls">
+                      <input
+                        ref={fileInputRef}
+                        className="rt-profile-file"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        onChange={(event) => void handleAvatarFile(event)}
+                        disabled={uploadingAvatar}
+                        aria-label="Choose a photo to upload"
+                      />
+                      <p className="rt-profile-hint">
+                        Uploads a JPG, PNG, WebP or GIF up to {Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB to RideTogether cloud storage.
+                        {uploadingAvatar ? " Uploading…" : ""}
+                      </p>
+                      {avatarError && <span className="rt-profile-error"><AlertCircle size={12} />{avatarError}</span>}
+                      <label className="rt-profile-subfield">
+                        <span className="rt-profile-label">Or paste an image link</span>
+                        <input
+                          className="rt-profile-input"
+                          type="url"
+                          value={form.avatar}
+                          onChange={(event) => updateField("avatar", event.target.value)}
+                          placeholder="https://example.com/photo.jpg"
+                          aria-invalid={Boolean(errors.avatar)}
+                        />
+                      </label>
+                      {errors.avatar && <span className="rt-profile-error"><AlertCircle size={12} />{errors.avatar}</span>}
+                    </div>
                   </div>
-                  {errors.avatar && <span className="rt-profile-error"><AlertCircle size={12} />{errors.avatar}</span>}
-                </label>
+                </div>
                 <label className="rt-profile-field rt-profile-field-full">
                   <span className="rt-profile-label">About <span>(optional)</span></span>
                   <textarea

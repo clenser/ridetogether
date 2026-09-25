@@ -18,6 +18,7 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { PageHeader } from "../components/PageHeader";
 import { useApp } from "../context/AppContext";
+import { MESSAGE_MAX_LENGTH } from "../repositories/messageRepository";
 import type { Message, Ride } from "../types";
 
 interface MessageGroup {
@@ -224,8 +225,8 @@ export function ChatPage() {
       setError("Type a message before sending.");
       return;
     }
-    if (text.length > 1000) {
-      setError("Messages can contain up to 1,000 characters.");
+    if (text.length > MESSAGE_MAX_LENGTH) {
+      setError(`Messages can contain up to ${MESSAGE_MAX_LENGTH.toLocaleString()} characters.`);
       return;
     }
     setSending(true);
@@ -380,7 +381,7 @@ export function ChatPage() {
           </div>
 
           <div className="rt-chat-composer">
-            <div className="rt-chat-privacy"><ShieldCheck size={13} /> Messages are saved locally for this demo and visible only to ride participants.</div>
+            <div className="rt-chat-privacy"><ShieldCheck size={13} /> Messages are stored in the cloud for this ride and are visible only to its driver and confirmed riders.</div>
             {canSend ? (
               <>
                 <form className="rt-chat-form" onSubmit={handleSubmit}>

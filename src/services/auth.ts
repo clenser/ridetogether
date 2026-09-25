@@ -201,6 +201,68 @@ export const signOut = async (): Promise<void> => {
   }
 };
 
+/**
+ * Where Google should send the browser back to.
+ *
+ * Derived from the current origin instead of a hard-coded deployment URL so the
+ * same build works on localhost, a preview branch and production. An explicit
+ * `VITE_AUTH_REDIRECT_URL` wins when set, which is what you need when the app is
+ * served from a different origin than the one the user started the flow on.
+ */
+const resolveRedirectTo = (): string => {
+  const explicit = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim();
+  if (explicit) return explicit;
+
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "";
+  if (!origin) {
+    throw new Error(
+      "RideTogether could not work out where to return you from Google. Set VITE_AUTH_REDIRECT_URL and try again.",
+    );
+  }
+  return origin;
+};
+
+/**
+ * Starts the Google sign-in flow.
+ *
+ * This does not return a session: the browser leaves the page and Supabase's
+ * callback completes the exchange, which arrives back through
+ * `onAuthStateChange`. Callers must not treat this as a completed sign-in.
+ */
+export const signInWithGoogle = async (): Promise<void> => {
+  const client = getSupabaseClient();
+  const redirectTo = resolveRedirectTo();
+
+  const { error } = await client.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo,
+      // Keep the callback on our own origin so the session is not written to
+      // third-party storage.
+      skipBrowserRedirect: false,
+      scopes: "openid email profile",
+      queryParams: {
+        access_type: "offline",
+        prompt: "select_account",
+      },
+    },
+  });
+
+  if (error) {
+    throw new Error(describeAuthError(error, "sign-in"));
+  }
+};
+
+/**
+ * Whether Google sign-in is likely to be usable. Provider enablement lives in
+ * the Supabase dashboard, so the button is offered optimistically and a failure
+ * is reported with a real message rather than hidden.
+ */
+export const isGoogleSignInAvailable = (): boolean => isSupabaseConfigured();
+
 export const getCurrentSession = async (): Promise<Session | null> => {
   const client = getSupabaseClient();
   const { data, error } = await client.auth.getSession();

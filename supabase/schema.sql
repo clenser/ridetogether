@@ -85,9 +85,28 @@ create table if not exists public.vehicles (
   is_default boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint vehicles_plate_key unique (plate),
+  constraint vehicles_plate_key unique (owner_id, plate),
   constraint vehicles_name_not_blank check (char_length(btrim(name)) > 0),
   constraint vehicles_seats_range check (seats between 1 and 12)
+);
+
+-- Per-device Web Push endpoints (see supabase/functions/send-push).
+-- `endpoint` is the browser-generated push service URL and is globally unique;
+-- a user may register several (phone, laptop) and may re-register the same
+-- endpoint after a browser rotation.
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  endpoint text not null,
+  p256dh_key text not null,
+  auth_key text not null,
+  user_agent text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint push_subscriptions_endpoint_key unique (endpoint),
+  constraint push_subscriptions_keys_not_blank check (
+    char_length(btrim(p256dh_key)) > 0 and char_length(btrim(auth_key)) > 0
+  )
 );
 
 -- Rides offered by a driver.
@@ -256,6 +275,10 @@ create index if not exists vehicles_owner_idx
 create index if not exists safety_contacts_user_idx
   on public.safety_contacts (user_id);
 
+-- Push subscriptions are always looked up by owner and by endpoint.
+create index if not exists push_subscriptions_user_idx
+  on public.push_subscriptions (user_id);
+
 -- Supports the Find Ride query, which filters on status + departure window and
 -- requires at least N free seats.
 create index if not exists rides_status_departure_seats_idx
@@ -310,6 +333,12 @@ create unique index if not exists bookings_one_active_per_rider
 create unique index if not exists vehicles_one_default_per_owner
   on public.vehicles (owner_id)
   where is_default;
+
+-- The plate rule is per owner, not global: two members of the community may
+-- legitimately share or replace the same car, and a global unique plate made
+-- "Add vehicle" fail for reasons the user cannot act on.
+alter table public.vehicles drop constraint if exists vehicles_plate_key;
+alter table public.vehicles add constraint vehicles_plate_key unique (owner_id, plate);
 
 -- -----------------------------------------------------------------------------
 -- 4. Trigger functions
@@ -482,6 +511,264 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+-- 4b. Notification + rating fan-out
+--     Notifications are produced in the database rather than by the browser
+--     that performed the action, so a rider who requested a seat from their
+--     phone still notifies the driver who is signed in on a laptop. Every
+--     insert bypasses RLS via `security definer`, and only ever names a
+--     recipient resolved from the ride itself - never from client input.
+-- -----------------------------------------------------------------------------
+
+-- Shorthand for a notification row.
+create or replace function public.push_notification(
+  target_user_id uuid,
+  notification_type text,
+  notification_title text,
+  notification_body text,
+  target_ride_id uuid default null
+)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.notifications (user_id, ride_id, type, title, body)
+  values (target_user_id, target_ride_id, notification_type, notification_title, notification_body);
+$$;
+
+-- Booking lifecycle: request -> confirmation / rejection / cancellation,
+-- plus a rating prompt once the ride is completed.
+create or replace function public.notify_booking_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_ride_id uuid;
+  driver uuid;
+  rider uuid;
+  seats integer;
+  previous_status text;
+  next_status text;
+  origin_label text;
+  destination_label text;
+begin
+  target_ride_id := case when tg_op = 'DELETE' then old.ride_id else new.ride_id end;
+  seats := case when tg_op = 'DELETE' then old.seats else new.seats end;
+  previous_status := case when tg_op = 'INSERT' then null else old.status end;
+  next_status := case when tg_op = 'DELETE' then 'cancelled' else new.status end;
+
+  select r.driver_id, r.origin_label, r.destination_label
+    into driver, origin_label, destination_label
+    from public.rides r
+   where r.id = target_ride_id;
+
+  if driver is null then
+    return coalesce(new, old);
+  end if;
+
+  if tg_op = 'DELETE' then
+    rider := old.rider_id;
+  else
+    rider := new.rider_id;
+  end if;
+
+  -- A new request tells the driver.
+  if previous_status is null and next_status = 'pending' then
+    perform public.push_notification(
+      driver, 'booking-request',
+      'New seat request',
+      format('%s requested %s seat(s) on %s to %s.',
+        (select coalesce(full_name, 'A rider') from public.profiles where id = rider),
+        seats, origin_label, destination_label),
+      target_ride_id
+    );
+  -- Confirmations, rejections and cancellations go back to the rider.
+  elsif next_status = 'confirmed' and previous_status is distinct from 'confirmed' then
+    perform public.push_notification(
+      rider, 'booking-confirmed',
+      'Your seat is confirmed',
+      format('Your seat on %s to %s is confirmed.', origin_label, destination_label),
+      target_ride_id
+    );
+  elsif next_status = 'rejected' and previous_status is distinct from 'rejected' then
+    perform public.push_notification(
+      rider, 'booking-rejected',
+      'Seat request declined',
+      format('Your request for %s to %s was declined. Try another ride.',
+        origin_label, destination_label),
+      target_ride_id
+    );
+  elsif next_status = 'cancelled' and previous_status is distinct from 'cancelled' then
+    perform public.push_notification(
+      rider, 'booking-cancelled',
+      'Booking cancelled',
+      format('Your booking on %s to %s was cancelled.', origin_label, destination_label),
+      target_ride_id
+    );
+  end if;
+
+  return coalesce(new, old);
+end;
+$$;
+
+-- A completed ride asks both sides to rate each other.
+create or replace function public.notify_ride_completion()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  partner record;
+begin
+  if tg_op = 'UPDATE' and (new.status <> 'completed' or old.status = 'completed') then
+    return new;
+  end if;
+
+  for partner in
+    select b.rider_id as participant
+      from public.bookings b
+     where b.ride_id = new.id
+       and b.status in ('confirmed', 'completed')
+  union
+    select new.driver_id as participant
+  loop
+    if partner.participant <> new.driver_id then
+      perform public.push_notification(
+        partner.participant, 'rating-request',
+        'Rate your trip',
+        format('How was your ride on %s to %s?',
+          new.origin_label, new.destination_label),
+        new.id
+      );
+    end if;
+  end loop;
+
+  -- Everyone with a confirmed seat also hears that the ride finished.
+  perform public.push_notification(
+    new.driver_id, 'ride-completed',
+    'Ride completed',
+    format('%s to %s is now marked completed.', new.origin_label, new.destination_label),
+    new.id
+  );
+
+  return new;
+end;
+$$;
+
+-- A new chat message notifies the other participants.
+create or replace function public.notify_new_message()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  recipient record;
+begin
+  for recipient in
+    select r.driver_id as participant
+      from public.rides r
+     where r.id = new.ride_id
+    union
+    select b.rider_id
+      from public.bookings b
+     where b.ride_id = new.ride_id
+       and b.status in ('pending', 'confirmed', 'completed')
+  loop
+    if recipient.participant <> new.sender_id then
+      perform public.push_notification(
+        recipient.participant, 'message',
+        format('New message from %s',
+          coalesce((select full_name from public.profiles where id = new.sender_id), 'A participant')),
+        left(new.content, 160),
+        new.ride_id
+      );
+    end if;
+  end loop;
+
+  return new;
+end;
+$$;
+
+-- Keeps `profiles.rating` and `profiles.trip_count` honest from cloud data.
+create or replace function public.sync_profile_rating()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_user uuid;
+begin
+  target_user := coalesce(new.reviewee_id, old.reviewee_id);
+
+  update public.profiles p
+     set rating = coalesce((
+           select round(avg(r.stars)::numeric, 2)
+             from public.ratings r
+            where r.reviewee_id = target_user
+         ), 0),
+         trip_count = (
+           select count(*)
+             from public.bookings b
+             join public.rides r on r.id = b.ride_id
+            where b.rider_id = target_user
+              and b.status in ('confirmed', 'completed')
+              and r.status = 'completed'
+         )
+   where p.id = target_user;
+
+  return coalesce(new, old);
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 4b. RPC functions (called by the app, not fired by a trigger)
+-- -----------------------------------------------------------------------------
+
+-- Promotes one vehicle to be the owner's default.
+--
+-- `vehicles_one_default_per_owner` is a partial unique index on (owner_id)
+-- where is_default, so a client cannot demote-then-promote in two statements:
+-- the promote would collide with the still-set old default. Doing both writes
+-- in one function makes the swap atomic and safe under concurrent taps.
+--
+-- Deliberately NOT `security definer`: it runs as the caller, so the ordinary
+-- `vehicles_update_own` RLS policy still applies and the function cannot be
+-- used to reach another user's rows.
+create or replace function public.set_default_vehicle(target_vehicle_id uuid)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1
+      from public.vehicles
+     where id = target_vehicle_id
+       and owner_id = auth.uid()
+  ) then
+    raise exception 'You can only set one of your own vehicles as the default'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  update public.vehicles
+     set is_default = false
+   where owner_id = auth.uid()
+     and is_default
+     and id <> target_vehicle_id;
+
+  update public.vehicles
+     set is_default = true
+   where id = target_vehicle_id
+     and owner_id = auth.uid();
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- 5. RLS helper functions
 --    SECURITY DEFINER so policies can evaluate participation without exposing
 --    raw rows. They return booleans only and set an empty search_path.
@@ -635,6 +922,121 @@ create trigger bookings_apply_seat_change
   after insert or update of status, seats, ride_id or delete on public.bookings
   for each row execute function public.apply_booking_seat_change();
 
+drop trigger if exists bookings_notify_participants on public.bookings;
+create trigger bookings_notify_participants
+  after insert or update of status or delete on public.bookings
+  for each row execute function public.notify_booking_change();
+
+drop trigger if exists rides_notify_completion on public.rides;
+create trigger rides_notify_completion
+  after update of status on public.rides
+  for each row execute function public.notify_ride_completion();
+
+drop trigger if exists messages_notify_recipients on public.messages;
+create trigger messages_notify_recipients
+  after insert on public.messages
+  for each row execute function public.notify_new_message();
+
+drop trigger if exists ratings_sync_profile on public.ratings;
+create trigger ratings_sync_profile
+  after insert or update of stars or delete on public.ratings
+  for each row execute function public.sync_profile_rating();
+
+drop trigger if exists push_subscriptions_set_updated_at on public.push_subscriptions;
+create trigger push_subscriptions_set_updated_at
+  before update on public.push_subscriptions
+  for each row execute function public.set_updated_at();
+
+-- -----------------------------------------------------------------------------
+-- 6b. Web Push dispatch
+-- -----------------------------------------------------------------------------
+-- The triggers above write `public.notifications` rows. Writing the row is what
+-- the app reads, but a member with the app closed only finds out if the push
+-- actually leaves the database, so new rows are forwarded to the `send-push`
+-- Edge Function over pg_net.
+--
+-- This is a statement-level trigger with a transition table on purpose: the
+-- fan-out triggers can insert several notifications for one event, and grouping
+-- by recipient here sends one HTTP request per member instead of one per row.
+--
+-- Setup, all of which is deployment-specific and so not part of the schema:
+--   create extension pg_net;                       -- net.http_post sender
+--   select vault.create_secret('<shared>', 'push_dispatch_secret');
+--   select vault.create_secret('<edge-fn-url>', 'push_function_url');
+-- Both secrets are read from Vault rather than stored in this file, and the
+-- dispatch secret is the same value the Edge Function requires in its
+-- Authorization header, so a leaked database URL alone cannot be used to send
+-- arbitrary notifications.
+
+create extension if not exists pg_net;
+
+create or replace function public.dispatch_push_for_notifications()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_secret text;
+  v_url text;
+  v_target record;
+begin
+  select decrypted_secret into v_secret
+    from vault.decrypted_secrets where name = 'push_dispatch_secret' limit 1;
+
+  if v_secret is null then
+    -- Fail quietly: the notification row is already stored and still shows up
+    -- in the app, so a missing secret must not break the write that created it.
+    raise warning 'push_dispatch_secret is not set in Vault; Web Push delivery skipped';
+    return null;
+  end if;
+
+  select decrypted_secret into v_url
+    from vault.decrypted_secrets where name = 'push_function_url' limit 1;
+
+  if v_url is null or v_url = '' then
+    raise warning 'push_function_url is not set in Vault; Web Push delivery skipped';
+    return null;
+  end if;
+
+  for v_target in
+    select distinct on (user_id) user_id::text, title, body, url
+      from inserted
+     order by user_id, created_at
+  loop
+    -- net.http_post queues the request and returns immediately, after the
+    -- surrounding transaction commits, so a rolled-back notification is never
+    -- delivered. Failures are surfaced in the Edge Function logs rather than
+    -- here, because raising would roll back the notification row itself.
+    perform net.http_post(
+      url := v_url,
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || v_secret
+      ),
+      body := jsonb_build_object(
+        'user_id', v_target.user_id,
+        'title', coalesce(v_target.title, 'RideTogether'),
+        'body', coalesce(v_target.body, ''),
+        'url', coalesce(v_target.url, '/notifications')
+      ),
+      timeout_milliseconds := 5000
+    );
+  end loop;
+
+  return null;
+end;
+$$;
+
+comment on function public.dispatch_push_for_notifications() is
+  'Forwards new notifications to the send-push Edge Function via pg_net.';
+
+drop trigger if exists notifications_dispatch_push on public.notifications;
+create trigger notifications_dispatch_push
+  after insert on public.notifications
+  referencing new table as inserted
+  for each statement execute function public.dispatch_push_for_notifications();
+
 -- -----------------------------------------------------------------------------
 -- 7. Row Level Security
 -- -----------------------------------------------------------------------------
@@ -648,6 +1050,7 @@ alter table public.messages enable row level security;
 alter table public.notifications enable row level security;
 alter table public.ratings enable row level security;
 alter table public.safety_contacts enable row level security;
+alter table public.push_subscriptions enable row level security;
 
 -- profiles -------------------------------------------------------------------
 
@@ -815,6 +1218,30 @@ drop policy if exists safety_contacts_delete_own on public.safety_contacts;
 create policy safety_contacts_delete_own
   on public.safety_contacts for delete to authenticated using (user_id = auth.uid());
 
+-- push_subscriptions ---------------------------------------------------------
+--     A device endpoint is as sensitive as a password: anyone holding it can
+--     push to that browser. Rows are therefore private to their owner, and the
+--     WITH CHECK stops a client from registering an endpoint under someone
+--     else's id. Delivery is done by the `send-push` Edge Function, which uses
+--     the service role and never runs from the browser.
+
+drop policy if exists push_subscriptions_select_own on public.push_subscriptions;
+create policy push_subscriptions_select_own
+  on public.push_subscriptions for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists push_subscriptions_insert_own on public.push_subscriptions;
+create policy push_subscriptions_insert_own
+  on public.push_subscriptions for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists push_subscriptions_update_own on public.push_subscriptions;
+create policy push_subscriptions_update_own
+  on public.push_subscriptions for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists push_subscriptions_delete_own on public.push_subscriptions;
+create policy push_subscriptions_delete_own
+  on public.push_subscriptions for delete to authenticated using (user_id = auth.uid());
+
 -- -----------------------------------------------------------------------------
 -- 8. Grants
 -- -----------------------------------------------------------------------------
@@ -827,18 +1254,15 @@ alter default privileges in schema public
 
 revoke all on all tables in schema public from anon;
 
--- Trigger and helper functions are not callable directly by clients.
+-- Helper functions clients may call. Note that the trigger functions below are
+-- deliberately *not* granted: `security definer` functions that the browser can
+-- invoke directly are an escalation path, and these are only ever fired by the
+-- database. `push_notification()` is in the same category and is revoked below.
 do $$
 declare
   fn text;
 begin
   foreach fn in array array[
-    'public.set_updated_at()',
-    'public.handle_new_user()',
-    'public.init_ride_seats()',
-    'public.sync_ride_total_seats()',
-    'public.prevent_self_booking()',
-    'public.apply_booking_seat_change()',
     'public.is_ride_driver(uuid)',
     'public.has_ride_booking(uuid)',
     'public.is_ride_participant(uuid)',
@@ -853,6 +1277,33 @@ begin
 end
 $$;
 
+-- Trigger-only functions: never executable by a client role.
+do $$
+declare
+  fn text;
+begin
+  foreach fn in array array[
+    'public.set_updated_at()',
+    'public.handle_new_user()',
+    'public.init_ride_seats()',
+    'public.sync_ride_total_seats()',
+    'public.prevent_self_booking()',
+    'public.apply_booking_seat_change()',
+    'public.notify_booking_change()',
+    'public.notify_ride_completion()',
+    'public.notify_new_message()',
+    'public.sync_profile_rating()',
+    'public.push_notification(uuid,text,text,text,uuid)',
+    'public.dispatch_push_for_notifications()'
+  ]
+  loop
+    execute format('revoke execute on function %s from public', fn);
+    execute format('revoke execute on function %s from anon', fn);
+    execute format('revoke execute on function %s from authenticated', fn);
+  end loop;
+end
+$$;
+
 -- The auth.users trigger is fired by Supabase's auth role, not by an
 -- end-user role, so it needs its own grant. Skipped outside Supabase.
 do $$
@@ -862,3 +1313,97 @@ begin
   end if;
 end
 $$;
+
+-- Client-callable RPCs. `set_default_vehicle` must stay invokable from the
+-- browser; every other SECURITY DEFINER function is revoked above.
+revoke execute on function public.set_default_vehicle(uuid) from public;
+revoke execute on function public.set_default_vehicle(uuid) from anon;
+grant execute on function public.set_default_vehicle(uuid) to authenticated;
+
+-- =============================================================================
+-- 9. Storage: profile photos
+-- =============================================================================
+
+-- Public bucket: avatar images are shown on ride cards and driver profiles to
+-- other signed-in members, so the objects must be readable by URL. Writes are
+-- still locked down by the policies below - the first path segment must be the
+-- authenticated user's own id.
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do update set public = excluded.public;
+
+drop policy if exists "avatars are publicly readable" on storage.objects;
+create policy "avatars are publicly readable"
+  on storage.objects for select
+  using (bucket_id = 'avatars');
+
+-- `<auth.uid()>/...` only. The `(storage.foldername(name))[1] = auth.uid()::text`
+-- check is what stops a user writing into someone else's folder.
+drop policy if exists "users manage their own avatar" on storage.objects;
+create policy "users manage their own avatar"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "users update their own avatar" on storage.objects;
+create policy "users update their own avatar"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  )
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "users delete their own avatar" on storage.objects;
+create policy "users delete their own avatar"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- =============================================================================
+-- 10. Realtime
+--     Only the tables the app actually subscribes to. Realtime honours RLS, so
+--     a client only receives rows it is allowed to SELECT - a rider is not
+--     pushed someone else's notifications, and non-participants are not pushed
+--     ride chat.
+--
+--     `alter publication ... add table` errors if the table is already a
+--     member, so each is guarded.
+-- =============================================================================
+
+do $$
+declare
+  tbl text;
+begin
+  foreach tbl in array array[
+    'messages',
+    'notifications',
+    'bookings',
+    'rides',
+    'vehicles',
+    'profiles',
+    'ratings',
+    'safety_contacts'
+  ]
+  loop
+    if exists (select 1 from pg_publication_tables
+                where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = tbl) then
+      continue;
+    end if;
+    execute format('alter publication supabase_realtime add table public.%I', tbl);
+  end loop;
+exception
+  when undefined_object then
+    -- The publication does not exist on this project (not a Supabase host).
+    -- Realtime must then be enabled per table in the dashboard.
+    raise notice 'supabase_realtime publication not found; enable Realtime manually for messages, notifications, bookings, rides, vehicles, profiles, ratings, safety_contacts';
+end
+$$;
+

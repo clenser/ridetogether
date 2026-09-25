@@ -1,9 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Bell,
   CheckCircle2,
   ChevronDown,
-  Database,
+  Download,
   ExternalLink,
   HelpCircle,
   Info,
@@ -16,13 +16,22 @@ import {
   Palette,
   RotateCcw,
   ShieldCheck,
-  Smartphone,
   Sun,
 } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
+import { PushNotificationToggle } from "../components/PushNotificationToggle";
 import { useApp } from "../context/AppContext";
+import { hasLegacyLocalData } from "../services/database";
+import { isSupabaseConfigured } from "../services/supabase";
 import { readAppearance, saveAppearance, type Appearance } from "../services/theme";
+import {
+  dismissInstallPrompt,
+  getInstallState,
+  requestInstall,
+  subscribeToInstallState,
+  type InstallPromptState,
+} from "../services/pwa";
 
 interface Preferences {
   notifications: {
@@ -34,7 +43,6 @@ interface Preferences {
   privacy: {
     showProfile: boolean;
     shareTripDetails: boolean;
-    saveRideHistory: boolean;
   };
 }
 
@@ -50,6 +58,9 @@ interface ToggleProps {
 const STORAGE_KEY = "ridetogether-settings";
 const APP_VERSION = "1.0.0";
 
+/** Resolved once per render so the About card reports the real integration state. */
+const cloudConfigured = isSupabaseConfigured();
+
 const defaultPreferences: Preferences = {
   notifications: {
     email: true,
@@ -60,7 +71,6 @@ const defaultPreferences: Preferences = {
   privacy: {
     showProfile: true,
     shareTripDetails: true,
-    saveRideHistory: true,
   },
 };
 
@@ -147,6 +157,26 @@ const settingsStyles = `
 .rt-switch input:checked + .rt-switch-track { background: #159447; }
 .rt-switch input:checked + .rt-switch-track::after { transform: translateX(19px); }
 .rt-switch input:focus-visible + .rt-switch-track { box-shadow: 0 0 0 3px rgba(21,148,71,.18); }
+/* Wraps one toggle that carries its own status line (push, install). */
+.rt-setting-toggle-group .rt-setting-toggle { cursor: default; }
+.rt-setting-toggle-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -6px 0 14px 48px;
+  color: #15823f;
+  font-size: .72rem;
+  line-height: 1.4;
+}
+.rt-setting-toggle-note--error { color: #bd3434; }
+.rt-install-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; flex-wrap: wrap; }
+.rt-install-copy { min-width: 0; }
+.rt-install-copy strong { display: block; color: #304238; font-size: .83rem; }
+.rt-install-copy span { display: block; margin-top: 4px; color: #748178; font-size: .72rem; line-height: 1.45; }
+[data-theme="dark"] .rt-install-copy strong { color: #eef7f1; }
+[data-theme="dark"] .rt-install-copy span { color: #a6b5ac; }
+[data-theme="dark"] .rt-setting-toggle-note { color: #8be0a6; }
+[data-theme="dark"] .rt-setting-toggle-note--error { color: #ffb0b0; }
 .rt-appearance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 14px; }
 .rt-appearance-option {
   position: relative;
@@ -296,7 +326,6 @@ function readPreferences(): Preferences {
       privacy: {
         showProfile: saved.privacy?.showProfile ?? defaultPreferences.privacy.showProfile,
         shareTripDetails: saved.privacy?.shareTripDetails ?? defaultPreferences.privacy.shareTripDetails,
-        saveRideHistory: saved.privacy?.saveRideHistory ?? defaultPreferences.privacy.saveRideHistory,
       },
     };
   } catch {
@@ -318,11 +347,65 @@ function SettingToggle({ id, icon, title, description, checked, onChange }: Togg
 }
 
 export function SettingsPage() {
-  const { resetDemoData } = useApp();
+  const { clearLocalCache, activeUser } = useApp();
   const [preferences, setPreferences] = useState<Preferences>(readPreferences);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [installState, setInstallState] = useState<InstallPromptState>(getInstallState);
+  const [installing, setInstalling] = useState(false);
+  const [installResult, setInstallResult] = useState<string | null>(null);
+  // Only offer the clear action when a pre-cloud build actually left rows here.
+  const [hasLocalData, setHasLocalData] = useState(false);
+
+  const refreshLocalDataFlag = useCallback(async () => {
+    try {
+      setHasLocalData(await hasLegacyLocalData());
+    } catch {
+      setHasLocalData(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLocalDataFlag();
+  }, [refreshLocalDataFlag]);
+
+  useEffect(
+    () => subscribeToInstallState((next) => setInstallState(next)),
+    [],
+  );
+
+  /**
+   * The browser only offers `beforeinstallprompt` on some platforms, and only
+   * once. The button is hidden when there is nothing to trigger, and the copy
+   * explains the manual route rather than leaving a control that does nothing.
+   */
+  const installMessage = installResult
+    ?? (installState.isInstalled
+      ? "You are using the installed app. Updates arrive automatically."
+      : installState.canInstall
+        ? "Adds a home-screen icon and lets the app open without a browser bar."
+        : installState.dismissed
+          ? "You chose not to be asked again. Use your browser's “Add to home screen” option instead."
+          : "Your browser has not offered an install prompt. On iPhone, use Share → Add to Home Screen.");
+
+  const handleInstall = async () => {
+    setInstalling(true);
+    setInstallResult(null);
+    try {
+      const outcome = await requestInstall();
+      if (outcome === "accepted") {
+        setInstallResult("Installing RideTogether…");
+      } else if (outcome === "dismissed") {
+        dismissInstallPrompt();
+        setInstallResult("No problem. You can install later from this page.");
+      } else {
+        setInstallResult("This browser will not show an install prompt right now.");
+      }
+    } finally {
+      setInstalling(false);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -351,11 +434,12 @@ export function SettingsPage() {
     setResetting(true);
     setResetMessage(null);
     try {
-      await resetDemoData();
+      await clearLocalCache();
+      await refreshLocalDataFlag();
       setResetOpen(false);
-      setResetMessage({ type: "success", text: "Demo data was restored to its original state." });
+      setResetMessage({ type: "success", text: "Local browser data was cleared. Your cloud data is unchanged." });
     } catch (error) {
-      setResetMessage({ type: "error", text: error instanceof Error ? error.message : "Unable to reset demo data." });
+      setResetMessage({ type: "error", text: error instanceof Error ? error.message : "Unable to clear local data." });
     } finally {
       setResetting(false);
     }
@@ -383,6 +467,7 @@ export function SettingsPage() {
             <a href="#rt-notifications"><Bell size={15} /> Notifications</a>
             <a href="#rt-appearance"><Palette size={15} /> Appearance</a>
             <a href="#rt-privacy"><LockKeyhole size={15} /> Privacy</a>
+            <a href="#rt-app"><Download size={15} /> Install</a>
             <a href="#rt-help"><HelpCircle size={15} /> Help</a>
             <a href="#rt-about"><Info size={15} /> About</a>
           </nav>
@@ -401,9 +486,12 @@ export function SettingsPage() {
                 <div><h2>Notifications</h2><p>Choose which notification channels you want enabled.</p></div>
               </div>
               <div className="rt-settings-card-body">
-                <p className="rt-settings-note"><Info size={15} /> These are local demo preferences. No email or push message is sent by this page.</p>
+                <p className="rt-settings-note"><Info size={15} /> In-app and push updates are delivered for real. The email option is remembered for a future mailing list and sends nothing today.</p>
                 <SettingToggle id="rt-email-notifications" icon={<Mail size={17} />} title="Email updates" description="Save your preference for ride and booking summaries by email." checked={preferences.notifications.email} onChange={(value) => updateNotification("email", value)} />
-                <SettingToggle id="rt-push-notifications" icon={<Smartphone size={17} />} title="Push updates" description="Save your preference for supported mobile or desktop push delivery." checked={preferences.notifications.push} onChange={(value) => updateNotification("push", value)} />
+                <PushNotificationToggle
+                  checked={preferences.notifications.push}
+                  onChange={(value) => updateNotification("push", value)}
+                />
                 <SettingToggle id="rt-in-app-notifications" icon={<MessageSquareText size={17} />} title="In-app updates" description="Keep important ride activity visible in the notifications center." checked={preferences.notifications.inApp} onChange={(value) => updateNotification("inApp", value)} />
               </div>
             </section>
@@ -438,12 +526,36 @@ export function SettingsPage() {
             <section className="rt-settings-card" id="rt-privacy">
               <div className="rt-settings-card-head">
                 <span className="rt-settings-card-icon"><ShieldCheck size={20} /></span>
-                <div><h2>Privacy</h2><p>Choose what ride information you prefer to share or retain locally.</p></div>
+                <div><h2>Privacy</h2><p>Choose what ride information you prefer to share with co-riders.</p></div>
               </div>
               <div className="rt-settings-card-body">
                 <SettingToggle id="rt-show-profile" icon={<Laptop size={17} />} title="Show profile to co-riders" description="Allow people in your rides to see your basic profile and contact details." checked={preferences.privacy.showProfile} onChange={(value) => updatePrivacy("showProfile", value)} />
                 <SettingToggle id="rt-share-trip-details" icon={<ExternalLink size={17} />} title="Share trip details" description="Save your preference to share pickup, destination, and timing with confirmed co-riders." checked={preferences.privacy.shareTripDetails} onChange={(value) => updatePrivacy("shareTripDetails", value)} />
-                <SettingToggle id="rt-save-history" icon={<Database size={17} />} title="Save local ride history" description="Keep completed trip activity in this browser’s demo database." checked={preferences.privacy.saveRideHistory} onChange={(value) => updatePrivacy("saveRideHistory", value)} />
+              </div>
+            </section>
+
+            <section className="rt-settings-card" id="rt-app">
+              <div className="rt-settings-card-head">
+                <span className="rt-settings-card-icon"><Download size={20} /></span>
+                <div><h2>Install app</h2><p>Add RideTogether to your home screen for quicker access and an offline fallback page.</p></div>
+              </div>
+              <div className="rt-settings-card-body">
+                <div className="rt-install-row">
+                  <div className="rt-install-copy">
+                    <strong>{installState.isInstalled ? "RideTogether is installed" : "Install RideTogether"}</strong>
+                    <span>{installMessage}</span>
+                  </div>
+                  {installState.canInstall ? (
+                    <button
+                      className="rt-settings-secondary"
+                      type="button"
+                      onClick={() => void handleInstall()}
+                      disabled={installing}
+                    >
+                      {installing ? "Installing…" : "Install"}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </section>
 
@@ -468,7 +580,7 @@ export function SettingsPage() {
                   </details>
                   <details className="rt-faq">
                     <summary>Where is my data stored?<ChevronDown size={16} /></summary>
-                    <p className="rt-faq-answer">RideTogether demo records are stored in your browser using IndexedDB. Settings on this page are stored in localStorage on this device.</p>
+                    <p className="rt-faq-answer">Your rides, bookings, messages, notifications, ratings, vehicles and safety contacts are stored in your RideTogether Supabase database and are shared across every device you sign in on. Only your display preferences on this page are kept in localStorage on this device.</p>
                   </details>
                 </div>
                 <div className="rt-help-guide">
@@ -482,34 +594,38 @@ export function SettingsPage() {
             <section className="rt-settings-card" id="rt-about">
               <div className="rt-settings-card-head">
                 <span className="rt-settings-card-icon"><Info size={20} /></span>
-                <div><h2>About</h2><p>RideTogether demo information and local data controls.</p></div>
+                <div><h2>About</h2><p>RideTogether demo information and account details.</p></div>
               </div>
               <div className="rt-settings-card-body">
                 <div className="rt-about-version">
                   <div className="rt-about-item"><span>Version</span><strong>{APP_VERSION}</strong></div>
-                  <div className="rt-about-item"><span>App mode</span><strong>Local demo</strong></div>
-                  <div className="rt-about-item"><span>Remote accounts</span><strong>None</strong></div>
+                  <div className="rt-about-item"><span>Storage</span><strong>{cloudConfigured ? "Cloud" : "Unavailable"}</strong></div>
+                  <div className="rt-about-item"><span>Accounts</span><strong>{activeUser ? "Signed in" : "Guest"}</strong></div>
                 </div>
-                <p className="rt-about-copy">RideTogether is a responsive carpooling demonstration with demo users, real maps, and locally stored trip data. It is not a live transportation or emergency service.</p>
-                <div className="rt-reset-row">
-                  <div className="rt-reset-copy">
-                    <RotateCcw size={18} />
-                    <span><strong>Reset demo data</strong><span>Restore rides, bookings, vehicles, contacts, ratings, and messages to the original demo state.</span></span>
+                <p className="rt-about-copy">RideTogether is a responsive carpooling demonstration with real maps and cloud-synced trip data. It is not a live transportation or emergency service.</p>
+                {hasLocalData ? (
+                  <div className="rt-reset-row">
+                    <div className="rt-reset-copy">
+                      <RotateCcw size={18} />
+                      <span><strong>Clear local browser data</strong><span>Removes trip records an older version of RideTogether cached on this device. Nothing in the cloud is affected.</span></span>
+                    </div>
+                    <button className="rt-reset-button" type="button" onClick={() => { setResetOpen(true); setResetMessage(null); }} disabled={resetting}><RotateCcw size={14} /> Clear local data</button>
                   </div>
-                  <button className="rt-reset-button" type="button" onClick={() => { setResetOpen(true); setResetMessage(null); }} disabled={resetting}><RotateCcw size={14} /> Reset data</button>
-                </div>
+                ) : (
+                  <p className="rt-reset-modal-copy">No leftover local trip data is stored on this device. Everything you see here is read from the cloud.</p>
+                )}
               </div>
             </section>
           </div>
         </div>
       </div>
 
-      <Modal isOpen={resetOpen} onClose={() => !resetting && setResetOpen(false)} title="Reset all demo data?" size="sm">
-        <div className="rt-reset-warning"><Info size={18} /><span>This permanently removes demo changes stored in IndexedDB for rides, bookings, messages, vehicles, ratings, and safety contacts.</span></div>
-        <p className="rt-reset-modal-copy">The original demo records will be restored. Your saved settings and appearance preference on this device will remain unchanged.</p>
+      <Modal isOpen={resetOpen} onClose={() => !resetting && setResetOpen(false)} title="Clear local browser data?" size="sm">
+        <div className="rt-reset-warning"><Info size={18} /><span>This clears the leftover demo records this browser cached in IndexedDB before RideTogether moved to cloud storage.</span></div>
+        <p className="rt-reset-modal-copy">It does not delete anything from the cloud. Your rides, bookings, messages, vehicles, ratings and safety contacts stay safe in your RideTogether database and are still shared across your devices. Your saved settings and appearance preference on this device will remain unchanged.</p>
         <div className="rt-reset-modal-actions">
           <button className="rt-settings-secondary" type="button" onClick={() => setResetOpen(false)} disabled={resetting}>Cancel</button>
-          <button className="rt-settings-danger" type="button" onClick={() => void handleReset()} disabled={resetting}><RotateCcw size={14} /> {resetting ? "Resetting…" : "Reset demo data"}</button>
+          <button className="rt-settings-danger" type="button" onClick={() => void handleReset()} disabled={resetting}><RotateCcw size={14} /> {resetting ? "Clearing…" : "Clear local data"}</button>
         </div>
       </Modal>
     </div>

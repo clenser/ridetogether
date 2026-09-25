@@ -17,17 +17,11 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
-import { useApp } from "../context/AppContext";
+import { useApp, type VehicleFormValues } from "../context/AppContext";
 import type { Vehicle } from "../types";
 
-interface VehicleDraft {
-  name: string;
-  make: string;
-  model: string;
-  color: string;
-  plate: string;
-  seats: number;
-}
+/** Form state is the same shape the repository accepts; one type, no drift. */
+type VehicleDraft = VehicleFormValues;
 
 type VehicleErrors = Partial<Record<keyof VehicleDraft, string>>;
 
@@ -282,7 +276,7 @@ const vehicleStyles = `
 `;
 
 export function VehiclesPage() {
-  const { loading, activeUserId, vehicles, rides, saveVehicle, deleteVehicle } = useApp();
+  const { loading, activeUserId, vehicles, rides, saveVehicle, updateVehicle, setDefaultVehicle, deleteVehicle } = useApp();
   const [formOpen, setFormOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [draft, setDraft] = useState<VehicleDraft>(emptyDraft);
@@ -363,15 +357,14 @@ export function VehiclesPage() {
     };
     try {
       if (editingVehicle) {
-        await saveVehicle({ ...editingVehicle, ...cleanDraft });
+        await updateVehicle(editingVehicle.id, cleanDraft);
         setFeedback({ type: "success", text: `${cleanDraft.name} was updated.` });
       } else {
-        await saveVehicle({
-          id: crypto.randomUUID(),
-          ...cleanDraft,
-          userId: activeUserId,
-          isDefault: ownedVehicles.length === 0,
-        });
+        // No id, no userId, no isDefault: the repository inserts a row owned by
+        // the signed-in Supabase user and promotes it to default if this is the
+        // member's first vehicle. Passing a client-generated id here previously
+        // routed the add through the UPDATE branch and always failed.
+        await saveVehicle(cleanDraft);
         setFeedback({ type: "success", text: `${cleanDraft.name} was added.` });
       }
       setFormOpen(false);
@@ -390,7 +383,7 @@ export function VehiclesPage() {
     if (vehicle.isDefault) return;
     setFeedback(null);
     try {
-      await saveVehicle({ ...vehicle, isDefault: true });
+      await setDefaultVehicle(vehicle.id);
       setFeedback({ type: "success", text: `${vehicle.name} is now your default vehicle.` });
     } catch (error) {
       setFeedback({

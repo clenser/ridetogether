@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RideTogether">
+  <rect width="512" height="512" rx="112" fill="#159447" />
+  <g fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M132 300h44l40-104h84l40 104h40" />
+    <path d="M118 300h276a20 20 0 0 1 20 20v22a20 20 0 0 1-20 20H118a20 20 0 0 1-20-20v-22a20 20 0 0 1 20-20Z" />
+    <circle cx="164" cy="362" r="16" fill="#ffffff" stroke="none" />
+    <circle cx="348" cy="362" r="16" fill="#ffffff" stroke="none" />
+    <path d="M216 168h80" />
+  </g>
+  <circle cx="256" cy="168" r="26" fill="#ffffff" />
+</svg>

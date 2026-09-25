@@ -21,8 +21,10 @@ import {
 import {
   describeAuthError,
   getCurrentSession,
+  isGoogleSignInAvailable,
   onAuthStateChange,
   signIn as supabaseSignIn,
+  signInWithGoogle as supabaseSignInWithGoogle,
   signOut as supabaseSignOut,
   signUp as supabaseSignUp,
   type SignInInput,
@@ -66,6 +68,12 @@ export interface AuthContextValue {
   profileComplete: boolean;
   sessionNotice: string | null;
   signIn: (input: SignInInput) => Promise<void>;
+  /**
+   * Hands the browser off to Google. Returns once the redirect is initiated, not
+   * when the session exists - the session arrives via `onAuthStateChange`.
+   */
+  signInWithGoogle: () => Promise<void>;
+  googleSignInAvailable: boolean;
   signUp: (input: SignUpInput) => Promise<SignUpResult>;
   signOut: () => Promise<void>;
   updateProfile: (changes: ProfileChanges) => Promise<ProfileRow>;
@@ -237,6 +245,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     [beginProfileLoad],
   );
 
+  const signInWithGoogle = useCallback(async (): Promise<void> => {
+    setSessionNotice(null);
+    // The redirect navigates away, so no state is set here. Supabase posts back
+    // to the redirect URL and the session is picked up by onAuthStateChange.
+    await supabaseSignInWithGoogle();
+  }, []);
+
   const signUp = useCallback(
     async (input: SignUpInput): Promise<SignUpResult> => {
       const result = await supabaseSignUp(input);
@@ -334,6 +349,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       profileComplete,
       sessionNotice,
       signIn,
+      signInWithGoogle,
+      googleSignInAvailable: isGoogleSignInAvailable(),
       signUp,
       signOut,
       updateProfile,
@@ -352,6 +369,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       profileComplete,
       sessionNotice,
       signIn,
+      signInWithGoogle,
       signUp,
       signOut,
       updateProfile,

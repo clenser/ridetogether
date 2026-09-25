@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { validateEmail, validatePassword } from "../../services/auth";
 import { AuthShell } from "./AuthShell";
+import { GoogleSignInButton } from "./GoogleSignInButton";
 
 type FieldErrors = Partial<Record<"email" | "password", string>>;
 
@@ -129,6 +130,8 @@ export function LoginPage() {
               </>
             )}
           </button>
+
+          <GoogleSignInButton mode="signin" onError={setFormError} />
         </div>
       </form>
 
@@ -140,8 +143,7 @@ export function LoginPage() {
       </p>
       <p className="rt-auth__legal">
         Passwords are handled by Supabase Auth and are never stored by this app.
-      </p>
-    </AuthShell>
+      </p>    </AuthShell>
   );
 }
 
