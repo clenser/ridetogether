@@ -14,21 +14,21 @@ import {
   updateRideRecord,
   deleteSafetyContactRecord,
   deleteVehicleRecord,
-  getStoredActiveUserId,
   initializeDatabase,
   markAllNotificationsForUser,
   markNotificationRecord,
   readSnapshot,
   requestBookingRecord,
   resetDatabase,
-  saveProfileRecord,
   saveSafetyContactRecord,
   saveVehicleRecord,
   sendMessageRecord,
-  storeActiveUserId,
   submitRatingRecord,
   updateBookingStatusRecord,
+  upsertAuthenticatedUserRecord,
 } from "../services/database";
+import { useAuth } from "./AuthContext";
+import type { User as AuthUser } from "@supabase/supabase-js";
 import type {
   AppNotification,
   Booking,
@@ -53,7 +53,6 @@ export interface AppContextValue {
   notifications: AppNotification[];
   ratings: Rating[];
   safetyContacts: SafetyContact[];
-  switchUser: (userId: string) => Promise<void>;
   refresh: () => Promise<void>;
   createRide: (input: RideInput) => Promise<Ride>;
   updateRide: (rideId: string, input: RideInput) => Promise<Ride>;
@@ -101,7 +100,28 @@ const loadingUser: User = {
   joinedAt: "",
 };
 
+const buildFallbackUser = (authUser: AuthUser | null): User | null => {
+  if (!authUser) return null;
+  const metadata = (authUser.user_metadata ?? {}) as Record<string, unknown>;
+  const metadataName = typeof metadata.full_name === "string" ? metadata.full_name.trim() : "";
+  const metadataPhone = typeof metadata.phone === "string" ? metadata.phone.trim() : "";
+  const metadataAvatar = typeof metadata.avatar_url === "string" ? metadata.avatar_url.trim() : "";
+
+  return {
+    ...loadingUser,
+    id: authUser.id,
+    name: metadataName,
+    email: authUser.email ?? "",
+    phone: metadataPhone,
+    avatar: metadataAvatar,
+    role: "Member",
+    joinedAt: new Date().toISOString(),
+  };
+};
+
 export const AppProvider = ({ children }: { children: ReactNode }) => {
+  const { authUser, profileUser, updateProfile } = useAuth();
+  const authUserId = authUser?.id ?? "";
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -113,25 +133,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [safetyContacts, setSafetyContacts] = useState<SafetyContact[]>([]);
   const [activeUserId, setActiveUserId] = useState("");
   const activeUserIdRef = useRef("");
-  const activeUser =
-    users.find((user) => user.id === activeUserId) ??
-    users.find((user) => user.id === activeUserIdRef.current) ??
-    users[0] ??
-    loadingUser;
+  const activeUser = users.find((user) => user.id === activeUserId) ?? loadingUser;
 
   const applySnapshot = useCallback(async (): Promise<string> => {
     const snapshot = await readSnapshot();
-    if (snapshot.users.length === 0) {
-      throw new Error("Demo users are unavailable.");
-    }
-    const storedId = getStoredActiveUserId();
-    const selectedId =
-      snapshot.users.find((user) => user.id === storedId)?.id ??
-      snapshot.users.find((user) => user.id === activeUserIdRef.current)?.id ??
-      snapshot.users[0].id;
-    activeUserIdRef.current = selectedId;
-    storeActiveUserId(selectedId);
-    setUsers(snapshot.users);
+    const source = profileUser ?? buildFallbackUser(authUser);
+    const mirrored = source
+      ? await upsertAuthenticatedUserRecord(source)
+      : null;
+    const nextUsers = mirrored
+      ? [...snapshot.users.filter((user) => user.id !== mirrored.id), mirrored]
+      : snapshot.users;
+
+    activeUserIdRef.current = authUserId;
+    setUsers(nextUsers);
     setVehicles(snapshot.vehicles);
     setRides(snapshot.rides);
     setBookings(snapshot.bookings);
@@ -139,9 +154,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setNotifications(snapshot.notifications);
     setRatings(snapshot.ratings);
     setSafetyContacts(snapshot.safetyContacts);
-    setActiveUserId(selectedId);
-    return selectedId;
-  }, []);
+    setActiveUserId(authUserId);
+    return authUserId;
+  }, [authUserId, profileUser]);
 
   const refresh = useCallback(async (): Promise<void> => {
     await applySnapshot();
@@ -174,19 +189,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       await applySnapshot();
     },
     [applySnapshot],
-  );
-
-  const switchUser = useCallback(
-    async (userId: string): Promise<void> => {
-      if (!users.some((user) => user.id === userId)) {
-        throw new Error("That demo user does not exist.");
-      }
-      activeUserIdRef.current = userId;
-      storeActiveUserId(userId);
-      setActiveUserId(userId);
-      await refresh();
-    },
-    [refresh, users],
   );
 
   const createRide = useCallback(
@@ -254,11 +256,28 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const saveProfile = useCallback(
-    (
+    async (
       userId: string,
       changes: Partial<Pick<User, "name" | "email" | "phone" | "avatar" | "role" | "bio">>,
-    ): Promise<void> => mutate((activeId) => saveProfileRecord(userId, changes, activeId)),
-    [mutate],
+    ): Promise<void> => {
+      if (userId !== authUserId) {
+        throw new Error("You can only edit your own profile.");
+      }
+
+      if (changes.email !== undefined && changes.email.trim() !== (authUser?.email ?? "")) {
+        throw new Error("Your sign-in email is managed by Supabase Auth and cannot be edited here.");
+      }
+
+      await updateProfile({
+        fullName: changes.name,
+        phone: changes.phone,
+        bio: changes.bio,
+        avatarUrl: changes.avatar,
+        role: changes.role,
+      });
+      await applySnapshot();
+    },
+    [applySnapshot, authUser?.email, authUserId, updateProfile],
   );
 
   const saveVehicle = useCallback(
@@ -300,7 +319,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     await resetDatabase();
     await applySnapshot();
   }, [applySnapshot]);
-
   return (
     <AppContext.Provider
       value={{
@@ -315,7 +333,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         notifications,
         ratings,
         safetyContacts,
-        switchUser,
         refresh,
         createRide,
         updateRide,

@@ -896,8 +896,13 @@ tbody tr:hover {
   background: var(--rt-surface-subtle);
 }
 
-.demo-user-switcher {
+.user-menu {
   position: relative;
+  min-width: 0;
+}
+
+.user-menu__trigger {
+  width: 100%;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -905,16 +910,20 @@ tbody tr:hover {
   padding: 10px;
   border: 1px solid var(--rt-border);
   border-radius: 14px;
+  color: inherit;
   background: var(--rt-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   transition: border-color var(--rt-transition), box-shadow var(--rt-transition);
 }
 
-.demo-user-switcher:focus-within {
+.user-menu__trigger:hover {
   border-color: var(--rt-primary);
   box-shadow: 0 0 0 3px var(--rt-ring);
 }
 
-.demo-user-switcher__avatar {
+.user-menu__avatar {
   width: 42px;
   height: 42px;
   display: grid;
@@ -924,18 +933,19 @@ tbody tr:hover {
   object-fit: cover;
 }
 
-.demo-user-switcher__avatar--fallback {
+.user-menu__avatar--fallback {
   background: var(--rt-primary-soft);
   color: var(--rt-primary-deep);
+  font-size: 0.86rem;
+  font-weight: 800;
 }
 
-.demo-user-switcher__copy {
-  position: relative;
+.user-menu__copy {
   min-width: 0;
   flex: 1;
 }
 
-.demo-user-switcher__eyebrow {
+.user-menu__eyebrow {
   display: block;
   color: var(--rt-subtle);
   font-size: 0.61rem;
@@ -944,8 +954,7 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
-.demo-user-switcher__copy strong,
-.demo-user-switcher__copy > span:not(.demo-user-switcher__eyebrow) {
+.user-menu__copy strong {
   display: block;
   overflow: hidden;
   color: var(--rt-text-strong);
@@ -955,50 +964,127 @@ tbody tr:hover {
   white-space: nowrap;
 }
 
-.demo-user-switcher__select {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  min-height: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: inherit;
-  opacity: 0;
-}
-
-.demo-user-switcher__demo-badge {
+.user-menu__chevron {
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
-  padding: 4px 6px;
-  border-radius: 999px;
-  background: var(--rt-primary-soft);
-  color: var(--rt-primary-deep);
-  font-size: 0.58rem;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  border-right: 2px solid var(--rt-subtle);
+  border-bottom: 2px solid var(--rt-subtle);
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform var(--rt-transition);
 }
 
-.demo-user-switcher--compact {
+.user-menu__trigger[aria-expanded="true"] .user-menu__chevron {
+  transform: rotate(-135deg) translateY(-2px);
+}
+
+.user-menu__panel {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  min-width: 236px;
+  max-width: min(280px, calc(100vw - 32px));
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--rt-border);
+  border-radius: 16px;
+  background: var(--rt-surface);
+  box-shadow: var(--rt-shadow-lg);
+}
+
+.user-menu__panel-head {
+  display: grid;
+  gap: 2px;
+  padding: 10px 11px 11px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--rt-border);
+}
+
+.user-menu__panel-head strong {
+  overflow: hidden;
+  color: var(--rt-text-strong);
+  font-size: 0.82rem;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu__panel-head span {
+  overflow: hidden;
+  color: var(--rt-subtle);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu__item {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--rt-text);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 680;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--rt-transition), color var(--rt-transition);
+}
+
+.user-menu__item:hover {
+  background: var(--rt-surface-subtle);
+  color: var(--rt-text-strong);
+}
+
+.user-menu__item--danger {
+  color: var(--rt-danger, #c23c3c);
+}
+
+.user-menu__item--danger:hover {
+  background: rgba(194, 60, 60, 0.09);
+  color: var(--rt-danger, #c23c3c);
+}
+
+.user-menu__item:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.user-menu--compact {
   width: auto;
-  padding: 4px 8px 4px 4px;
+}
+
+.user-menu--compact .user-menu__trigger {
+  width: auto;
+  padding: 4px 9px 4px 4px;
   border-radius: 13px;
 }
 
-.demo-user-switcher--compact .demo-user-switcher__avatar {
+.user-menu--compact .user-menu__avatar {
   width: 36px;
   height: 36px;
   border-radius: 10px;
 }
 
-.demo-user-switcher--compact .demo-user-switcher__copy {
+.user-menu--compact .user-menu__copy {
   width: min(128px, 14vw);
   flex: 0 1 auto;
 }
 
-.demo-user-switcher--compact .demo-user-switcher__copy strong {
+.user-menu--compact .user-menu__copy strong {
   font-size: 0.76rem;
+}
+
+.user-menu--compact .user-menu__panel {
+  top: calc(100% + 8px);
+  bottom: auto;
 }
 
 .app-shell__content {
@@ -2650,7 +2736,7 @@ tbody tr:hover {
     margin-inline: auto;
   }
 
-  .demo-user-switcher--compact .demo-user-switcher__copy {
+  .user-menu--compact .user-menu__copy {
     width: min(150px, 18vw);
   }
 
@@ -2718,16 +2804,19 @@ tbody tr:hover {
     height: 39px;
   }
 
-  .demo-user-switcher--compact {
+  .user-menu--compact {
     max-width: 154px;
+  }
+
+  .user-menu--compact .user-menu__trigger {
     padding-right: 6px;
   }
 
-  .demo-user-switcher--compact .demo-user-switcher__copy {
+  .user-menu--compact .user-menu__copy {
     width: 90px;
   }
 
-  .demo-user-switcher--compact .demo-user-switcher__copy strong {
+  .user-menu--compact .user-menu__copy strong {
     font-size: 0.7rem;
   }
 
@@ -2849,8 +2938,11 @@ tbody tr:hover {
     white-space: nowrap;
   }
 
-  .demo-user-switcher--compact {
-    position: relative;
+  .user-menu--compact {
+    width: 42px;
+  }
+
+  .user-menu--compact .user-menu__trigger {
     width: 42px;
     height: 42px;
     justify-content: center;
@@ -2860,18 +2952,19 @@ tbody tr:hover {
     background: transparent;
   }
 
-  .demo-user-switcher--compact .demo-user-switcher__copy {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    overflow: visible;
-    clip: auto;
-    white-space: normal;
+  .user-menu--compact .user-menu__avatar {
+    width: 36px;
+    height: 36px;
   }
 
-  .demo-user-switcher--compact .demo-user-switcher__copy strong {
+  .user-menu--compact .user-menu__copy,
+  .user-menu--compact .user-menu__chevron {
     display: none;
+  }
+
+  .user-menu--compact .user-menu__panel {
+    right: 0;
+    min-width: 214px;
   }
 
   .app-bottom-nav__link {

@@ -15,8 +15,10 @@ import {
   TicketCheck,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { UserMenu } from "./UserMenu";
 import { useApp } from "../context/AppContext";
-import type { AppNotification, User } from "../types";
+import { useAuth } from "../context/AuthContext";
+import type { AppNotification } from "../types";
 
 interface NavigationItem {
   label: string;
@@ -46,48 +48,9 @@ function getUnreadCount(notifications: AppNotification[], userId?: string): numb
   return notifications.filter((notification) => notification.userId === userId && !notification.read).length;
 }
 
-interface DemoUserSwitcherProps {
-  users: User[];
-  activeUser: User | null;
-  onSwitchUser: (userId: string) => void;
-  compact?: boolean;
-}
-
-function DemoUserSwitcher({ users, activeUser, onSwitchUser, compact = false }: DemoUserSwitcherProps) {
-  return (
-    <div className={`demo-user-switcher${compact ? " demo-user-switcher--compact" : ""}`}>
-      {activeUser?.avatar ? (
-        <img className="demo-user-switcher__avatar" src={activeUser.avatar} alt="" />
-      ) : (
-        <span className="demo-user-switcher__avatar demo-user-switcher__avatar--fallback" aria-hidden="true">
-          <CircleUserRound size={compact ? 20 : 24} />
-        </span>
-      )}
-      <span className="demo-user-switcher__copy">
-        {!compact ? <span className="demo-user-switcher__eyebrow">Viewing as</span> : null}
-        {activeUser ? <strong>{activeUser.name}</strong> : <span>Select a demo user</span>}
-        <select
-          className="demo-user-switcher__select"
-          aria-label="Switch demo user"
-          value={activeUser?.id ?? ""}
-          disabled={users.length === 0}
-          onChange={(event) => onSwitchUser(event.target.value)}
-        >
-          {users.length === 0 ? <option value="">No users available</option> : null}
-          {users.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.name}
-            </option>
-          ))}
-        </select>
-      </span>
-      {!compact ? <span className="demo-user-switcher__demo-badge">Demo</span> : null}
-    </div>
-  );
-}
-
 export function Layout() {
-  const { loading, users, activeUser, notifications, switchUser } = useApp();
+  const { loading, activeUser, notifications } = useApp();
+  const { authUser } = useAuth();
   const location = useLocation();
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
@@ -115,10 +78,6 @@ export function Layout() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isMoreOpen]);
-
-  const handleSwitchUser = (userId: string) => {
-    void switchUser(userId);
-  };
 
   if (loading) {
     return (
@@ -170,7 +129,7 @@ export function Layout() {
         </nav>
 
         <div className="app-sidebar__footer">
-          <DemoUserSwitcher users={users} activeUser={activeUser} onSwitchUser={handleSwitchUser} />
+          <UserMenu user={activeUser} email={authUser?.email ?? ""} />
         </div>
       </aside>
 
@@ -192,7 +151,7 @@ export function Layout() {
               {unreadCount > 0 ? <span className="app-notification-dot">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
             </NavLink>
             <div className="app-topbar__user">
-              <DemoUserSwitcher users={users} activeUser={activeUser} onSwitchUser={handleSwitchUser} compact />
+              <UserMenu user={activeUser} email={authUser?.email ?? ""} compact />
             </div>
           </div>
         </header>

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ArrowLeft, Compass, Home, MapPinned } from "lucide-react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { RedirectIfAuthenticated, RequireAuth, RequireCompleteProfile } from "./components/AuthGuards";
 import Layout from "./components/Layout";
 import ChatPage from "./pages/ChatPage";
 import FindRidePage from "./pages/FindRidePage";
@@ -14,6 +15,9 @@ import RideDetailsPage from "./pages/RideDetailsPage";
 import SafetyPage from "./pages/SafetyPage";
 import SettingsPage from "./pages/SettingsPage";
 import VehiclesPage from "./pages/VehiclesPage";
+import CompleteProfilePage from "./pages/auth/CompleteProfilePage";
+import LoginPage from "./pages/auth/LoginPage";
+import SignUpPage from "./pages/auth/SignUpPage";
 
 const notFoundStyles = `
 .rt-not-found {
@@ -240,6 +244,9 @@ const getDocumentTitle = (pathname: string) => {
   if (pathname === "/vehicles") return "My Vehicles | RideTogether";
   if (pathname === "/safety") return "Safety Center | RideTogether";
   if (pathname === "/settings") return "Settings | RideTogether";
+  if (pathname === "/login") return "Log In | RideTogether";
+  if (pathname === "/signup") return "Create Account | RideTogether";
+  if (pathname === "/complete-profile") return "Complete Your Profile | RideTogether";
   return "Page Not Found | RideTogether";
 };
 
@@ -286,21 +293,43 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<Layout />}>
-        <Route index element={<HomePage />} />
-        <Route path="find" element={<FindRidePage />} />
-         <Route path="offer" element={<OfferRidePage />} />
-         <Route path="offer/:rideId/edit" element={<OfferRidePage />} />
-         <Route path="rides" element={<MyRidesPage />} />
-        <Route path="rides/:rideId" element={<RideDetailsPage />} />
-        <Route path="bookings" element={<MyBookingsPage />} />
-        <Route path="chat/:rideId" element={<ChatPage />} />
-        <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="profile" element={<ProfilePage />} />
-        <Route path="vehicles" element={<VehiclesPage />} />
-        <Route path="safety" element={<SafetyPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="*" element={<NotFoundPage pathname={location.pathname} />} />
+      <Route
+        path="/login"
+        element={
+          <RedirectIfAuthenticated>
+            <LoginPage />
+          </RedirectIfAuthenticated>
+        }
+      />
+      <Route
+        path="/signup"
+        element={
+          <RedirectIfAuthenticated>
+            <SignUpPage />
+          </RedirectIfAuthenticated>
+        }
+      />
+
+      <Route element={<RequireAuth />}>
+        <Route path="/complete-profile" element={<CompleteProfilePage />} />
+        <Route element={<RequireCompleteProfile />}>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<HomePage />} />
+            <Route path="find" element={<FindRidePage />} />
+            <Route path="offer" element={<OfferRidePage />} />
+            <Route path="offer/:rideId/edit" element={<OfferRidePage />} />
+            <Route path="rides" element={<MyRidesPage />} />
+            <Route path="rides/:rideId" element={<RideDetailsPage />} />
+            <Route path="bookings" element={<MyBookingsPage />} />
+            <Route path="chat/:rideId" element={<ChatPage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="profile" element={<ProfilePage />} />
+            <Route path="vehicles" element={<VehiclesPage />} />
+            <Route path="safety" element={<SafetyPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<NotFoundPage pathname={location.pathname} />} />
+          </Route>
+        </Route>
       </Route>
     </Routes>
   );

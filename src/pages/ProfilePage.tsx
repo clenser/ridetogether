@@ -4,6 +4,7 @@ import {
   AlertCircle,
   CarFront,
   CheckCircle2,
+  Lock,
   Mail,
   MapPinned,
   Phone,
@@ -190,6 +191,10 @@ const profileStyles = `
 }
 .rt-profile-input[aria-invalid="true"], .rt-profile-textarea[aria-invalid="true"] { border-color: #dc4c4c; }
 .rt-profile-error { display: flex; align-items: center; gap: 5px; margin: 0; color: #bd3434; font-size: .75rem; }
+.rt-profile-hint { display: flex; align-items: center; gap: 4px; margin: 0; color: #78867d; font-size: .73rem; line-height: 1.45; }
+.rt-profile-input:disabled { color: #6f7d74; background: #f2f6f3; cursor: not-allowed; }
+[data-theme="dark"] .rt-profile-hint { color: #9daba2; }
+[data-theme="dark"] .rt-profile-input:disabled { color: #9daba2; background: #1a241d; }
 .rt-profile-avatar-field { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 12px; align-items: center; }
 .rt-profile-avatar-preview { width: 62px; height: 62px; border-radius: 16px; object-fit: cover; background: #e2f4e7; }
 .rt-profile-avatar-fallback-small { display: grid; place-items: center; color: #15823f; }
@@ -370,7 +375,6 @@ export function ProfilePage() {
   const validate = () => {
     const next: ProfileErrors = {};
     if (form.name.trim().length < 2) next.name = "Enter at least 2 characters.";
-    if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) next.email = "Enter a valid email address.";
     const phone = form.phone.trim();
     if (!/^[+\d\s().-]+$/.test(phone) || phone.replace(/\D/g, "").length < 7) next.phone = "Enter a valid phone number.";
     if (form.avatar && !/^https?:\/\//i.test(form.avatar.trim())) next.avatar = "Use a full http or https image URL.";
@@ -388,7 +392,6 @@ export function ProfilePage() {
     try {
       await saveProfile(activeUserId, {
         name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
         phone: form.phone.trim(),
         avatar: form.avatar.trim(),
         role: form.role.trim(),
@@ -516,11 +519,14 @@ export function ProfilePage() {
                     className="rt-profile-input"
                     type="email"
                     value={form.email}
-                    onChange={(event) => updateField("email", event.target.value)}
+                    readOnly
+                    disabled
                     autoComplete="email"
-                    aria-invalid={Boolean(errors.email)}
                   />
-                  {errors.email && <span className="rt-profile-error"><AlertCircle size={12} />{errors.email}</span>}
+                  <span className="rt-profile-hint">
+                    <Lock size={12} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 4 }} />
+                    Your sign-in email is managed by Supabase Auth.
+                  </span>
                 </label>
                 <label className="rt-profile-field">
                   <span className="rt-profile-label">Phone number</span>

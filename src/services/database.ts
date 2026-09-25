@@ -491,20 +491,30 @@ export const readSnapshot = async (): Promise<DatabaseSnapshot> => {
   };
 };
 
-export const getStoredActiveUserId = (): string | null => {
-  try {
-    return window.localStorage.getItem(ACTIVE_USER_KEY);
-  } catch {
-    return null;
+export const upsertAuthenticatedUserRecord = async (user: User): Promise<User> => {
+  const id = user.id.trim();
+  if (!id) {
+    throw new Error("The signed-in user is missing an identifier.");
   }
-};
 
-export const storeActiveUserId = (userId: string): void => {
-  try {
-    window.localStorage.setItem(ACTIVE_USER_KEY, userId);
-  } catch {
-    return;
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction("users", "readwrite");
+  const existing = await transaction.store.get(id);
+  const record: User = {
+    id,
+    name: user.name.trim() || existing?.name || "RideTogether member",
+    email: user.email.trim() || existing?.email || "",
+    phone: user.phone.trim() || existing?.phone || "",
+    avatar: user.avatar.trim() || existing?.avatar || "",
+    role: user.role.trim() || existing?.role || "Member",
+    bio: user.bio.trim() || existing?.bio || "",
+    rating: Number.isFinite(user.rating) ? user.rating : existing?.rating ?? 0,
+    tripCount: Number.isFinite(user.tripCount) ? user.tripCount : existing?.tripCount ?? 0,
+    joinedAt: user.joinedAt || existing?.joinedAt || new Date().toISOString(),
+  };
+  await transaction.store.put(record);
+  await transaction.done;
+  return record;
 };
 
 export const createRideRecord = async (
