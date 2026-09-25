@@ -1,7 +1,0 @@
-# Cloudflare Pages SPA fallback.
-#
-# The app uses real paths (/find, /rides/:id, /auth/callback), so a hard refresh
-# or a shared deep link must serve index.html rather than 404. Cloudflare Pages
-# serves matching static files first, so /sw.js, /manifest.webmanifest, /icons/*
-# and /assets/* are unaffected by this catch-all.
-/*  /index.html  200

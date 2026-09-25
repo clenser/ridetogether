@@ -1,0 +1,22 @@
+{
+  // Cloudflare Workers Static Assets deployment for the RideTogether SPA.
+  //
+  // There is deliberately NO _redirects file. A `/*  /index.html  200` catch-all
+  // is rejected by Cloudflare with error 100324 ("Infinite loop detected in this
+  // rule"): the rewrite target /index.html is itself matched by /*, so the rule
+  // engine strips the .html to canonicalise it to /index and re-enters the same
+  // rule. `not_found_handling` below gives the identical SPA behaviour natively,
+  // with no rewrite rule and therefore no loop.
+  //
+  // "single-page-application" means: serve the matching asset when one exists,
+  // and otherwise return /index.html with a 200 so React Router can resolve
+  // client-side paths like /find, /rides/:id and /auth/callback. It is a
+  // fallback, not a redirect, so the browser URL never changes.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ridetogether",
+  "compatibility_date": "2026-09-26",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

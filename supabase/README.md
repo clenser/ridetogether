@@ -449,12 +449,36 @@ as long as unknown paths fall back to `index.html`, because the app uses real
 paths (`/find`, `/rides/:id`, `/auth/callback`) and a hard refresh or a shared
 link would otherwise 404.
 
-For Cloudflare Pages:
+### Cloudflare Workers Static Assets
 
-- Build command `npm run build`, output directory `dist`.
-- Add a rewrite of everything to `/index.html` (Pages: "Not found -> 200 OK" with
-  `/index.html`; or a `_redirects` file containing `/* /index.html 200`).
-- Set the `VITE_*` variables in the Pages environment, not in a committed file.
+`wrangler.jsonc` is the deployment config:
+
+```jsonc
+{
+  "name": "ridetogether",
+  "compatibility_date": "2026-09-26",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
+```
+
+Deploy with `npx wrangler deploy`. The `name` must match the Worker the dashboard
+has already created, or a second Worker is created.
+
+**There is intentionally no `_redirects` file.** A catch-all
+`/*  /index.html  200` is rejected by Cloudflare with error **100324**, "Infinite
+loop detected in this rule": the rewrite target `/index.html` is itself matched
+by `/*`, so the engine strips `.html` to canonicalise the URL to `/index` and
+re-enters the same rule. `not_found_handling: "single-page-application"` gives the
+same behaviour natively - existing assets are served, and anything else returns
+`/index.html` with a 200 - as a fallback rather than a rewrite, so the browser URL
+never changes and there is no rule to loop.
+
+Notes for any host:
+
+- Set the `VITE_*` variables in the platform's environment, not in a committed file.
 - Serve over HTTPS: service workers, Web Push and Google OAuth all require it.
 
 `public/sw.js` is copied into `dist/` as-is and precaches the app shell plus the
