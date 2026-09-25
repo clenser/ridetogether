@@ -8,6 +8,7 @@ import {
 import { createSeedData, type SeedData } from "../data/seed";
 import {
   formatRupees,
+  getBaseFare,
   getFareRange,
   isContributionInRange,
   normalizeContributionForDistance,
@@ -517,13 +518,23 @@ export const upsertAuthenticatedUserRecord = async (user: User): Promise<User> =
   return record;
 };
 
+/**
+ * ---------------------------------------------------------------------------
+ * Superseded local ride, vehicle and booking writes.
+ *
+ * Rides, ride stops, vehicles and bookings now live in Supabase and are read
+ * and written through `repositories/rideRepository.ts`,
+ * `repositories/vehicleRepository.ts` and `repositories/bookingRepository.ts`.
+ * Nothing in the app calls the functions below any more; they are kept only so
+ * the remaining IndexedDB features (messages, notifications, ratings, safety
+ * contacts) keep their existing helpers. Do not add new callers here.
+ * ---------------------------------------------------------------------------
+ */
+
 export const createRideRecord = async (
   input: RideInput,
   userId: string,
 ): Promise<Ride> => {
-  if (input.driverId !== userId) {
-    throw new Error("You can only publish a ride as the active user.");
-  }
   validateRideInput(input);
 
   const database = await getDatabase();
@@ -543,9 +554,12 @@ export const createRideRecord = async (
     throw new Error("The selected vehicle does not have that many seats.");
   }
 
+  // `driverId` comes from the authenticated userId, never from `input`.
   const ride: Ride = {
     ...input,
     id: crypto.randomUUID(),
+    driverId: userId,
+    baseFare: getBaseFare(input.distanceKm) ?? 0,
     waypoints: [...input.waypoints],
     status: "active",
     createdAt: new Date().toISOString(),
@@ -560,9 +574,6 @@ export const updateRideRecord = async (
   input: RideInput,
   userId: string,
 ): Promise<Ride> => {
-  if (input.driverId !== userId) {
-    throw new Error("You can only edit a ride as its driver.");
-  }
   validateRideInput(input, { allowNoAvailableSeats: true });
 
   const database = await getDatabase();
@@ -601,6 +612,9 @@ export const updateRideRecord = async (
   const updatedRide: Ride = {
     ...ride,
     ...input,
+    // The driver is immutable, and the stored base fare follows the distance.
+    driverId: ride.driverId,
+    baseFare: getBaseFare(input.distanceKm) ?? ride.baseFare,
     waypoints: [...input.waypoints],
     id: ride.id,
     status: "active",

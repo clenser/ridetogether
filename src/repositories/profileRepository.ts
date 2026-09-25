@@ -221,6 +221,25 @@ export const describeProfileGaps = (row: ProfileRow | null): string[] => {
  * Maps a Supabase profile row (plus the auth email) onto the app's User shape
  * so existing screens keep working without knowing about Supabase.
  */
+/**
+ * Every profile the signed-in user is allowed to see. `profiles` RLS allows any
+ * authenticated user to read profiles, which is what the app needs to show a
+ * driver's name, avatar, rating and trip count next to a ride.
+ */
+export const fetchProfiles = async (): Promise<ProfileRow[]> => {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from(PROFILE_TABLE)
+    .select(PROFILE_COLUMNS)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  if (error) {
+    throw new ProfileError(describeProfileError(error));
+  }
+  return (data ?? []) as ProfileRow[];
+};
+
 export const toAppUser = (
   row: ProfileRow | null,
   authUser: SupabaseUser | null,

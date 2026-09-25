@@ -6,6 +6,7 @@ import {
   Check,
   CheckCircle2,
   Gauge,
+  LoaderCircle,
   Palette,
   Pencil,
   Plus,
@@ -204,6 +205,9 @@ const vehicleStyles = `
 .rt-vehicle-default-button:hover:not(:disabled) { background: #ddf4e5; }
 .rt-vehicle-default-button:disabled { color: #5f6f65; border-color: #dfe5e1; background: #f4f6f5; cursor: default; }
 .rt-vehicles-empty { grid-column: 1 / -1; min-height: 330px; display: grid; place-items: center; border: 1px dashed #cddbd2; border-radius: 21px; background: rgba(255,255,255,.58); }
+.rt-vehicles-loading { display: grid; justify-items: center; gap: 12px; color: #6d7c73; font-size: .82rem; }
+.rt-vehicles-spin { color: #159447; animation: rt-vehicles-spin .8s linear infinite; }
+@keyframes rt-vehicles-spin { to { transform: rotate(360deg); } }
 .rt-vehicle-form { display: grid; gap: 18px; }
 .rt-vehicle-form-intro { display: flex; align-items: flex-start; gap: 11px; margin: 0; padding: 12px 13px; border-radius: 12px; color: #496056; background: #f1f8f3; font-size: .78rem; line-height: 1.5; }
 .rt-vehicle-form-intro svg { flex: 0 0 auto; color: #159447; margin-top: 1px; }
@@ -278,7 +282,7 @@ const vehicleStyles = `
 `;
 
 export function VehiclesPage() {
-  const { activeUserId, vehicles, rides, saveVehicle, deleteVehicle } = useApp();
+  const { loading, activeUserId, vehicles, rides, saveVehicle, deleteVehicle } = useApp();
   const [formOpen, setFormOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [draft, setDraft] = useState<VehicleDraft>(emptyDraft);
@@ -442,8 +446,8 @@ export function VehiclesPage() {
           <div className="rt-vehicles-summary">
             <span className="rt-vehicles-summary-icon"><CarFront size={22} /></span>
             <span className="rt-vehicles-summary-copy">
-              <strong>{ownedVehicles.length} {ownedVehicles.length === 1 ? "vehicle" : "vehicles"}</strong>
-              <span>{ownedVehicles.length ? "Only you can edit or remove these vehicles." : "Add a vehicle before offering a ride."}</span>
+              <strong>{loading ? "Loading…" : `${ownedVehicles.length} ${ownedVehicles.length === 1 ? "vehicle" : "vehicles"}`}</strong>
+              <span>{loading ? "Fetching your saved vehicles from the cloud." : ownedVehicles.length ? "Only you can edit or remove these vehicles." : "Add a vehicle before offering a ride."}</span>
             </span>
           </div>
           <button className="rt-vehicles-add" type="button" onClick={openAdd}>
@@ -462,7 +466,14 @@ export function VehiclesPage() {
         )}
 
         <div className="rt-vehicles-grid">
-          {ownedVehicles.length === 0 ? (
+          {loading ? (
+            <div className="rt-vehicles-empty">
+              <div className="rt-vehicles-loading" role="status">
+                <LoaderCircle className="rt-vehicles-spin" size={24} aria-hidden="true" />
+                <span>Loading your vehicles…</span>
+              </div>
+            </div>
+          ) : ownedVehicles.length === 0 ? (
             <div className="rt-vehicles-empty">
               <EmptyState
                 title="No vehicles yet"

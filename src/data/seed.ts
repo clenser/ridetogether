@@ -1,4 +1,4 @@
-import { normalizeContributionForDistance } from "../services/fare";
+import { getBaseFare, normalizeContributionForDistance } from "../services/fare";
 import type {
   AppNotification,
   Booking,
@@ -178,7 +178,9 @@ export const createSeedData = (now = new Date()): SeedData => {
   const rahulPastRideId = crypto.randomUUID();
   const ananyaPastRideId = crypto.randomUUID();
 
-  const rides: Ride[] = [
+  // `baseFare` is derived once from each ride's distance (₹9/km, rounded)
+  // rather than repeated nine times in the literals above.
+  const rides: Ride[] = ([
     {
       id: rahulKolkataRideId,
       driverId: rahulId,
@@ -422,7 +424,10 @@ export const createSeedData = (now = new Date()): SeedData => {
       durationMinutes: 232,
       createdAt: before(ananyaPastDeparture.instant, 96),
     },
-  ];
+  ] as Omit<Ride, "baseFare">[]).map((ride) => ({
+    ...ride,
+    baseFare: getBaseFare(ride.distanceKm) ?? 0,
+  }));
 
   const bookings: Booking[] = [
     {

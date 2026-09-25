@@ -106,6 +106,10 @@ create table if not exists public.rides (
   seats_available integer not null default 0,
   distance_km double precision not null,
   duration_minutes integer not null,
+  -- ₹9/km, rounded to the nearest whole rupee. Stored (not derived at read
+  -- time) so the fare a rider agreed to is auditable even if FARE_PER_KM
+  -- changes later. `rides_base_fare_matches_distance` keeps it honest.
+  base_fare integer not null,
   contribution integer not null,
   status public.ride_status not null default 'upcoming',
   created_at timestamptz not null default now(),
@@ -126,7 +130,20 @@ create table if not exists public.rides (
   ),
   constraint rides_distance_positive check (distance_km > 0),
   constraint rides_duration_positive check (duration_minutes > 0),
-  constraint rides_contribution_positive check (contribution >= 0)
+  constraint rides_base_fare_positive check (base_fare >= 0),
+  constraint rides_contribution_positive check (contribution >= 0),
+  -- Fare rule, enforced by the database so a client cannot bypass it:
+  --   base fare = round(distance_km * 9) rupees (₹9/km)
+  --   contribution must fall within base - 10 .. base + 10
+  -- `round(double precision)` is immutable, so this is valid in a CHECK.
+  constraint rides_base_fare_matches_distance check (
+    base_fare = round(distance_km * 9)
+  ),
+  constraint rides_contribution_fare_band check (
+    contribution between
+      greatest(0, round(distance_km * 9) - 10)
+      and round(distance_km * 9) + 10
+  )
 );
 
 -- Ordered waypoints between origin and destination.
@@ -238,6 +255,51 @@ create index if not exists vehicles_owner_idx
   on public.vehicles (owner_id);
 create index if not exists safety_contacts_user_idx
   on public.safety_contacts (user_id);
+
+-- Supports the Find Ride query, which filters on status + departure window and
+-- requires at least N free seats.
+create index if not exists rides_status_departure_seats_idx
+  on public.rides (status, departure_at, seats_available);
+
+-- -----------------------------------------------------------------------------
+-- 3b. Constraint upgrades
+--     `create table if not exists` is a no-op on an existing table, so any
+--     constraint added after a project's first run is applied here instead.
+-- -----------------------------------------------------------------------------
+
+-- `base_fare` is a stored column, so an existing table needs it added and
+-- backfilled before any fare CHECK can be enforced.
+alter table public.rides add column if not exists base_fare integer;
+
+update public.rides
+   set base_fare = round(distance_km * 9)::integer
+ where base_fare is null;
+
+alter table public.rides alter column base_fare set not null;
+
+-- A project created before the fare band existed can hold contributions
+-- outside it, which would make the ADD CONSTRAINT below fail. Clamp those rows
+-- to the base fare first so this script stays re-runnable. Rows created after
+-- the band was introduced are already inside it and are not touched.
+update public.rides
+   set contribution = round(distance_km * 9)::integer
+ where contribution < greatest(0, round(distance_km * 9) - 10)
+    or contribution > round(distance_km * 9) + 10;
+
+alter table public.rides drop constraint if exists rides_base_fare_matches_distance;
+alter table public.rides add constraint rides_base_fare_matches_distance check (
+  base_fare = round(distance_km * 9)
+);
+
+alter table public.rides drop constraint if exists rides_base_fare_positive;
+alter table public.rides add constraint rides_base_fare_positive check (base_fare >= 0);
+
+alter table public.rides drop constraint if exists rides_contribution_fare_band;
+alter table public.rides add constraint rides_contribution_fare_band check (
+  contribution between
+    greatest(0, round(distance_km * 9) - 10)
+    and round(distance_km * 9) + 10
+);
 
 -- A rider may hold at most one active booking per ride.
 create unique index if not exists bookings_one_active_per_rider

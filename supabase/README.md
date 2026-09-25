@@ -80,7 +80,7 @@ key looks like a secret key or a legacy JWT.
 | ----------------- | -------------------------------------------------------------------------------------------------------- |
 | `profiles`        | App-level user record, one row per `auth.users` entry. Name, phone, avatar, bio, role, aggregate rating, trip count. |
 | `vehicles`        | Vehicles owned by a profile. `seats` is 1-12, `plate` is unique, at most one `is_default` per owner.     |
-| `rides`           | A driver's ride: origin/destination coordinates and labels, `departure_at`, seat counts, distance, duration, contribution, status. |
+| `rides`           | A driver's ride: origin/destination coordinates and labels, `departure_at`, seat counts, distance, duration, base fare, contribution, status. |
 | `ride_stops`      | Ordered waypoints for a ride, unique per `(ride_id, stop_order)`.                                          |
 | `bookings`        | A rider's seat request with `seats` and `status`.                                                          |
 | `messages`        | Ride chat. Only the driver and the ride's active riders can read or write.                                 |
@@ -207,7 +207,8 @@ snake_case and flat.
 | `Ride.totalSeats`        | `rides.total_seats`                                            |                                                              |
 | `Ride.distanceKm`        | `rides.distance_km`                                            |                                                              |
 | `Ride.durationMinutes`   | `rides.duration_minutes`                                       |                                                              |
-| `Ride.contribution`      | `rides.contribution`                                           | Whole rupees; the ±10 band around `9 x distance_km` stays a client rule |
+| `Ride.baseFare`          | `rides.base_fare`                                              | Stored, not derived: `round(distance_km * 9)`, enforced by `rides_base_fare_matches_distance` |
+| `Ride.contribution`      | `rides.contribution`                                           | Whole rupees; the ±10 band around the base fare is enforced by the `rides_contribution_fare_band` CHECK |
 | `Message.text`           | `messages.content`                                             |                                                              |
 | `AppNotification.read`   | `notifications.is_read`                                        |                                                              |
 | `Booking.seats`          | `bookings.seats`                                               |                                                              |

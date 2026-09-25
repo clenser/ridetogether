@@ -53,6 +53,8 @@ export interface Ride {
   departureTime: string;
   availableSeats: number;
   totalSeats: number;
+  /** ₹9/km rounded to the nearest rupee, as persisted by the database. */
+  baseFare: number;
   contribution: number;
   status: RideStatus;
   distanceKm?: number;
@@ -107,8 +109,15 @@ export interface SafetyContact {
   relationship: string;
 }
 
+/**
+ * What the UI may submit when publishing or editing a ride.
+ *
+ * There is deliberately no `driverId`: the ride always belongs to the
+ * authenticated Supabase user, so the field is not part of the input contract
+ * and cannot be forged from a component. `availableSeats` is likewise not
+ * persisted directly - the database owns `rides.seats_available`.
+ */
 export interface RideInput {
-  driverId: string;
   vehicleId: string;
   origin: Coordinates;
   destination: Coordinates;

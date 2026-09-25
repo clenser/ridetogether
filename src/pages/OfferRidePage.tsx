@@ -462,7 +462,6 @@ export default function OfferRidePage() {
     }
 
     const input: RideInput = {
-      driverId: activeUserId,
       vehicleId: selectedVehicle.id,
       origin,
       destination,

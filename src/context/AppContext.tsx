@@ -8,25 +8,42 @@ import {
   type ReactNode,
 } from "react";
 import {
-  cancelRideRecord,
-  completeRideRecord,
-  createRideRecord,
-  updateRideRecord,
   deleteSafetyContactRecord,
-  deleteVehicleRecord,
   initializeDatabase,
   markAllNotificationsForUser,
   markNotificationRecord,
   readSnapshot,
-  requestBookingRecord,
   resetDatabase,
   saveSafetyContactRecord,
-  saveVehicleRecord,
   sendMessageRecord,
   submitRatingRecord,
-  updateBookingStatusRecord,
   upsertAuthenticatedUserRecord,
 } from "../services/database";
+import {
+  cancelBooking as supabaseCancelBooking,
+  listAllVisibleBookings,
+  requestBooking as supabaseRequestBooking,
+  updateBookingStatus as supabaseUpdateBookingStatus,
+} from "../repositories/bookingRepository";
+import { describeDataFailure } from "../repositories/dataError";
+import { fetchProfiles, toAppUser as toAppUserFromProfile } from "../repositories/profileRepository";
+import {
+  cancelRide as supabaseCancelRide,
+  completeRide as supabaseCompleteRide,
+  createRide as supabaseCreateRide,
+  listRides as supabaseListRides,
+  searchRides as supabaseSearchRides,
+  updateRide as supabaseUpdateRide,
+  type RideWithRelations,
+} from "../repositories/rideRepository";
+import {
+  createVehicle as supabaseCreateVehicle,
+  deleteVehicle as supabaseDeleteVehicle,
+  listVehicles as supabaseListVehicles,
+  makeDefaultVehicle,
+  updateVehicle as supabaseUpdateVehicle,
+  type VehicleDraft,
+} from "../repositories/vehicleRepository";
 import { useAuth } from "./AuthContext";
 import type { User as AuthUser } from "@supabase/supabase-js";
 import type {
@@ -37,6 +54,7 @@ import type {
   Ride,
   RideInput,
   SafetyContact,
+  SearchCriteria,
   User,
   Vehicle,
 } from "../types";
@@ -72,6 +90,7 @@ export interface AppContextValue {
   ) => Promise<void>;
   saveVehicle: (vehicle: Omit<Vehicle, "id"> & { id?: string }) => Promise<void>;
   deleteVehicle: (id: string) => Promise<void>;
+  searchRides: (criteria: SearchCriteria) => Promise<Ride[]>;
   saveSafetyContact: (
     contact: Omit<SafetyContact, "id"> & { id?: string },
   ) => Promise<void>;
@@ -120,7 +139,7 @@ const buildFallbackUser = (authUser: AuthUser | null): User | null => {
 };
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
-  const { authUser, profileUser, updateProfile } = useAuth();
+  const { authUser, profileUser, updateProfile, isAuthenticated } = useAuth();
   const authUserId = authUser?.id ?? "";
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
@@ -135,35 +154,82 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const activeUserIdRef = useRef("");
   const activeUser = users.find((user) => user.id === activeUserId) ?? loadingUser;
 
+  /**
+   * Loads the Supabase-backed data. Rides, vehicles and bookings come from the
+   * cloud; messages, notifications, ratings and safety contacts still come from
+   * IndexedDB until those are migrated. The active user is mirrored into
+   * IndexedDB so the remaining local features can resolve the current user.
+   */
   const applySnapshot = useCallback(async (): Promise<string> => {
-    const snapshot = await readSnapshot();
+    if (!authUserId) {
+      setUsers([]);
+      setVehicles([]);
+      setRides([]);
+      setBookings([]);
+      setActiveUserId("");
+      return "";
+    }
+
+    const [cloudRides, cloudVehicles, cloudBookings, profiles] = await Promise.all([
+      supabaseListRides().catch(() => [] as RideWithRelations[]),
+      supabaseListVehicles().catch(() => [] as Vehicle[]),
+      listAllVisibleBookings().catch(() => [] as Booking[]),
+      fetchProfiles().catch(() => []),
+    ]);
+
+    // Driver profiles ride along with the rides; merge them into the directory
+    // so the pages that resolve `ride.driverId` to a name/avatar/rating work.
+    const directory = new Map<string, User>();
+    for (const profile of profiles) {
+      const mapped = toAppUserFromProfile(profile, profile.id === authUserId ? authUser : null);
+      if (mapped) directory.set(mapped.id, mapped);
+    }
+    for (const entry of cloudRides) {
+      if (entry.driver) directory.set(entry.driver.id, entry.driver);
+    }
+
+    const localSnapshot = await readSnapshot();
     const source = profileUser ?? buildFallbackUser(authUser);
-    const mirrored = source
-      ? await upsertAuthenticatedUserRecord(source)
-      : null;
-    const nextUsers = mirrored
-      ? [...snapshot.users.filter((user) => user.id !== mirrored.id), mirrored]
-      : snapshot.users;
+    if (source) {
+      await upsertAuthenticatedUserRecord(source).catch(() => null);
+    }
+    for (const localUser of localSnapshot.users) {
+      if (!directory.has(localUser.id)) directory.set(localUser.id, localUser);
+    }
 
     activeUserIdRef.current = authUserId;
-    setUsers(nextUsers);
-    setVehicles(snapshot.vehicles);
-    setRides(snapshot.rides);
-    setBookings(snapshot.bookings);
-    setMessages(snapshot.messages);
-    setNotifications(snapshot.notifications);
-    setRatings(snapshot.ratings);
-    setSafetyContacts(snapshot.safetyContacts);
+    setUsers([...directory.values()]);
+    setVehicles(cloudVehicles);
+    setRides(cloudRides.map((entry) => entry.ride));
+    setBookings(cloudBookings);
+    setMessages(localSnapshot.messages);
+    setNotifications(localSnapshot.notifications);
+    setRatings(localSnapshot.ratings);
+    setSafetyContacts(localSnapshot.safetyContacts);
     setActiveUserId(authUserId);
     return authUserId;
-  }, [authUserId, profileUser]);
+  }, [authUser, authUserId, profileUser]);
 
   const refresh = useCallback(async (): Promise<void> => {
     await applySnapshot();
   }, [applySnapshot]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      // Signed out: clear cloud data so nothing from the previous account stays
+      // on screen, and stop the app-loading spinner.
+      setUsers([]);
+      setVehicles([]);
+      setRides([]);
+      setBookings([]);
+      setActiveUserId("");
+      activeUserIdRef.current = "";
+      setLoading(false);
+      return;
+    }
+
     let mounted = true;
+    setLoading(true);
     void (async () => {
       try {
         await initializeDatabase();
@@ -179,80 +245,109 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       mounted = false;
     };
-  }, [applySnapshot]);
+  }, [applySnapshot, isAuthenticated]);
 
-  const mutate = useCallback(
+  /** Wraps an IndexedDB-only mutation with the usual post-write refresh. */
+  const mutateLocal = useCallback(
     async (operation: (userId: string) => Promise<void>): Promise<void> => {
       const userId = activeUserIdRef.current;
-      if (!userId) throw new Error("The app is still loading. Please try again.");
+      if (!userId) throw new Error("You need to be signed in to do that.");
       await operation(userId);
       await applySnapshot();
     },
     [applySnapshot],
   );
 
-  const createRide = useCallback(
-    async (input: RideInput): Promise<Ride> => {
-      const userId = activeUserIdRef.current;
-      if (!userId) throw new Error("The app is still loading. Please try again.");
-      const ride = await createRideRecord(input, userId);
-      await applySnapshot();
-      return ride;
+  /** Wraps a Supabase mutation, then re-reads the authoritative cloud state. */
+  const mutateCloud = useCallback(
+    async <T,>(operation: () => Promise<T>, action: Parameters<typeof describeDataFailure>[1]): Promise<T> => {
+      if (!activeUserIdRef.current) throw new Error("You need to be signed in to do that.");
+      try {
+        const result = await operation();
+        await applySnapshot();
+        return result;
+      } catch (error) {
+        // Re-read anyway: a partially applied change (for example a trigger that
+        // restored seats before rejecting a second write) must not be left
+        // stale on screen.
+        await applySnapshot().catch(() => undefined);
+        throw new Error(describeDataFailure(error, action));
+      }
     },
     [applySnapshot],
   );
 
+  const createRide = useCallback(
+    (input: RideInput): Promise<Ride> => mutateCloud(() => supabaseCreateRide(input), "create"),
+    [mutateCloud],
+  );
+
   const updateRide = useCallback(
-    async (rideId: string, input: RideInput): Promise<Ride> => {
-      const userId = activeUserIdRef.current;
-      if (!userId) throw new Error("The app is still loading. Please try again.");
-      const ride = await updateRideRecord(rideId, input, userId);
-      await applySnapshot();
-      return ride;
-    },
-    [applySnapshot],
+    (rideId: string, input: RideInput): Promise<Ride> =>
+      mutateCloud(() => supabaseUpdateRide(rideId, input), "update"),
+    [mutateCloud],
   );
 
   const requestBooking = useCallback(
     (rideId: string, seats: number): Promise<void> =>
-      mutate((userId) => requestBookingRecord(rideId, seats, userId)),
-    [mutate],
+      mutateCloud(async () => {
+        await supabaseRequestBooking(rideId, seats);
+      }, "book"),
+    [mutateCloud],
   );
 
   const updateBookingStatus = useCallback(
     (bookingId: string, status: "confirmed" | "rejected" | "cancelled"): Promise<void> =>
-      mutate((userId) => updateBookingStatusRecord(bookingId, status, userId)),
-    [mutate],
+      mutateCloud(async () => {
+        // The database trigger performs the seat change; nothing is decremented
+        // or restored here. The follow-up refresh re-reads the real numbers.
+        await (status === "cancelled"
+          ? supabaseCancelBooking(bookingId)
+          : supabaseUpdateBookingStatus(bookingId, status));
+      }, status === "confirmed" ? "confirm" : status === "cancelled" ? "cancel" : "update"),
+    [mutateCloud],
   );
 
   const cancelRide = useCallback(
     (rideId: string): Promise<void> =>
-      mutate((userId) => cancelRideRecord(rideId, userId)),
-    [mutate],
+      mutateCloud(async () => {
+        await supabaseCancelRide(rideId);
+      }, "cancel"),
+    [mutateCloud],
   );
 
   const completeRide = useCallback(
     (rideId: string): Promise<void> =>
-      mutate((userId) => completeRideRecord(rideId, userId)),
-    [mutate],
+      mutateCloud(async () => {
+        await supabaseCompleteRide(rideId);
+      }, "complete"),
+    [mutateCloud],
+  );
+
+  const searchRides = useCallback(
+    async (criteria: SearchCriteria): Promise<Ride[]> => {
+      const results = await supabaseSearchRides(criteria);
+      return results.map((entry) => entry.ride);
+    },
+    [],
   );
 
   const sendMessage = useCallback(
     (rideId: string, text: string): Promise<void> =>
-      mutate((userId) => sendMessageRecord(rideId, text, userId)),
-    [mutate],
+      mutateLocal((userId) => sendMessageRecord(rideId, text, userId)),
+    [mutateLocal],
   );
 
   const markNotificationRead = useCallback(
     (id: string): Promise<void> =>
-      mutate((userId) => markNotificationRecord(id, userId)),
-    [mutate],
+      mutateLocal((userId) => markNotificationRecord(id, userId)),
+    [mutateLocal],
   );
 
   const markAllNotificationsRead = useCallback(
     (): Promise<void> =>
-      mutate((userId) => markAllNotificationsForUser(userId)),
-    [mutate],
+      mutateLocal((userId) => markAllNotificationsForUser(userId)),
+    [mutateLocal],
   );
 
   const saveProfile = useCallback(
@@ -281,27 +376,46 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const saveVehicle = useCallback(
-    (vehicle: Omit<Vehicle, "id"> & { id?: string }): Promise<void> =>
-      mutate((userId) => saveVehicleRecord(vehicle, userId)),
-    [mutate],
+    async (vehicle: Omit<Vehicle, "id"> & { id?: string }): Promise<void> => {
+      const draft: VehicleDraft = {
+        name: vehicle.name,
+        make: vehicle.make,
+        model: vehicle.model,
+        color: vehicle.color,
+        plate: vehicle.plate,
+        seats: vehicle.seats,
+        isDefault: vehicle.isDefault,
+      };
+      await mutateCloud(async () => {
+        const saved = vehicle.id
+          ? await supabaseUpdateVehicle(vehicle.id, draft)
+          : await supabaseCreateVehicle(draft);
+        // The schema has no partial unique index on the default vehicle, so the
+        // previous default is demoted after the new one is safely stored.
+        if (saved.isDefault) await makeDefaultVehicle(saved.id);
+      }, vehicle.id ? "update" : "create");
+    },
+    [mutateCloud],
   );
 
   const deleteVehicle = useCallback(
     (id: string): Promise<void> =>
-      mutate((userId) => deleteVehicleRecord(id, userId)),
-    [mutate],
+      mutateCloud(async () => {
+        await supabaseDeleteVehicle(id);
+      }, "delete"),
+    [mutateCloud],
   );
 
   const saveSafetyContact = useCallback(
     (contact: Omit<SafetyContact, "id"> & { id?: string }): Promise<void> =>
-      mutate((userId) => saveSafetyContactRecord(contact, userId)),
-    [mutate],
+      mutateLocal((userId) => saveSafetyContactRecord(contact, userId)),
+    [mutateLocal],
   );
 
   const deleteSafetyContact = useCallback(
     (id: string): Promise<void> =>
-      mutate((userId) => deleteSafetyContactRecord(id, userId)),
-    [mutate],
+      mutateLocal((userId) => deleteSafetyContactRecord(id, userId)),
+    [mutateLocal],
   );
 
   const submitRating = useCallback(
@@ -311,8 +425,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       stars: number,
       comment: string,
     ): Promise<void> =>
-      mutate((userId) => submitRatingRecord(rideId, revieweeId, stars, comment, userId)),
-    [mutate],
+      mutateLocal((userId) => submitRatingRecord(rideId, revieweeId, stars, comment, userId)),
+    [mutateLocal],
   );
 
   const resetDemoData = useCallback(async (): Promise<void> => {
@@ -346,6 +460,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         saveProfile,
         saveVehicle,
         deleteVehicle,
+        searchRides,
         saveSafetyContact,
         deleteSafetyContact,
         submitRating,

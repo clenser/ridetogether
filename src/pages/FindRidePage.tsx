@@ -250,7 +250,7 @@ const findStyles = `
 `;
 
 export default function FindRidePage() {
-  const { loading, activeUserId, users, vehicles, rides, bookings, requestBooking } = useApp();
+  const { loading, activeUserId, users, vehicles, rides, bookings, requestBooking, searchRides } = useApp();
    const [origin, setOrigin] = useState<Coordinates | null>(null);
    const [destination, setDestination] = useState<Coordinates | null>(null);
    const [date, setDate] = useState("");
@@ -506,51 +506,63 @@ export default function FindRidePage() {
     setSearchError("");
     setSearchNotice("");
     const selectedTime = timeToMinutes(time);
-     const matchingCandidates = rides.filter((ride) => {
-       if (ride.status !== "active" || ride.driverId === activeUserId) return false;
-      if (ride.departureDate !== date || ride.availableSeats < seats) return false;
-      const departure = rideDepartureTimestamp(ride);
-      if (!Number.isFinite(departure) || departure <= Date.now()) return false;
-      const rideTime = timeToMinutes(ride.departureTime);
-      if (Number.isFinite(selectedTime) && Number.isFinite(rideTime) && circularTimeDifference(selectedTime, rideTime) > TIME_TOLERANCE_MINUTES) {
-        return false;
-      }
-      return (
-        haversineDistanceKm(origin, ride.origin) <= ENDPOINT_PROXIMITY_KM &&
-        haversineDistanceKm(destination, ride.destination) <= ENDPOINT_PROXIMITY_KM
-      );
-     });
-     const candidates = matchingCandidates
-       .sort((first, second) =>
-         haversineDistanceKm(origin, first.origin) + haversineDistanceKm(destination, first.destination)
-         - haversineDistanceKm(origin, second.origin) - haversineDistanceKm(destination, second.destination),
-       )
-       .slice(0, MAX_CANDIDATE_RIDES);
 
-     try {
-       const routeErrors: string[] = [];
-       const checked = await Promise.all(
-         candidates.map(async (ride) => {
-           try {
-             const route = await getRoute(ride.origin, ride.destination, ride.waypoints, { signal: controller.signal });
-             const originProjection = projectPointToRoute(origin, route.geometry);
-             const destinationProjection = projectPointToRoute(destination, route.geometry);
-             const directionCompatible =
-               destinationProjection.progress - originProjection.progress
-               >= ROUTE_DIRECTION_EPSILON;
-             return originProjection.distanceKm <= ROUTE_PROXIMITY_KM
-               && destinationProjection.distanceKm <= ROUTE_PROXIMITY_KM
-               && directionCompatible
-               ? { ride, route }
-               : null;
-           } catch (error: unknown) {
-             if (isAbortError(error)) throw error;
-             routeErrors.push(errorMessage(error, "The route service could not check this ride."));
-             return null;
-           }
-         }),
-       );
-       if (searchRequest.current !== requestId) return;
+    try {
+      // The date, seat and self-exclusion filters run in Postgres so only
+      // relevant candidates cross the network. Time tolerance, endpoint
+      // proximity and route compatibility stay client-side because they need
+      // the caller's exact origin and destination.
+      const serverCandidates = await searchRides({ origin, destination, date, time, seats });
+      if (searchRequest.current !== requestId) return;
+
+      const matchingCandidates = serverCandidates.filter((ride) => {
+        if (ride.status !== "active" || ride.driverId === activeUserId) return false;
+        if (ride.availableSeats < seats) return false;
+        const departure = rideDepartureTimestamp(ride);
+        if (!Number.isFinite(departure) || departure <= Date.now()) return false;
+        const rideTime = timeToMinutes(ride.departureTime);
+        if (
+          Number.isFinite(selectedTime)
+          && Number.isFinite(rideTime)
+          && circularTimeDifference(selectedTime, rideTime) > TIME_TOLERANCE_MINUTES
+        ) {
+          return false;
+        }
+        return (
+          haversineDistanceKm(origin, ride.origin) <= ENDPOINT_PROXIMITY_KM
+          && haversineDistanceKm(destination, ride.destination) <= ENDPOINT_PROXIMITY_KM
+        );
+      });
+      const candidates = matchingCandidates
+        .sort((first, second) =>
+          haversineDistanceKm(origin, first.origin) + haversineDistanceKm(destination, first.destination)
+          - haversineDistanceKm(origin, second.origin) - haversineDistanceKm(destination, second.destination),
+        )
+        .slice(0, MAX_CANDIDATE_RIDES);
+
+      const routeErrors: string[] = [];
+      const checked = await Promise.all(
+        candidates.map(async (ride) => {
+          try {
+            const route = await getRoute(ride.origin, ride.destination, ride.waypoints, { signal: controller.signal });
+            const originProjection = projectPointToRoute(origin, route.geometry);
+            const destinationProjection = projectPointToRoute(destination, route.geometry);
+            const directionCompatible =
+              destinationProjection.progress - originProjection.progress
+              >= ROUTE_DIRECTION_EPSILON;
+            return originProjection.distanceKm <= ROUTE_PROXIMITY_KM
+              && destinationProjection.distanceKm <= ROUTE_PROXIMITY_KM
+              && directionCompatible
+              ? { ride, route }
+              : null;
+          } catch (error: unknown) {
+            if (isAbortError(error)) throw error;
+            routeErrors.push(errorMessage(error, "The route service could not check this ride."));
+            return null;
+          }
+        }),
+      );
+      if (searchRequest.current !== requestId) return;
 
         const matched = checked.filter((match): match is SearchMatch => match !== null);
         const checkedRoutes = candidates.length - matched.length - routeErrors.length;
