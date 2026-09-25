@@ -1008,20 +1008,31 @@ begin
     -- surrounding transaction commits, so a rolled-back notification is never
     -- delivered. Failures are surfaced in the Edge Function logs rather than
     -- here, because raising would roll back the notification row itself.
-    perform net.http_post(
-      url := v_url,
-      headers := jsonb_build_object(
-        'Content-Type', 'application/json',
-        'Authorization', 'Bearer ' || v_secret
-      ),
-      body := jsonb_build_object(
-        'user_id', v_target.user_id,
-        'title', coalesce(v_target.title, 'RideTogether'),
-        'body', coalesce(v_target.body, ''),
-        'url', coalesce(v_target.url, '/notifications')
-      ),
-      timeout_milliseconds := 5000
-    );
+    --
+    -- The whole loop is wrapped because this trigger runs inside the transaction
+    -- that created the notification: for a booking that is the rider's INSERT
+    -- into public.bookings. A malformed push_function_url, or any other error
+    -- raised by pg_net, must degrade to a warning rather than abort the write
+    -- and lose the seat request.
+    begin
+      perform net.http_post(
+        url := v_url,
+        headers := jsonb_build_object(
+          'Content-Type', 'application/json',
+          'Authorization', 'Bearer ' || v_secret
+        ),
+        body := jsonb_build_object(
+          'user_id', v_target.user_id,
+          'title', coalesce(v_target.title, 'RideTogether'),
+          'body', coalesce(v_target.body, ''),
+          'url', coalesce(v_target.url, '/notifications')
+        ),
+        timeout_milliseconds := 5000
+      );
+    exception when others then
+      raise warning 'Web Push dispatch failed for notification to %: %',
+        v_target.user_id, sqlerrm;
+    end;
   end loop;
 
   return null;

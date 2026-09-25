@@ -21,9 +21,11 @@ import {
   Star,
   UserRound,
 } from "lucide-react";
+import { DraftBanner } from "../components/DraftBanner";
 import { PageHeader } from "../components/PageHeader";
 import { Stars } from "../components/Stars";
 import { useApp } from "../context/AppContext";
+import { useDraft } from "../services/drafts";
 import { AVATAR_MAX_BYTES } from "../repositories/avatarRepository";
 
 interface ProfileForm {
@@ -332,7 +334,24 @@ export function ProfilePage() {
     uploadAvatar,
     deleteAvatar,
   } = useApp();
-  const [form, setForm] = useState<ProfileForm>(emptyProfile);
+  /**
+   * The edit form is draft-backed, and hydration is keyed on the user id rather
+   * than the `activeUser` object. `activeUser` is rebuilt on every snapshot
+   * refresh (any realtime event, any mutation anywhere), so depending on it
+   * meant unrelated activity silently wiped whatever the user was typing.
+   */
+  const emptyProfileDraft = useMemo<ProfileForm>(
+    () => ({ ...emptyProfile, email: activeUser?.email ?? "", name: activeUser?.name ?? "" }),
+    [activeUser?.email, activeUser?.name],
+  );
+  // Declared before useDraft because the draft's `merge` runs during the first
+  // render, inside the state initialiser.
+  const emptyProfileDraftRef = useRef(emptyProfileDraft);
+  emptyProfileDraftRef.current = emptyProfileDraft;
+  const profileDraft = useDraft<ProfileForm>("profile", emptyProfileDraft, activeUserId, {
+    merge: (draft) => ({ ...emptyProfileDraftRef.current, ...draft }),
+  });
+  const { value: form, setValue: setForm } = profileDraft;
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -368,19 +387,35 @@ export function ProfilePage() {
     }
   };
 
+  /**
+   * Adopt the server profile into an untouched form, once per user.
+   *
+   * The previous version depended on the `activeUser` object, which is rebuilt
+   * on every snapshot refresh, so a realtime event or an unrelated mutation
+   * reset the form and destroyed unsaved edits. Keying on the id and skipping
+   * while there is unsaved input fixes that; a restored draft is merged over
+   * the server values so cloud data still fills any field the draft left blank.
+   */
+  const hydratedUserRef = useRef("");
   useEffect(() => {
-    if (!activeUser) return;
-    setForm({
-      name: activeUser.name,
-      email: activeUser.email,
-      phone: activeUser.phone,
-      avatar: activeUser.avatar,
-      role: activeUser.role,
-      bio: activeUser.bio,
+    if (!activeUser || !activeUserId) return;
+    if (hydratedUserRef.current === activeUserId) return;
+    hydratedUserRef.current = activeUserId;
+    setForm((current) => {
+      const fromServer: ProfileForm = {
+        name: activeUser.name,
+        email: activeUser.email,
+        phone: activeUser.phone,
+        avatar: activeUser.avatar,
+        role: activeUser.role,
+        bio: activeUser.bio,
+      };
+      const pristine = !current.name && !current.phone && !current.bio && !current.avatar;
+      return pristine || profileDraft.restored ? { ...fromServer, ...current } : current;
     });
     setErrors({});
     setMessage(null);
-  }, [activeUser]);
+  }, [activeUser, activeUserId, setForm, profileDraft.restored]);
 
   const ownedVehicles = useMemo(
     () => vehicles.filter((vehicle) => vehicle.userId === activeUserId),
@@ -469,6 +504,8 @@ export function ProfilePage() {
         bio: form.bio.trim(),
       });
       setMessage({ type: "success", text: "Profile saved" });
+      // Saved to Supabase: the draft has nothing left to protect.
+      profileDraft.complete();
     } catch (error) {
       setMessage({
         type: "error",
@@ -550,6 +587,14 @@ export function ProfilePage() {
 
         <div className="rt-profile-grid">
           <section className="rt-profile-card">
+            {profileDraft.restored ? (
+              <DraftBanner
+                savedAt={profileDraft.savedAt}
+                workflow="profile edit"
+                onDiscard={profileDraft.discard}
+                onDismiss={profileDraft.dismissBanner}
+              />
+            ) : null}
             <div className="rt-profile-card-head">
               <div>
                 <h2 className="rt-profile-card-title">Edit profile</h2>

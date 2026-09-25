@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AlertCircle, ArrowRight, Image as ImageIcon, LoaderCircle, LogOut, Save, ShieldCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { isProfileComplete } from "../../repositories/profileRepository";
 import { validateFullName, validatePhone } from "../../services/auth";
+import { useDraft } from "../../services/drafts";
 import { AuthShell } from "./AuthShell";
 
 interface ProfileForm {
@@ -29,12 +30,28 @@ const getInitials = (name: string): string =>
 export function CompleteProfilePage() {
   const { profileUser, profile, profileLoading, profileError, reloadProfile, updateProfile, signOut } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState<ProfileForm>({
-    fullName: profileUser?.name ?? "",
-    phone: profileUser?.phone ?? "",
-    bio: profileUser?.bio ?? "",
-    avatarUrl: profileUser?.avatar ?? "",
+  /**
+   * Draft-backed so a reload or an OS-level app restart does not lose a
+   * half-filled form. The `hydrated` guard below still wins for a profile that
+   * already has data on the server.
+   */
+  const emptyProfileDraft = useMemo<ProfileForm>(
+    () => ({
+      fullName: profileUser?.name ?? "",
+      phone: profileUser?.phone ?? "",
+      bio: profileUser?.bio ?? "",
+      avatarUrl: profileUser?.avatar ?? "",
+    }),
+    [profileUser?.name, profileUser?.phone, profileUser?.bio, profileUser?.avatar],
+  );
+  // Declared before useDraft because the draft's `merge` runs during the first
+  // render, inside the state initialiser.
+  const emptyProfileDraftRef = useRef(emptyProfileDraft);
+  emptyProfileDraftRef.current = emptyProfileDraft;
+  const profileDraft = useDraft<ProfileForm>("complete-profile", emptyProfileDraft, profileUser?.id ?? "", {
+    merge: (draft) => ({ ...emptyProfileDraftRef.current, ...draft }),
   });
+  const { value: form, setValue: setForm } = profileDraft;
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -43,19 +60,23 @@ export function CompleteProfilePage() {
   // refreshes must not wipe what the user is typing.
   const [hydrated, setHydrated] = useState(false);
 
-  // The profile row can arrive after this screen mounts (session restore, or a
-  // slow network). Adopt it as soon as it lands so existing data is shown
-  // instead of an empty form that looks like the profile was lost.
+  /**
+   * The profile row can arrive after this screen mounts (session restore, or a
+   * slow network). Adopt it as soon as it lands so existing data is shown
+   * instead of an empty form that looks like the profile was lost - but merge
+   * rather than overwrite, so a restored draft (or anything already typed) is
+   * never discarded by a late-arriving row.
+   */
   useEffect(() => {
     if (hydrated || !profile) return;
-    setForm({
-      fullName: profile.full_name ?? "",
-      phone: profile.phone ?? "",
-      bio: profile.bio ?? "",
-      avatarUrl: profile.avatar_url ?? "",
-    });
+    setForm((current) => ({
+      fullName: current.fullName || profile.full_name || "",
+      phone: current.phone || profile.phone || "",
+      bio: current.bio || profile.bio || "",
+      avatarUrl: current.avatarUrl || profile.avatar_url || "",
+    }));
     setHydrated(true);
-  }, [profile, hydrated]);
+  }, [profile, hydrated, setForm]);
 
   // A profile that is already complete never needed this screen; send the user
   // straight into the app instead of showing the form again.
@@ -101,6 +122,8 @@ export function CompleteProfilePage() {
         bio: form.bio,
         avatarUrl: form.avatarUrl,
       });
+      // Saved to Supabase: nothing left for the draft to protect.
+      profileDraft.complete();
       navigate("/", { replace: true });
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "We could not save your profile.");

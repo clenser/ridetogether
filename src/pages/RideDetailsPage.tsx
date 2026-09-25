@@ -382,9 +382,13 @@ export default function RideDetailsPage() {
   }, [ride?.id, ride?.availableSeats]);
 
   const handleRequest = async () => {
-    if (!ride || !canRequest) return;
+    if (!ride || !canRequest || actionLoading) return;
     if (!Number.isInteger(requestSeats) || requestSeats < 1 || requestSeats > ride.availableSeats) {
-      setActionError(`Choose between 1 and ${ride.availableSeats} seats.`);
+      setActionError(
+        ride.availableSeats < 1
+          ? "There are no seats available on this ride."
+          : `Choose between 1 and ${ride.availableSeats} seats.`,
+      );
       return;
     }
     setActionError("");
@@ -392,7 +396,10 @@ export default function RideDetailsPage() {
     setActionLoading("request");
     try {
       await requestBooking(ride.id, requestSeats);
-      setActionSuccess(`Seat request sent for ${requestSeats} ${requestSeats === 1 ? "seat" : "seats"}.`);
+      setActionSuccess(
+        `Seat request sent for ${requestSeats} ${requestSeats === 1 ? "seat" : "seats"}. `
+        + "The driver has been notified and will confirm or decline.",
+      );
     } catch (error: unknown) {
       setActionError(errorMessage(error, "We could not send your seat request."));
     } finally {
@@ -657,11 +664,15 @@ export default function RideDetailsPage() {
                 </>
                ) : currentBooking ? (
                  <div className={`current-booking booking-${currentBooking.status}`}><div className="current-booking-icon">{currentBooking.status === "pending" ? <Clock3 size={21} /> : <CheckCircle2 size={21} />}</div><div><strong>{statusLabel[currentBooking.status]} request</strong><span>{currentBooking.seats} {currentBooking.seats === 1 ? "seat" : "seats"} · {currentBooking.status === "pending" ? "Waiting for driver confirmation" : currentBooking.status === "completed" ? "Journey complete" : "Your seat is secured"}</span></div></div>
+              ) : !activeUserId ? (
+                <p className="muted-copy">Sign in to request a seat on this ride.</p>
               ) : ride.status !== "active" ? (
                 <p className="muted-copy">This ride is no longer accepting requests.</p>
+              ) : !hasValidDeparture ? (
+                <p className="muted-copy">This ride has no valid departure time, so requests are closed.</p>
               ) : hasDeparted ? (
                 <p className="muted-copy">This ride has already departed and no longer accepts requests.</p>
-              ) : !canRequest ? (
+              ) : ride.availableSeats < 1 ? (
                 <p className="muted-copy">There are no seats available for this ride.</p>
               ) : (
                 <div className="request-form"><label htmlFor="detail-request-seats">Number of seats</label><select id="detail-request-seats" value={requestSeats} onChange={(event) => setRequestSeats(Number(event.target.value))}>{Array.from({ length: Math.max(1, ride.availableSeats) }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value} {value === 1 ? "seat" : "seats"}</option>)}</select><button className="btn btn-primary btn-block" type="button" onClick={handleRequest} disabled={Boolean(actionLoading) || !canRequest}>{actionLoading === "request" ? <LoaderCircle className="spin" size={17} /> : <Users size={17} />} Request {requestSeats} {requestSeats === 1 ? "seat" : "seats"}</button><p className="field-hint">The driver will review your request before confirming.</p></div>

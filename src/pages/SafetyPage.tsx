@@ -18,9 +18,11 @@ import {
   X,
 } from "lucide-react";
 import { EmptyState } from "../components/EmptyState";
+import { DraftBanner } from "../components/DraftBanner";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { useApp } from "../context/AppContext";
+import { useDraft, type DraftScope } from "../services/drafts";
 import type { SafetyContact } from "../types";
 
 interface ContactDraft {
@@ -318,7 +320,6 @@ export function SafetyPage() {
   const { activeUserId, safetyContacts, saveSafetyContact, deleteSafetyContact } = useApp();
   const [formOpen, setFormOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<SafetyContact | null>(null);
-  const [draft, setDraft] = useState<ContactDraft>(emptyContact);
   const [errors, setErrors] = useState<ContactErrors>({});
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<SafetyContact | null>(null);
@@ -332,20 +333,43 @@ export function SafetyPage() {
     [activeUserId, safetyContacts],
   );
 
+  /**
+   * Keyed by mode so an unfinished "add contact" and an unfinished
+   * "edit contact X" cannot overwrite each other, and both survive a reload.
+   *
+   * In edit mode the fallback is the contact's saved values, so opening a contact
+   * shows its real details unless the user has an unfinished edit in progress.
+   * Opening the form changes `editingContact` and the scope together, so the draft
+   * store re-seeds with this fallback on the same render.
+   */
+  const contactDraftScope: DraftScope = editingContact
+    ? `safety-contact-form:${editingContact.id}`
+    : "safety-contact-form";
+  const contactDraftFallback = useMemo<ContactDraft>(
+    () => (editingContact
+      ? {
+        name: editingContact.name,
+        phone: editingContact.phone,
+        relationship: editingContact.relationship,
+      }
+      : emptyContact),
+    [editingContact],
+  );
+  const contactDraft = useDraft<ContactDraft>(contactDraftScope, contactDraftFallback, activeUserId);
+  const { value: draft, setValue: setDraft } = contactDraft;
+
   const openAdd = () => {
     setEditingContact(null);
-    setDraft(emptyContact);
+    setFormOpen(true);
     setErrors({});
     setFeedback(null);
-    setFormOpen(true);
   };
 
   const openEdit = (contact: SafetyContact) => {
     setEditingContact(contact);
-    setDraft({ name: contact.name, phone: contact.phone, relationship: contact.relationship });
+    setFormOpen(true);
     setErrors({});
     setFeedback(null);
-    setFormOpen(true);
   };
 
   const closeForm = () => {
@@ -397,6 +421,8 @@ export function SafetyPage() {
       }
       setFormOpen(false);
       setEditingContact(null);
+      // Stored in Supabase, so the draft has nothing left to protect.
+      contactDraft.complete();
     } catch (error) {
       setFeedback({ type: "error", text: error instanceof Error ? error.message : "Unable to save this contact." });
     } finally {
@@ -519,6 +545,14 @@ export function SafetyPage() {
 
       <Modal isOpen={formOpen} onClose={closeForm} title={editingContact ? "Edit emergency contact" : "Add emergency contact"} size="sm">
         <form className="rt-safety-form" onSubmit={handleSave} noValidate>
+          {contactDraft.restored ? (
+            <DraftBanner
+              savedAt={contactDraft.savedAt}
+              workflow={editingContact ? "contact edit" : "contact form"}
+              onDiscard={contactDraft.discard}
+              onDismiss={contactDraft.dismissBanner}
+            />
+          ) : null}
           <p className="rt-safety-form-intro"><ShieldCheck size={17} /> This contact is visible only within the active profile’s safety settings.</p>
           <div className="rt-safety-form-grid">
             <label className="rt-safety-field rt-safety-field-full">

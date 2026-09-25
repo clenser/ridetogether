@@ -15,9 +15,11 @@ import {
   UserRound,
 } from "lucide-react";
 import { EmptyState } from "../components/EmptyState";
+import { DraftBanner } from "../components/DraftBanner";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { useApp, type VehicleFormValues } from "../context/AppContext";
+import { useDraft, type DraftScope } from "../services/drafts";
 import type { Vehicle } from "../types";
 
 /** Form state is the same shape the repository accepts; one type, no drift. */
@@ -279,7 +281,6 @@ export function VehiclesPage() {
   const { loading, activeUserId, vehicles, rides, saveVehicle, updateVehicle, setDefaultVehicle, deleteVehicle } = useApp();
   const [formOpen, setFormOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
-  const [draft, setDraft] = useState<VehicleDraft>(emptyDraft);
   const [errors, setErrors] = useState<VehicleErrors>({});
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Vehicle | null>(null);
@@ -291,27 +292,45 @@ export function VehiclesPage() {
     [activeUserId, vehicles],
   );
 
+  /**
+   * The add/edit form is keyed by mode so an unfinished "add" and an unfinished
+   * "edit vehicle X" cannot overwrite each other, and both survive a reload.
+   *
+   * In edit mode the fallback is the vehicle's saved values, so opening a vehicle
+   * shows its real details unless the user has an unfinished edit in progress.
+   * Opening the form changes `editingVehicle` and the scope together, so the draft
+   * store re-seeds with this fallback on the same render.
+   */
+  const vehicleDraftScope: DraftScope = editingVehicle ? `vehicle-form:${editingVehicle.id}` : "vehicle-form";
+  const vehicleDraftFallback = useMemo<VehicleDraft>(
+    () => (editingVehicle
+      ? {
+        name: editingVehicle.name,
+        make: editingVehicle.make,
+        model: editingVehicle.model,
+        color: editingVehicle.color,
+        plate: editingVehicle.plate,
+        seats: editingVehicle.seats,
+      }
+      : emptyDraft),
+    [editingVehicle],
+  );
+  const vehicleDraft = useDraft<VehicleDraft>(vehicleDraftScope, vehicleDraftFallback, activeUserId);
+  const { value: draft, setValue: setDraftValue } = vehicleDraft;
+  const setDraft = setDraftValue;
+
   const openAdd = () => {
     setEditingVehicle(null);
-    setDraft(emptyDraft);
+    setFormOpen(true);
     setErrors({});
     setFeedback(null);
-    setFormOpen(true);
   };
 
   const openEdit = (vehicle: Vehicle) => {
     setEditingVehicle(vehicle);
-    setDraft({
-      name: vehicle.name,
-      make: vehicle.make,
-      model: vehicle.model,
-      color: vehicle.color,
-      plate: vehicle.plate,
-      seats: vehicle.seats,
-    });
+    setFormOpen(true);
     setErrors({});
     setFeedback(null);
-    setFormOpen(true);
   };
 
   const closeForm = () => {
@@ -369,6 +388,8 @@ export function VehiclesPage() {
       }
       setFormOpen(false);
       setEditingVehicle(null);
+      // Persisted in Supabase, so the unfinished form draft is no longer needed.
+      vehicleDraft.complete();
     } catch (error) {
       setFeedback({
         type: "error",
@@ -540,6 +561,14 @@ export function VehiclesPage() {
         size="md"
       >
         <form className="rt-vehicle-form" onSubmit={handleSave} noValidate>
+          {vehicleDraft.restored ? (
+            <DraftBanner
+              savedAt={vehicleDraft.savedAt}
+              workflow={editingVehicle ? "vehicle edit" : "vehicle form"}
+              onDiscard={vehicleDraft.discard}
+              onDismiss={vehicleDraft.dismissBanner}
+            />
+          ) : null}
           <p className="rt-vehicle-form-intro"><UserRound size={17} /> Vehicle details are private and can only be managed by the active profile.</p>
           <div className="rt-vehicle-form-grid">
             <label className="rt-vehicle-field rt-vehicle-field-full">

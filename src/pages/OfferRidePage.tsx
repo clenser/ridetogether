@@ -19,11 +19,36 @@ import {
 } from "lucide-react";
 import LocationSearch from "../components/LocationSearch";
 import RideMap, { type MapCoordinate, type RideMapSelectionTarget } from "../components/RideMap";
+import { DraftBanner } from "../components/DraftBanner";
 import { useApp } from "../context/AppContext";
-import { formatRupees, getFareRange, isContributionInRange } from "../services/fare";
+import { useDraft } from "../services/drafts";
+import {
+  formatRupees,
+  getFareRange,
+  isContributionInRange,
+  normalizeContributionForDistance,
+} from "../services/fare";
 import { reverseGeocodeLocation } from "../services/geocoding";
 import { getRoute, MAX_ROUTE_WAYPOINTS } from "../services/routing";
 import type { Coordinates, RouteResult, RideInput } from "../types";
+
+/**
+ * The unfinished "offer a ride" form, persisted per user so a reload or a
+ * recreated PWA restores it. `lastRoute` is only a display hint: the geometry
+ * is always recalculated from the restored locations, and the contribution is
+ * re-validated against the freshly calculated distance.
+ */
+interface OfferDraft {
+  origin: Coordinates | null;
+  destination: Coordinates | null;
+  stops: Coordinates[];
+  date: string;
+  time: string;
+  availableSeats: number;
+  vehicleId: string;
+  contribution: number;
+  lastRoute: { distanceKm: number; durationMinutes: number; baseFare: number } | null;
+}
 
 const localDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -188,15 +213,47 @@ export default function OfferRidePage() {
    const requestedEditingRide = rides.find((ride) => ride.id === editingRideId);
    const editingRide = requestedEditingRide?.driverId === activeUserId ? requestedEditingRide : undefined;
    const isEditing = Boolean(editingRideId);
-  const [origin, setOrigin] = useState<Coordinates | null>(null);
-  const [destination, setDestination] = useState<Coordinates | null>(null);
+  /**
+   * Everything the user types lives in a draft so a reload, a route change or
+   * the mobile OS recreating the PWA cannot throw the work away. Route
+   * geometry is deliberately NOT trusted from the draft: `route` is recalculated
+   * from the restored origin/destination/stops below, and only the last known
+   * distance/duration/fare summary is carried over for display.
+   */
+  const emptyOfferDraft = useMemo<OfferDraft>(
+    () => ({
+      origin: null,
+      destination: null,
+      stops: [],
+      date: localDateKey(new Date()),
+      time: "",
+      availableSeats: 1,
+      vehicleId: "",
+      contribution: 0,
+      lastRoute: null,
+    }),
+    [],
+  );
+  const offerDraft = useDraft<OfferDraft>("offer-ride", emptyOfferDraft, activeUserId, {
+    enabled: !isEditing,
+  });
+  const { value: form, setValue: setFormValue } = offerDraft;
+  const {
+    origin, destination, stops, date, time, availableSeats, vehicleId, contribution,
+  } = form;
+  const setOrigin = (value: Coordinates | null) => setFormValue((c) => ({ ...c, origin: value }));
+  const setDestination = (value: Coordinates | null) => setFormValue((c) => ({ ...c, destination: value }));
+  const setStops = (value: Coordinates[] | ((current: Coordinates[]) => Coordinates[])) =>
+    setFormValue((c) => ({ ...c, stops: typeof value === "function" ? value(c.stops) : value }));
+  const setDate = (value: string) => setFormValue((c) => ({ ...c, date: value }));
+  const setTime = (value: string) => setFormValue((c) => ({ ...c, time: value }));
+  const setAvailableSeats = (value: number | ((current: number) => number)) =>
+    setFormValue((c) => ({ ...c, availableSeats: typeof value === "function" ? value(c.availableSeats) : value }));
+  const setVehicleId = (value: string) => setFormValue((c) => ({ ...c, vehicleId: value }));
+  const setContribution = (value: number | ((current: number) => number)) =>
+    setFormValue((c) => ({ ...c, contribution: typeof value === "function" ? value(c.contribution) : value }));
+
   const [stopInput, setStopInput] = useState<Coordinates | null>(null);
-  const [stops, setStops] = useState<Coordinates[]>([]);
-  const [date, setDate] = useState(localDateKey(new Date()));
-  const [time, setTime] = useState("");
-  const [availableSeats, setAvailableSeats] = useState(1);
-  const [contribution, setContribution] = useState(0);
-  const [vehicleId, setVehicleId] = useState("");
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState("");
@@ -234,7 +291,13 @@ export default function OfferRidePage() {
     setPublishError("");
    }, [editingRide?.id, editingRide?.driverId]);
 
+  /**
+   * Vehicle auto-selection. `loading` matters: while the vehicle list is still
+   * being fetched `ownVehicles` is empty, and clearing the selection then would
+   * throw away a vehicle the user (or a restored draft) had already chosen.
+   */
   useEffect(() => {
+    if (loading) return;
     if (ownVehicles.length === 0) {
       if (vehicleId) setVehicleId("");
       return;
@@ -242,7 +305,7 @@ export default function OfferRidePage() {
     if (!ownVehicles.some((vehicle) => vehicle.id === vehicleId)) {
       setVehicleId(ownVehicles.find((vehicle) => vehicle.isDefault)?.id ?? ownVehicles[0].id);
     }
-  }, [ownVehicles, vehicleId]);
+  }, [loading, ownVehicles, vehicleId]);
 
    useEffect(() => {
      if (!selectedVehicle) return;
@@ -253,12 +316,22 @@ export default function OfferRidePage() {
      });
    }, [isEditing, selectedVehicle]);
 
+  /**
+   * Route recalculation. This is the single source of truth for distance,
+   * duration and the legal contribution range, so it runs whenever the restored
+   * locations arrive rather than trusting geometry from a draft.
+   *
+   * A contribution the user already chose survives as long as the freshly
+   * calculated distance keeps it inside the +/- Rs 10 band; if the distance
+   * changed enough to move the band, it falls back to the new base fare.
+   */
   useEffect(() => {
     if (!origin || !destination) {
       setRoute(null);
       setRouteError("");
       setRouteLoading(false);
       setContribution(0);
+      setFormValue((current) => ({ ...current, lastRoute: null }));
       return;
     }
     let active = true;
@@ -266,17 +339,25 @@ export default function OfferRidePage() {
     setRoute(null);
     setRouteError("");
     setRouteLoading(true);
-    setContribution(0);
     getRoute(origin, destination, stops, { signal: controller.signal })
       .then((result) => {
         if (!active) return;
         setRoute(result);
-        setContribution(getFareRange(result.distanceKm)?.base ?? 0);
+        const base = getFareRange(result.distanceKm)?.base ?? 0;
+        setFormValue((current) => {
+          const kept = normalizeContributionForDistance(current.contribution, result.distanceKm);
+          return {
+            ...current,
+            contribution: kept === 0 ? base : kept,
+            lastRoute: { distanceKm: result.distanceKm, durationMinutes: result.durationMinutes, baseFare: base },
+          };
+        });
       })
       .catch((error: unknown) => {
         if (active && !isAbortError(error)) {
           setRouteError(errorMessage(error, "We could not calculate that route. Please try again."));
           setContribution(0);
+          setFormValue((current) => ({ ...current, lastRoute: null }));
         }
       })
       .finally(() => {
@@ -486,6 +567,9 @@ export default function OfferRidePage() {
       } else {
         await createRide(input);
         setPublished(true);
+        // The ride is in Supabase now, so the unfinished form has served its
+        // purpose. Only a successful publish may delete the draft.
+        offerDraft.complete();
         navigate("/rides");
       }
     } catch (error: unknown) {
@@ -523,6 +607,14 @@ export default function OfferRidePage() {
 
         <form className="offer-layout" onSubmit={handlePublish}>
           <div className="offer-form-column">
+            {offerDraft.restored ? (
+              <DraftBanner
+                savedAt={offerDraft.savedAt}
+                workflow="ride offer"
+                onDiscard={offerDraft.discard}
+                onDismiss={offerDraft.dismissBanner}
+              />
+            ) : null}
             <section className="card form-card">
               <div className="form-section-title"><MapPin size={19} /><div><h2>Route details</h2><p>Add the places you will pass through.</p></div></div>
               <div className="location-fields">

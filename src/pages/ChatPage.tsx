@@ -19,6 +19,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PageHeader } from "../components/PageHeader";
 import { useApp } from "../context/AppContext";
 import { MESSAGE_MAX_LENGTH } from "../repositories/messageRepository";
+import { useDraft, type DraftScope } from "../services/drafts";
 import type { Message, Ride } from "../types";
 
 interface MessageGroup {
@@ -171,7 +172,16 @@ export function ChatPage() {
     messages,
     sendMessage,
   } = useApp();
-  const [draft, setDraft] = useState("");
+  /**
+   * The unsent message is kept per ride, so switching conversations (or a
+   * reload) does not discard half-typed text. Sent messages are never drafted -
+   * they live in Supabase.
+   */
+  const chatDraftScope: DraftScope = `chat:${rideId}`;
+  const chatDraft = useDraft<{ text: string }>(chatDraftScope, { text: "" }, activeUserId);
+  const { value: chatDraftValue, setValue: setChatDraftValue } = chatDraft;
+  const draft = chatDraftValue.text;
+  const setDraft = (value: string) => setChatDraftValue((current) => ({ ...current, text: value }));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -209,7 +219,6 @@ export function ChatPage() {
   const messageGroups = useMemo(() => groupMessages(rideMessages), [rideMessages]);
 
   useEffect(() => {
-    setDraft("");
     setError("");
   }, [activeUserId, rideId]);
 
@@ -234,6 +243,8 @@ export function ChatPage() {
     try {
       await sendMessage(ride.id, text);
       setDraft("");
+      // Delivered to Supabase, so the unsent-text draft is no longer needed.
+      chatDraft.complete();
     } catch (caught) {
       setError(errorText(caught, "Your message could not be saved. Please try again."));
     } finally {

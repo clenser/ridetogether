@@ -98,7 +98,7 @@ export interface AppContextValue {
   refresh: () => Promise<void>;
   createRide: (input: RideInput) => Promise<Ride>;
   updateRide: (rideId: string, input: RideInput) => Promise<Ride>;
-  requestBooking: (rideId: string, seats: number) => Promise<void>;
+  requestBooking: (rideId: string, seats: number) => Promise<Booking>;
   updateBookingStatus: (
     bookingId: string,
     status: "confirmed" | "rejected" | "cancelled",
@@ -395,10 +395,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const requestBooking = useCallback(
-    (rideId: string, seats: number): Promise<void> =>
-      mutateCloud(async () => {
-        await supabaseRequestBooking(rideId, seats);
-      }, "book"),
+    (rideId: string, seats: number): Promise<Booking> =>
+      mutateCloud(() => supabaseRequestBooking(rideId, seats), "book"),
     [mutateCloud],
   );
 

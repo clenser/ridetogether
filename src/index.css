@@ -3185,3 +3185,116 @@ tbody tr:hover {
     transform: translateY(0);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Saved draft banner
+   Shown when an unfinished form was restored after a reload, a navigation or
+   the mobile OS recreating the PWA.
+   --------------------------------------------------------------------------- */
+
+.draft-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid #b9d6c3;
+  border-radius: 14px;
+  background: var(--rt-primary-softer);
+}
+
+.draft-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.draft-banner-text strong {
+  color: var(--rt-primary-deep);
+  font-size: 0.875rem;
+}
+
+.draft-banner-text span {
+  color: #4a5a50;
+  font-size: 0.8125rem;
+}
+
+.draft-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.draft-banner .btn {
+  min-height: 34px;
+  padding: 5px 12px;
+  font-size: 0.8125rem;
+  border-color: var(--rt-border);
+  background: var(--rt-surface);
+  color: var(--rt-primary-deep);
+}
+
+.draft-banner .btn:hover:not(:disabled) {
+  background: var(--rt-primary-soft);
+  border-color: #b9d6c3;
+}
+
+.draft-banner-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #68776e;
+  cursor: pointer;
+}
+
+.draft-banner-close:hover {
+  border-color: var(--rt-border);
+  background: var(--rt-surface);
+}
+
+@media (max-width: 560px) {
+  .draft-banner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .draft-banner-actions {
+    justify-content: flex-end;
+  }
+}
+
+[data-theme="dark"] .draft-banner {
+  border-color: #35453b;
+  background: #16211a;
+}
+
+[data-theme="dark"] .draft-banner-text strong {
+  color: #7fd6a1;
+}
+
+[data-theme="dark"] .draft-banner-text span {
+  color: #b3c2b8;
+}
+
+[data-theme="dark"] .draft-banner .btn {
+  border-color: #35453b;
+  background: #1a251e;
+  color: #cfe9d9;
+}
+
+[data-theme="dark"] .draft-banner-close {
+  color: #9db0a4;
+}
+
+[data-theme="dark"] .draft-banner-close:hover {
+  border-color: #35453b;
+  background: #1a251e;
+}

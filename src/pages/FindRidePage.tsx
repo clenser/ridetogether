@@ -16,10 +16,23 @@ import {
 import LocationSearch from "../components/LocationSearch";
 import RideCard from "../components/RideCard";
 import RideMap, { type MapCoordinate, type RideMapSelectionTarget } from "../components/RideMap";
+import { DraftBanner } from "../components/DraftBanner";
 import { useApp } from "../context/AppContext";
+import { useDraft } from "../services/drafts";
 import { reverseGeocodeLocation } from "../services/geocoding";
 import { getRoute, haversineDistanceKm } from "../services/routing";
 import type { Coordinates, Ride, RouteResult } from "../types";
+
+/** Unfinished "find a ride" search, persisted per user. */
+interface FindDraft {
+  origin: Coordinates | null;
+  destination: Coordinates | null;
+  date: string;
+  time: string;
+  seats: number;
+  /** True once the user has actually run a search with these parameters. */
+  searched: boolean;
+}
 
 const ENDPOINT_PROXIMITY_KM = 50;
 const ROUTE_PROXIMITY_KM = 75;
@@ -251,11 +264,29 @@ const findStyles = `
 
 export default function FindRidePage() {
   const { loading, activeUserId, users, vehicles, rides, bookings, requestBooking, searchRides } = useApp();
-   const [origin, setOrigin] = useState<Coordinates | null>(null);
-   const [destination, setDestination] = useState<Coordinates | null>(null);
-   const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [seats, setSeats] = useState(1);
+  /**
+   * Search parameters survive a reload or a recreated PWA. `searched` records
+   * that the user already ran this search, so restoring the parameters does not
+   * silently fire a fresh search (and a burst of route requests) on arrival -
+   * results are always re-read from Supabase anyway.
+   */
+  const emptyFindDraft = useMemo<FindDraft>(
+    () => ({ origin: null, destination: null, date: "", time: "", seats: 1, searched: false }),
+    [],
+  );
+  const findDraft = useDraft<FindDraft>("find-ride", emptyFindDraft, activeUserId);
+  const { value: form, setValue: setFormValue } = findDraft;
+  const { origin, destination, date, time, seats } = form;
+  const setOrigin = (value: Coordinates | null) => setFormValue((c) => ({ ...c, origin: value }));
+  const setDestination = (value: Coordinates | null) => setFormValue((c) => ({ ...c, destination: value }));
+  const setDate = (value: string) => {
+    dateManuallyChanged.current = true;
+    setFormValue((c) => ({ ...c, date: value }));
+  };
+  const setTime = (value: string) => setFormValue((c) => ({ ...c, time: value }));
+  const setSeats = (value: number | ((current: number) => number)) =>
+    setFormValue((c) => ({ ...c, seats: typeof value === "function" ? value(c.seats) : value }));
+
   const [searchRoute, setSearchRoute] = useState<RouteResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState("");
@@ -275,8 +306,11 @@ export default function FindRidePage() {
   const pickController = useRef<AbortController | null>(null);
    const routeRequest = useRef(0);
    const routeController = useRef<AbortController | null>(null);
-   const searchRequest = useRef(0);
-   const searchController = useRef<AbortController | null>(null);
+  const searchRequest = useRef(0);
+  const searchController = useRef<AbortController | null>(null);
+  // Lets the restore effect above invoke the current search implementation
+  // without making that effect depend on a function redefined every render.
+  const runSearchRef = useRef<() => Promise<void>>(async () => undefined);
    const dateManuallyChanged = useRef(false);
    const today = useMemo(() => localDateKey(new Date()), []);
    const suggestedDate = useMemo(() => {
@@ -290,9 +324,34 @@ export default function FindRidePage() {
      return dates[0] ?? today;
    }, [activeUserId, rides, today]);
 
+   /**
+    * Suggest the earliest date that actually has a ride, but never overwrite a
+    * date the user chose or a date that was restored from a saved draft.
+    */
    useEffect(() => {
-     if (!dateManuallyChanged.current) setDate(suggestedDate);
+     if (dateManuallyChanged.current) return;
+     if (findDraft.restored && date) {
+       dateManuallyChanged.current = true;
+       return;
+     }
+     if (!date) setDate(suggestedDate);
    }, [suggestedDate]);
+
+   /**
+    * Restoring a search that had already been run: re-run it once the route is
+    * ready so the results match what the user last saw. Results themselves are
+    * always read from Supabase, never restored from the draft.
+    */
+   const restoredSearch = useRef(false);
+   useEffect(() => {
+     if (restoredSearch.current) return;
+     if (!findDraft.value.searched) return;
+     if (!origin || !destination) return;
+     if (!searchRoute || routeLoading) return;
+     restoredSearch.current = true;
+     findDraft.dismissBanner();
+     void runSearchRef.current();
+   }, [findDraft.value.searched, origin, destination, searchRoute, routeLoading]);
 
    useEffect(() => {
      const requestId = routeRequest.current + 1;
@@ -484,8 +543,8 @@ export default function FindRidePage() {
     pickController.current?.abort();
   }, []);
 
-  const handleSearch = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const handleSearch = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
     setBookingError("");
     setBookingSuccess("");
     if (!origin || !destination) {
@@ -506,6 +565,8 @@ export default function FindRidePage() {
     setSearchError("");
     setSearchNotice("");
     const selectedTime = timeToMinutes(time);
+    // Remember that this exact search was run, so restoring the draft re-runs it.
+    setFormValue((current) => ({ ...current, searched: true }));
 
     try {
       // The date, seat and self-exclusion filters run in Postgres so only
@@ -592,13 +653,16 @@ export default function FindRidePage() {
        if (searchRequest.current === requestId && !isAbortError(error)) {
          setSearchError(errorMessage(error, "We could not check those rides right now."));
        }
-     } finally {
-       if (searchController.current === controller) searchController.current = null;
-       if (searchRequest.current === requestId) {
-         setSearchLoading(false);
-       }
-     }
+      } finally {
+        if (searchController.current === controller) searchController.current = null;
+        if (searchRequest.current === requestId) {
+          setSearchLoading(false);
+        }
+      }
   };
+
+  runSearchRef.current = handleSearch;
+
 
    const handleBooking = async (rideId: string, availableSeats: number) => {
      const selectedSeats = bookingSeatsByRide[rideId] ?? 1;
@@ -634,8 +698,17 @@ export default function FindRidePage() {
           <div className="page-heading-icon"><Navigation size={25} /></div>
         </div>
 
+        {findDraft.restored ? (
+          <DraftBanner
+            savedAt={findDraft.savedAt}
+            workflow="search"
+            onDiscard={findDraft.discard}
+            onDismiss={findDraft.dismissBanner}
+          />
+        ) : null}
+
         <div className="find-layout">
-          <form className="card search-form" onSubmit={handleSearch}>
+          <form className="card search-form" onSubmit={(event) => void handleSearch(event)}>
             <div className="form-section-title"><MapPinned size={19} /><h2>Your journey</h2></div>
             <div className="location-fields">
               <div className="field-group">

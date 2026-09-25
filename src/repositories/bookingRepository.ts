@@ -94,10 +94,7 @@ export const listBookingRequestsForMyRides = async (): Promise<Booking[]> => {
 };
 
 export const listAllVisibleBookings = async (): Promise<Booking[]> => {
-  const [mine, requests] = await Promise.all([
-    listMyBookings().catch(() => [] as Booking[]),
-    listBookingRequestsForMyRides().catch(() => [] as Booking[]),
-  ]);
+  const [mine, requests] = await Promise.all([listMyBookings(), listBookingRequestsForMyRides()]);
   const merged = new Map<string, Booking>();
   for (const booking of [...mine, ...requests]) merged.set(booking.id, booking);
   return [...merged.values()];
@@ -152,6 +149,22 @@ export const requestBooking = async (rideId: string, seats: number): Promise<Boo
   if (ride.status === "completed") {
     throw new DataError("That ride has already finished.", "cancelled-ride");
   }
+  /**
+   * Capacity is checked here rather than only at confirmation time. Without it a
+   * rider could ask for more seats than the ride has, the request would sit in
+   * `pending` forever, and the failure would only surface when the driver tried
+   * to confirm it - which reads to the rider as "Request Seat is broken".
+   */
+  const available = toNumber(ride.seats_available, 0);
+  if (available < 1) {
+    throw new DataError("There are no seats left on that ride.", "insufficient-seats");
+  }
+  if (seats > available) {
+    throw new DataError(
+      `Only ${available} ${available === 1 ? "seat is" : "seats are"} still available on that ride.`,
+      "insufficient-seats",
+    );
+  }
 
   const { data, error } = await client
     .from(BOOKING_TABLE)
@@ -165,6 +178,12 @@ export const requestBooking = async (rideId: string, seats: number): Promise<Boo
     }
     if (/own ride/i.test(error.message ?? "")) {
       throw new DataError("You cannot book a seat on your own ride.", "self-booking", error);
+    }
+    if (/not enough seats/i.test(`${error.message ?? ""} ${error.details ?? ""}`)) {
+      throw new DataError("There are no seats left on that ride.", "insufficient-seats", error);
+    }
+    if (error.code === "42501") {
+      throw new DataError("You do not have permission to request a seat on that ride.", "forbidden", error);
     }
     throw toDataError(error, "book");
   }
