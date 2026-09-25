@@ -5,3 +5,9 @@ dist/
 .env.local
 .env.*.local
 !.env.example
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

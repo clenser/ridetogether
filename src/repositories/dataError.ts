@@ -41,6 +41,8 @@ export type DataErrorReason =
   | "insufficient-seats"
   | "self-booking"
   | "cancelled-ride"
+  | "empty-result"
+  | "schema"
   | "unknown";
 
 interface ErrorShape {
@@ -76,10 +78,31 @@ const GENERIC: Record<DataErrorAction, string> = {
 const NET_PATTERN = /failed to fetch|networkerror|network request failed|load failed|fetch failed|econnrefused/i;
 const FORBIDDEN_PATTERN = /row-level security|permission denied|violates row|not authorized|new row violates/i;
 const NOT_FOUND_PATTERN = /not found|does not exist|foreign key/i;
+/**
+ * `PGRST116` is PostgREST's "expected exactly one row, got zero or many". It is
+ * routinely mistaken for a missing resource, which is how a failed seat request
+ * ended up telling the rider the ride "may have been removed".
+ */
+const EMPTY_RESULT_PATTERN = /pgrst116|json object requested, multiple \(or no\) rows returned/i;
+/**
+ * A missing table or column is a deployment problem, not a missing record, so it
+ * must not be reported as "we could not find that".
+ */
+const SCHEMA_PATTERN = /relation .* does not exist|column .* does not exist|schema cache|pgrst205|pgrst204/i;
 const DUPLICATE_PATTERN = /duplicate key|already exists|unique constraint/i;
 const SEATS_PATTERN = /not enough seats/i;
 const SELF_BOOKING_PATTERN = /cannot book a seat on their own ride/i;
 const CANCELLED_PATTERN = /ride is cancelled|ride is not active|only active rides/i;
+
+const WRITE_ACTIONS: ReadonlySet<DataErrorAction> = new Set<DataErrorAction>([
+  "create",
+  "update",
+  "delete",
+  "book",
+  "confirm",
+  "cancel",
+  "complete",
+]);
 
 /**
  * Maps a Supabase/PostgREST failure onto a `DataError` with a user-facing
@@ -122,7 +145,28 @@ export const toDataError = (error: unknown, action: DataErrorAction): DataError 
   if (code === "42501" || status === "403" || FORBIDDEN_PATTERN.test(haystack)) {
     return new DataError("You do not have permission to do that.", "forbidden", error);
   }
-  if (code === "PGRST116" || status === "404" || NOT_FOUND_PATTERN.test(haystack)) {
+  if (code === "PGRST205" || code === "PGRST204" || SCHEMA_PATTERN.test(haystack)) {
+    return new DataError(
+      "The app is not in sync with the database. Please try again in a moment.",
+      "schema",
+      error,
+    );
+  }
+  if (code === "PGRST116" || EMPTY_RESULT_PATTERN.test(haystack)) {
+    // On a read this genuinely means the row is not there. On a write it means
+    // the statement completed without producing a readable row, which says
+    // nothing about whether the row exists - so never claim it was removed.
+    if (!WRITE_ACTIONS.has(action)) {
+      return new DataError("We could not find that. It may have been removed.", "not-found", error);
+    }
+    return new DataError(
+      "The server accepted the request but did not return the saved record. "
+      + "Please refresh to see the current state before trying again.",
+      "empty-result",
+      error,
+    );
+  }
+  if (status === "404" || NOT_FOUND_PATTERN.test(haystack)) {
     return new DataError("We could not find that. It may have been removed.", "not-found", error);
   }
   if (code === "failed_to_fetch" || NET_PATTERN.test(haystack)) {

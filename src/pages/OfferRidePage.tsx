@@ -681,8 +681,8 @@ export default function OfferRidePage() {
                 </div>
               </div>
               {locationLoading && <p className="form-message notice-message" role="status"><LoaderCircle className="spin" size={16} />Finding that place in India…</p>}
-              {locationError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{locationError}</p>}
-              {stopError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{stopError}</p>}
+              {locationError && <p className="form-message error-message" role="alert" data-testid="offer-location-error"><AlertCircle size={16} />{locationError}</p>}
+              {stopError && <p className="form-message error-message" role="alert" data-testid="offer-stop-error"><AlertCircle size={16} />{stopError}</p>}
               {stops.length >= MAX_ROUTE_WAYPOINTS && <p className="field-hint">The route supports up to {MAX_ROUTE_WAYPOINTS} stops.</p>}
                {stops.length > 0 && (
                 <div className="stop-list" aria-label="Stops on this ride">
@@ -705,21 +705,21 @@ export default function OfferRidePage() {
               <div className="form-grid form-grid-three">
                 <div className="field-group">
                   <label htmlFor="offer-date">Date</label>
-                  <input id="offer-date" type="date" min={localDateKey(new Date())} value={date} onChange={(event) => { setDate(event.target.value); setPublishError(""); }} required />
+                  <input id="offer-date" data-testid="offer-date" type="date" min={localDateKey(new Date())} value={date} onChange={(event) => { setDate(event.target.value); setPublishError(""); }} required />
                 </div>
                 <div className="field-group">
                   <label htmlFor="offer-time">Time</label>
-                  <input id="offer-time" type="time" value={time} onChange={(event) => { setTime(event.target.value); setPublishError(""); }} required />
+                  <input id="offer-time" data-testid="offer-time" type="time" value={time} onChange={(event) => { setTime(event.target.value); setPublishError(""); }} required />
                 </div>
                 <div className="field-group">
                   <label htmlFor="offer-seats">Seats available</label>
-                   <input id="offer-seats" type="number" min={isEditing ? 0 : 1} max={selectedVehicle?.seats ?? 1} value={availableSeats} onChange={(event) => { setAvailableSeats(Number(event.target.value)); setPublishError(""); }} required />
+                  <input id="offer-seats" data-testid="offer-seats" type="number" min={isEditing ? 0 : 1} max={selectedVehicle?.seats ?? 1} value={availableSeats} onChange={(event) => { setAvailableSeats(Number(event.target.value)); setPublishError(""); }} required />
                 </div>
               </div>
               <div className="form-grid form-grid-two">
                 <div className="field-group">
                   <label htmlFor="offer-vehicle">Vehicle</label>
-                  <select id="offer-vehicle" value={vehicleId} onChange={(event) => { setVehicleId(event.target.value); setPublishError(""); }} required>
+                  <select id="offer-vehicle" data-testid="offer-vehicle" value={vehicleId} onChange={(event) => { setVehicleId(event.target.value); setPublishError(""); }} required>
                     <option value="" disabled>Select a vehicle</option>
                     {ownVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name} · {vehicle.make} {vehicle.model}</option>)}
                   </select>
@@ -756,9 +756,9 @@ export default function OfferRidePage() {
               )}
             </section>
 
-            {publishError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{publishError}</p>}
-            {published && <p className="form-message success-message" role="status"><Check size={16} />Your ride was published successfully.</p>}
-             <button className="btn btn-primary btn-lg btn-block" type="submit" disabled={publishing || routeLoading || !route || ownVehicles.length === 0 || Boolean(contributionError)}>
+            {publishError && <p className="form-message error-message" role="alert" data-testid="offer-error"><AlertCircle size={16} />{publishError}</p>}
+            {published && <p className="form-message success-message" role="status" data-testid="offer-success"><Check size={16} />Your ride was published successfully.</p>}
+            <button className="btn btn-primary btn-lg btn-block" data-testid="offer-submit" type="submit" disabled={publishing || routeLoading || !route || ownVehicles.length === 0 || Boolean(contributionError)}>
              {publishing ? <LoaderCircle className="spin" size={19} /> : <ArrowRight size={19} />}
                {publishing ? "Saving your ride…" : isEditing ? "Save changes" : "Publish ride"}
             </button>
@@ -795,7 +795,7 @@ export default function OfferRidePage() {
                 {routeLoading && <div className="map-overlay"><LoaderCircle className="spin" size={23} /> Calculating your real route…</div>}
                 {!routeLoading && !pickTarget && !origin && !destination && <div className="map-overlay map-overlay-empty"><MapPin size={23} />Choose From and To to see your route</div>}
               </div>
-              {routeError && <div className="map-error" role="alert"><AlertCircle size={17} /><span>{routeError} Your markers remain visible; publishing stays disabled until routing works.</span></div>}
+              {routeError && <div className="map-error" role="alert" data-testid="offer-route-error"><AlertCircle size={17} /><span>{routeError} Your markers remain visible; publishing stays disabled until routing works.</span></div>}
             </section>
             <div className="card route-checklist">
               <div className="form-section-title"><Gauge size={19} /><h2>Before you publish</h2></div>

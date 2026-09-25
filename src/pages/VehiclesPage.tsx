@@ -464,7 +464,7 @@ export function VehiclesPage() {
               <span>{loading ? "Fetching your saved vehicles from the cloud." : ownedVehicles.length ? "Only you can edit or remove these vehicles." : "Add a vehicle before offering a ride."}</span>
             </span>
           </div>
-          <button className="rt-vehicles-add" type="button" onClick={openAdd}>
+          <button className="rt-vehicles-add" data-testid="vehicle-add" type="button" onClick={openAdd}>
             <Plus size={17} /> Add vehicle
           </button>
         </div>
@@ -510,7 +510,7 @@ export function VehiclesPage() {
                     <p className="rt-vehicle-subtitle">{vehicle.make} {vehicle.model}</p>
                   </div>
                   <div className="rt-vehicle-actions">
-                    <button className="rt-vehicle-icon-button" type="button" onClick={() => openEdit(vehicle)} aria-label={`Edit ${vehicle.name}`}>
+                    <button className="rt-vehicle-icon-button" data-testid={`vehicle-edit-${vehicle.id}`} type="button" onClick={() => openEdit(vehicle)} aria-label={`Edit ${vehicle.name}`}>
                       <Pencil size={16} />
                     </button>
                     <button
@@ -573,38 +573,38 @@ export function VehiclesPage() {
           <div className="rt-vehicle-form-grid">
             <label className="rt-vehicle-field rt-vehicle-field-full">
               <span className="rt-vehicle-label">Vehicle nickname</span>
-              <input className="rt-vehicle-input" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} placeholder="e.g. Green City Car" aria-invalid={Boolean(errors.name)} />
+              <input className="rt-vehicle-input" data-testid="vehicle-name" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} placeholder="e.g. Green City Car" aria-invalid={Boolean(errors.name)} />
               {errors.name && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.name}</span>}
             </label>
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Make</span>
-              <input className="rt-vehicle-input" value={draft.make} onChange={(event) => updateDraft("make", event.target.value)} placeholder="e.g. Toyota" autoComplete="off" aria-invalid={Boolean(errors.make)} />
+              <input className="rt-vehicle-input" data-testid="vehicle-make" value={draft.make} onChange={(event) => updateDraft("make", event.target.value)} placeholder="e.g. Toyota" autoComplete="off" aria-invalid={Boolean(errors.make)} />
               {errors.make && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.make}</span>}
             </label>
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Model</span>
-              <input className="rt-vehicle-input" value={draft.model} onChange={(event) => updateDraft("model", event.target.value)} placeholder="e.g. Corolla" autoComplete="off" aria-invalid={Boolean(errors.model)} />
+              <input className="rt-vehicle-input" data-testid="vehicle-model" value={draft.model} onChange={(event) => updateDraft("model", event.target.value)} placeholder="e.g. Corolla" autoComplete="off" aria-invalid={Boolean(errors.model)} />
               {errors.model && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.model}</span>}
             </label>
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Color</span>
-              <input className="rt-vehicle-input" value={draft.color} onChange={(event) => updateDraft("color", event.target.value)} placeholder="e.g. Green" autoComplete="off" aria-invalid={Boolean(errors.color)} />
+              <input className="rt-vehicle-input" data-testid="vehicle-color" value={draft.color} onChange={(event) => updateDraft("color", event.target.value)} placeholder="e.g. Green" autoComplete="off" aria-invalid={Boolean(errors.color)} />
               {errors.color && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.color}</span>}
             </label>
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Registration plate</span>
-              <input className="rt-vehicle-input" value={draft.plate} onChange={(event) => updateDraft("plate", event.target.value.toUpperCase())} placeholder="e.g. WB 12 AB 1234" autoCapitalize="characters" aria-invalid={Boolean(errors.plate)} />
+              <input className="rt-vehicle-input" data-testid="vehicle-plate" value={draft.plate} onChange={(event) => updateDraft("plate", event.target.value.toUpperCase())} placeholder="e.g. WB 12 AB 1234" autoCapitalize="characters" aria-invalid={Boolean(errors.plate)} />
               {errors.plate && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.plate}</span>}
             </label>
             <label className="rt-vehicle-field rt-vehicle-field-full">
                <span className="rt-vehicle-label">Available rider seats <span>(1–12, excluding the driver)</span></span>
-               <input className="rt-vehicle-input" type="number" min={1} max={12} step={1} value={draft.seats} onChange={(event) => updateDraft("seats", Number(event.target.value))} aria-invalid={Boolean(errors.seats)} />
+               <input className="rt-vehicle-input" data-testid="vehicle-seats" type="number" min={1} max={12} step={1} value={draft.seats} onChange={(event) => updateDraft("seats", Number(event.target.value))} aria-invalid={Boolean(errors.seats)} />
               {errors.seats && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.seats}</span>}
             </label>
           </div>
           <div className="rt-vehicle-form-actions">
             <button className="rt-vehicle-secondary" type="button" onClick={closeForm} disabled={saving}>Cancel</button>
-            <button className="rt-vehicle-primary" type="submit" disabled={saving}>
+            <button className="rt-vehicle-primary" data-testid="vehicle-save" type="submit" disabled={saving}>
               <Check size={15} /> {saving ? "Saving…" : editingVehicle ? "Save changes" : "Add vehicle"}
             </button>
           </div>

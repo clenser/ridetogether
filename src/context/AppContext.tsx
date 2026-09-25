@@ -85,6 +85,12 @@ export type VehicleFormValues = VehicleDraft;
 
 export interface AppContextValue {
   loading: boolean;
+  /**
+   * Set when a background refresh could not read one or more collections. The UI
+   * stays usable on the last known-good data, so this is a warning rather than a
+   * blocking error.
+   */
+  loadError: string | null;
   users: User[];
   activeUser: User;
   activeUserId: string;
@@ -178,6 +184,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const { authUser, profileUser, updateProfile, isAuthenticated } = useAuth();
   const authUserId = authUser?.id ?? "";
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [rides, setRides] = useState<Ride[]>([]);
@@ -195,6 +202,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
    * rides, vehicles, bookings, chat, notifications, ratings and safety
    * contacts. IndexedDB is only touched to keep the legacy user mirror working
    * for the demo seed; none of its ride/vehicle/booking rows are read.
+   *
+   * A failed read must NOT blank the screen. The previous version replaced every
+   * collection with `[]` on error, so one failed request made a ride vanish and
+   * the ride-details page render "this ride may have been removed" for a ride
+   * that still existed. Each collection is now settled independently: what the
+   * database can confirm is applied, and a collection that failed to load keeps
+   * the last known-good rows while the error is recorded.
    */
   const applySnapshot = useCallback(async (): Promise<string> => {
     if (!authUserId) {
@@ -210,25 +224,62 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       return "";
     }
 
-    const [
-      cloudRides,
-      cloudVehicles,
-      cloudBookings,
-      profiles,
-      cloudMessages,
-      cloudNotifications,
-      cloudRatings,
-      cloudContacts,
-    ] = await Promise.all([
-      supabaseListRides().catch(() => [] as RideWithRelations[]),
-      supabaseListVehicles().catch(() => [] as Vehicle[]),
-      listAllVisibleBookings().catch(() => [] as Booking[]),
-      fetchProfiles().catch(() => []),
-      supabaseListAllMessages().catch(() => [] as Message[]),
-      supabaseListNotifications().catch(() => [] as AppNotification[]),
-      listRatingsByReviewer().catch(() => [] as Rating[]),
-      supabaseListSafetyContacts().catch(() => [] as SafetyContact[]),
-    ]);
+    // `settle` reports both outcomes: the value, and whether it came from a
+    // successful read. Only a success is allowed to replace existing state.
+    const settle = async <T,>(
+      read: () => Promise<T>,
+      label: string,
+    ): Promise<{ value: T; ok: boolean }> => {
+      try {
+        return { value: await read(), ok: true };
+      } catch (error) {
+        console.error(`[snapshot] ${label} failed; keeping the last known data`, error);
+        return { value: undefined as T, ok: false };
+      }
+    };
+
+    const [ridesResult, vehiclesResult, bookingsResult, profilesResult, messagesResult, notificationsResult, ratingsResult, contactsResult] =
+      await Promise.all([
+        settle<RideWithRelations[]>(() => supabaseListRides(), "rides"),
+        settle<Vehicle[]>(() => supabaseListVehicles(), "vehicles"),
+        settle<Booking[]>(() => listAllVisibleBookings(), "bookings"),
+        settle<Awaited<ReturnType<typeof fetchProfiles>>>(() => fetchProfiles(), "profiles"),
+        settle<Message[]>(() => supabaseListAllMessages(), "messages"),
+        settle<AppNotification[]>(() => supabaseListNotifications(), "notifications"),
+        settle<Rating[]>(() => listRatingsByReviewer(), "ratings"),
+        settle<SafetyContact[]>(() => supabaseListSafetyContacts(), "safety contacts"),
+      ]);
+
+    const failed = [
+      ["rides", ridesResult],
+      ["vehicles", vehiclesResult],
+      ["bookings", bookingsResult],
+      ["profiles", profilesResult],
+      ["messages", messagesResult],
+      ["notifications", notificationsResult],
+      ["ratings", ratingsResult],
+      ["safety contacts", contactsResult],
+    ].filter(([, result]) => !(result as { ok: boolean }).ok).map(([name]) => name);
+
+    if (failed.length > 0) {
+      setLoadError(
+        `Some data could not be refreshed (${failed.join(", ")}). `
+        + "What you see may be out of date.",
+      );
+    } else {
+      setLoadError(null);
+    }
+
+    const cloudRides = ridesResult.value ?? [];
+    const cloudVehicles = vehiclesResult.value ?? [];
+    const cloudBookings = bookingsResult.value ?? [];
+    const cloudMessages = messagesResult.value ?? [];
+    const cloudNotifications = notificationsResult.value ?? [];
+    const cloudRatings = ratingsResult.value ?? [];
+    const cloudContacts = contactsResult.value ?? [];
+    const profiles = (profilesResult.value ?? []).filter(
+      (profile): profile is NonNullable<typeof profile> => Boolean(profile),
+    );
 
     // Driver profiles ride along with the rides; merge them into the directory
     // so the pages that resolve `ride.driverId` to a name/avatar/rating work.
@@ -248,14 +299,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (source) directory.set(source.id, source);
 
     activeUserIdRef.current = authUserId;
-    setUsers([...directory.values()]);
-    setVehicles(cloudVehicles);
-    setRides(cloudRides.map((entry) => entry.ride));
-    setBookings(cloudBookings);
-    setMessages(cloudMessages);
-    setNotifications(cloudNotifications);
-    setRatings(cloudRatings);
-    setSafetyContacts(cloudContacts);
+    // A failed read keeps the previous rows, so only overwrite what was read.
+    if (ridesResult.ok) setRides(cloudRides.map((entry) => entry.ride));
+    if (vehiclesResult.ok) setVehicles(cloudVehicles);
+    if (bookingsResult.ok) setBookings(cloudBookings);
+    if (messagesResult.ok) setMessages(cloudMessages);
+    if (notificationsResult.ok) setNotifications(cloudNotifications);
+    if (ratingsResult.ok) setRatings(cloudRatings);
+    if (contactsResult.ok) setSafetyContacts(cloudContacts);
+    if (profilesResult.ok) setUsers([...directory.values()]);
+    else setUsers((current) => {
+      // Keep the known directory but make sure the signed-in member is present.
+      if (source && !current.some((user) => user.id === source.id)) {
+        return [...current, source];
+      }
+      return current;
+    });
     setActiveUserId(authUserId);
     return authUserId;
   }, [authUser, authUserId, profileUser]);
@@ -263,6 +322,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const refresh = useCallback(async (): Promise<void> => {
     await applySnapshot();
   }, [applySnapshot]);
+
+  /**
+   * `applySnapshot` closes over `authUser`/`profileUser`, so its identity changes
+   * whenever Supabase hands back a new user object - which it does on every
+   * token refresh, and on every profile write. Both effects below used to depend
+   * on that callback directly, so each of those events tore down and re-ran the
+   * bootstrap: `setLoading(true)` flashed the full-page loader over an otherwise
+   * working screen, and the realtime channel was unsubscribed and resubscribed.
+   *
+   * A ref keeps the latest callback while the effects key off the session, which
+   * is the only thing that should restart them.
+   */
+  const applySnapshotRef = useRef(applySnapshot);
+  applySnapshotRef.current = applySnapshot;
 
   /**
    * Live updates for a member signed in on more than one device, or with the app
@@ -294,7 +367,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       if (cancelled) return;
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => {
-        if (!cancelled) void applySnapshot();
+        if (!cancelled) void applySnapshotRef.current();
       }, 400);
     };
 
@@ -315,7 +388,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     channel.subscribe((status) => {
       if (import.meta.env.DEV) console.info(`[realtime] ${status}`);
       // A fresh subscription may have missed events while it was connecting.
-      if (status === "SUBSCRIBED") void applySnapshot();
+      if (status === "SUBSCRIBED") void applySnapshotRef.current();
     });
 
     return () => {
@@ -323,7 +396,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       if (debounce) clearTimeout(debounce);
       void client.removeChannel(channel);
     };
-  }, [applySnapshot, authUserId, isAuthenticated]);
+    // Keyed on the session only: see `applySnapshotRef` above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUserId, isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -333,29 +408,37 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setVehicles([]);
       setRides([]);
       setBookings([]);
+      setMessages([]);
+      setNotifications([]);
+      setRatings([]);
+      setSafetyContacts([]);
       setActiveUserId("");
+      setLoadError(null);
       activeUserIdRef.current = "";
       setLoading(false);
       return;
     }
 
-    let mounted = true;
+    let cancelled = false;
     setLoading(true);
     void (async () => {
       try {
-        await applySnapshot();
+        await applySnapshotRef.current();
       } catch (error) {
-        if (mounted) {
+        if (!cancelled) {
           console.error(error);
         }
       } finally {
-        if (mounted) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
-      mounted = false;
+      cancelled = true;
     };
-  }, [applySnapshot, isAuthenticated]);
+    // Keyed on the session only: a new object identity for the same user must not
+    // restart the bootstrap and flash the full-page loader.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUserId, isAuthenticated]);
 
   /**
    * Wraps a Supabase mutation, then re-reads the authoritative cloud state.
@@ -610,6 +693,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     <AppContext.Provider
       value={{
         loading,
+        loadError,
         users,
         activeUser,
         activeUserId,

@@ -74,7 +74,7 @@ export function LoginPage() {
           ) : null}
 
           {formError ? (
-            <p className="rt-auth__notice rt-auth__notice--error" role="alert">
+            <p className="rt-auth__notice rt-auth__notice--error" role="alert" data-testid="login-error">
               <AlertCircle size={16} aria-hidden="true" />
               {formError}
             </p>
@@ -84,6 +84,7 @@ export function LoginPage() {
             <span className="rt-auth__label">Email address</span>
             <input
               className="rt-auth__input"
+              data-testid="login-email"
               type="email"
               value={email}
               onChange={(event) => updateField("email", event.target.value)}
@@ -104,6 +105,7 @@ export function LoginPage() {
             <span className="rt-auth__label">Password</span>
             <input
               className="rt-auth__input"
+              data-testid="login-password"
               type="password"
               value={password}
               onChange={(event) => updateField("password", event.target.value)}
@@ -119,7 +121,7 @@ export function LoginPage() {
             ) : null}
           </label>
 
-          <button className="rt-auth__submit" type="submit" disabled={submitting}>
+          <button className="rt-auth__submit" data-testid="login-submit" type="submit" disabled={submitting}>
             {submitting ? (
               <>
                 <LoaderCircle className="spin" size={17} aria-hidden="true" /> Logging in…

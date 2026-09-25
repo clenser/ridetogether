@@ -70,6 +70,54 @@ for (const m of strip.matchAll(trigRe)) {
 // this schema are checked by eye instead; the reference check above covers the
 // statically written ones.
 
+// ------------------------------------------- NEW/OLD records in trigger bodies
+// In PL/pgSQL a trigger function may only read NEW on INSERT/UPDATE and OLD on
+// UPDATE/DELETE. Touching the other record raises
+// `record "old" is not assigned yet`, which aborts the caller's statement. That
+// is how `coalesce(new, old)` came to make every seat request fail.
+// The body is what sits between the opening `as $$` and the closing `$$`; the
+// naive `returns trigger ... $$` capture stops at the opening delimiter and
+// checks nothing.
+const triggerFnRe = /create\s+or\s+replace\s+function\s+([\w.]+)\s*\(\s*\)\s*\n\s*returns\s+trigger[\s\S]*?\bas\s+\$\$([\s\S]*?)\$\$/gi;
+for (const m of strip.matchAll(triggerFnRe)) {
+  const name = m[1];
+  const body = m[2];
+
+  // Unambiguous defect: coalescing one trigger record against the other, whether
+  // whole (`coalesce(new, old)`) or field-by-field
+  // (`coalesce(new.reviewee_id, old.reviewee_id)`). Coalescing a field against a
+  // literal is fine and stays allowed, so match on the second argument.
+  check(
+    !/coalesce\(\s*new\b[^,]*,\s*old\b/i.test(body)
+      && !/coalesce\(\s*old\b[^,]*,\s*new\b/i.test(body),
+    `trigger function ${name} coalesces NEW against OLD; branch on tg_op instead`,
+  );
+
+  // Which operations can this function actually be fired for? The event clause
+  // precedes the table: `after insert or update of status on public.bookings`.
+  const events = new Set();
+  const ownerTrigRe = new RegExp(
+    `create\\s+trigger\\s+[\\w]+\\s+(before|after)\\s+([^\\n]*?)\\s+on\\s+[\\w.]+[\\s\\S]{0,240}?execute\\s+function\\s+${name}\\s*\\(\\)`,
+    "gi",
+  );
+  for (const t of strip.matchAll(ownerTrigRe)) {
+    const clause = t[2].toLowerCase();
+    if (/\binsert\b/.test(clause)) events.add("INSERT");
+    if (/\bupdate\b/.test(clause)) events.add("UPDATE");
+    if (/\bdelete\b/.test(clause)) events.add("DELETE");
+  }
+  check(events.size > 0, `trigger function ${name} is not attached to any trigger`);
+
+  // A function that can see both an INSERT and a DELETE has to decide which
+  // record it is looking at, so it must branch on tg_op somewhere.
+  if (events.has("INSERT") && events.has("DELETE")) {
+    check(
+      /tg_op/.test(body),
+      `trigger function ${name} fires on INSERT and DELETE but never inspects tg_op`,
+    );
+  }
+}
+
 // --------------------------------------------------------- net.http_post use
 check(
   /perform\s+net\.http_post\(/.test(strip),

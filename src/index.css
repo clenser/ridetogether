@@ -1150,6 +1150,56 @@ tbody tr:hover {
   color: var(--rt-primary);
 }
 
+.app-refresh-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 11px 14px;
+  border: 1px solid #f0d9a8;
+  border-radius: 12px;
+  color: #6b4a12;
+  background: #fdf6e7;
+  font-size: .82rem;
+  font-weight: 650;
+  line-height: 1.5;
+}
+.app-refresh-warning span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.app-refresh-warning button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #e3c479;
+  border-radius: 9px;
+  color: #6b4a12;
+  background: #fff;
+  font: inherit;
+  font-size: .76rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease;
+}
+.app-refresh-warning button:hover {
+  border-color: #cfa64b;
+  background: #fffdf7;
+}
+[data-theme="dark"] .app-refresh-warning {
+  border-color: #4a3c1f;
+  color: #f0d9a8;
+  background: #241f14;
+}
+[data-theme="dark"] .app-refresh-warning button {
+  border-color: #574526;
+  color: #f0d9a8;
+  background: #2c2517;
+}
+[data-theme="dark"] .app-refresh-warning button:hover {
+  border-color: #6d5731;
+  background: #352c1b;
+}
 .app-notification-dot {
   position: absolute;
   top: -6px;

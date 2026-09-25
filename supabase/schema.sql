@@ -565,7 +565,10 @@ begin
    where r.id = target_ride_id;
 
   if driver is null then
-    return coalesce(new, old);
+    if tg_op = 'DELETE' then
+      return old;
+    end if;
+    return new;
   end if;
 
   if tg_op = 'DELETE' then
@@ -609,10 +612,17 @@ begin
     );
   end if;
 
-  return coalesce(new, old);
+  -- `OLD` is unassigned during INSERT and `NEW` is unassigned during DELETE.
+  -- Referencing either raises `record "old" is not assigned yet`, which would
+  -- abort the caller's INSERT/UPDATE/DELETE and make every seat request fail
+  -- with a misleading "not found". Pick the row by operation instead of
+  -- coalescing the two records together.
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
 end;
 $$;
-
 -- A completed ride asks both sides to rate each other.
 create or replace function public.notify_ride_completion()
 returns trigger
@@ -703,7 +713,14 @@ as $$
 declare
   target_user uuid;
 begin
-  target_user := coalesce(new.reviewee_id, old.reviewee_id);
+  -- Guarded by `tg_op`: `OLD` is unassigned on INSERT and `NEW` is unassigned on
+  -- DELETE, and touching an unassigned record raises an error that would abort
+  -- the rating write instead of updating the profile average.
+  if tg_op = 'DELETE' then
+    target_user := old.reviewee_id;
+  else
+    target_user := new.reviewee_id;
+  end if;
 
   update public.profiles p
      set rating = coalesce((
@@ -721,7 +738,10 @@ begin
          )
    where p.id = target_user;
 
-  return coalesce(new, old);
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
 end;
 $$;
 

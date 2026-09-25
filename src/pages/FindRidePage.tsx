@@ -753,33 +753,33 @@ export default function FindRidePage() {
                 </button>
               </div>
             </div>
-            {locationLoading && <p className="form-message notice-message" role="status"><LoaderCircle className="spin" size={16} />Finding that place in India…</p>}
-            {locationError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{locationError}</p>}
+            {locationLoading && <p className="form-message notice-message" role="status" data-testid="find-location-status"><LoaderCircle className="spin" size={16} />Finding that place in India…</p>}
+            {locationError && <p className="form-message error-message" role="alert" data-testid="find-location-error"><AlertCircle size={16} />{locationError}</p>}
 
             <div className="form-divider" />
             <div className="form-section-title"><CalendarDays size={19} /><h2>When and how many?</h2></div>
             <div className="form-grid form-grid-three">
               <div className="field-group">
                 <label htmlFor="ride-date">Date</label>
-                 <input id="ride-date" type="date" min={today} value={date} onChange={(event) => { dateManuallyChanged.current = true; setDate(event.target.value); clearResults(); }} required />
+                <input id="ride-date" data-testid="find-date" type="date" min={today} value={date} onChange={(event) => { dateManuallyChanged.current = true; setDate(event.target.value); clearResults(); }} required />
               </div>
               <div className="field-group">
                 <label htmlFor="ride-time">Time</label>
-                <input id="ride-time" type="time" value={time} onChange={(event) => { setTime(event.target.value); clearResults(); }} />
+                <input id="ride-time" data-testid="find-time" type="time" value={time} onChange={(event) => { setTime(event.target.value); clearResults(); }} />
                 <span className="field-hint">Optional · ± 3 hours</span>
               </div>
               <div className="field-group">
                 <label htmlFor="ride-seats">Seats</label>
-                <select id="ride-seats" value={seats} onChange={(event) => { setSeats(Number(event.target.value)); clearResults(); }}>
+                <select id="ride-seats" data-testid="find-seats" value={seats} onChange={(event) => { setSeats(Number(event.target.value)); clearResults(); }}>
                   {[1, 2, 3, 4, 5, 6].map((value) => <option key={value} value={value}>{value} {value === 1 ? "seat" : "seats"}</option>)}
                 </select>
               </div>
             </div>
-            <button className="btn btn-primary btn-block" type="submit" disabled={routeLoading || !searchRoute || searchLoading}>
+            <button className="btn btn-primary btn-block" data-testid="find-submit" type="submit" disabled={routeLoading || !searchRoute || searchLoading}>
               {searchLoading ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />}
               {searchLoading ? "Checking compatible rides…" : "Search rides"}
             </button>
-            {searchError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{searchError}</p>}
+            {searchError && <p className="form-message error-message" role="alert" data-testid="find-error"><AlertCircle size={16} />{searchError}</p>}
           </form>
 
           <section ref={mapPanelRef} className="card map-panel" aria-label="Journey map">
@@ -831,13 +831,13 @@ export default function FindRidePage() {
             {results.length > 0 && searchRoute && <span className="results-caption">Sorted by pickup closeness</span>}
           </div>
           {searchNotice && <p className="form-message notice-message"><AlertCircle size={16} />{searchNotice}</p>}
-          {bookingSuccess && <p className="form-message success-message" role="status"><Check size={16} />{bookingSuccess}</p>}
-          {bookingError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{bookingError}</p>}
+          {bookingSuccess && <p className="form-message success-message" role="status" data-testid="find-booking-success"><Check size={16} />{bookingSuccess}</p>}
+          {bookingError && <p className="form-message error-message" role="alert" data-testid="find-booking-error"><AlertCircle size={16} />{bookingError}</p>}
 
           {loading ? (
             <div className="ride-grid"><div className="card ride-card-skeleton" /><div className="card ride-card-skeleton" /><div className="card ride-card-skeleton" /></div>
           ) : results.length > 0 ? (
-            <div className="ride-grid results-grid">
+            <div className="ride-grid results-grid" data-testid="find-results">
               {results.map(({ ride }) => {
                 const driver = users.find((user) => user.id === ride.driverId);
                 const vehicle = vehicles.find((item) => item.id === ride.vehicleId);
@@ -864,6 +864,7 @@ export default function FindRidePage() {
                       </select>
                       <button
                         className="btn btn-primary"
+                        data-testid={`find-book-${ride.id}`}
                         type="button"
                         disabled={ride.availableSeats < 1 || Boolean(bookingRideId) || Boolean(existingBooking)}
                         onClick={() => handleBooking(ride.id, ride.availableSeats)}

@@ -648,6 +648,7 @@ export function ProfilePage() {
                   <span className="rt-profile-label">Phone number</span>
                   <input
                     className="rt-profile-input"
+                    data-testid="profile-phone"
                     type="tel"
                     value={form.phone}
                     onChange={(event) => updateField("phone", event.target.value)}
@@ -710,12 +711,12 @@ export function ProfilePage() {
               </div>
               <div className="rt-profile-actions">
                 {message ? (
-                  <p className={`rt-profile-feedback${message.type === "error" ? " rt-profile-feedback-error" : ""}`} role="status">
+                  <p className={`rt-profile-feedback${message.type === "error" ? " rt-profile-feedback-error" : ""}`} role="status" data-testid={message.type === "error" ? "profile-error" : "profile-success"}>
                     {message.type === "success" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
                     {message.text}
                   </p>
                 ) : <span />}
-                <button className="rt-profile-save" type="submit" disabled={saving}>
+                <button className="rt-profile-save" data-testid="profile-save" type="submit" disabled={saving}>
                   <Save size={16} /> {saving ? "Saving…" : "Save changes"}
                 </button>
               </div>

@@ -93,7 +93,7 @@ const ISSUE_COPY: Record<string, string> = {
 
 export function AuthLoadingScreen() {
   return (
-    <div className="app-loading" role="status" aria-live="polite">
+    <div className="app-loading" role="status" aria-live="polite" data-testid="app-loading">
       <span className="app-loading__logo" aria-hidden="true">
         <CarFront size={32} />
       </span>

@@ -166,11 +166,21 @@ export const requestBooking = async (rideId: string, seats: number): Promise<Boo
     );
   }
 
+  /**
+   * The insert asks for the row back, but never through `.single()`.
+   *
+   * `insert().select().single()` reports "expected one row, got zero" as
+   * `PGRST116`, which is indistinguishable from a missing record. Zero rows can
+   * also happen when a BEFORE trigger declines the row or a policy hides it from
+   * the returning SELECT, and the resulting error was surfaced to riders as
+   * "We could not find that. It may have been removed." Even when the write did
+   * land, that message was a lie. Reading the array and re-checking below keeps
+   * the reported outcome honest either way.
+   */
   const { data, error } = await client
     .from(BOOKING_TABLE)
     .insert({ ride_id: rideId, rider_id: riderId, seats, status: "pending" })
-    .select(BOOKING_COLUMNS)
-    .single();
+    .select(BOOKING_COLUMNS);
 
   if (error) {
     if (error.code === "23505") {
@@ -188,11 +198,57 @@ export const requestBooking = async (rideId: string, seats: number): Promise<Boo
     throw toDataError(error, "book");
   }
 
-  const booking = rowToBooking(data as BookingRow);
+  const rows = (data ?? []) as BookingRow[];
+
+  if (rows.length === 0) {
+    // The insert reported success but returned nothing readable. Ask the
+    // database whether the request is actually there before telling the rider
+    // anything, so a successful write is never reported as a failure and a
+    // genuine failure is never reported as success.
+    const existing = await findActiveBookingForRider(client, rideId, riderId);
+    if (existing) {
+      if (import.meta.env.DEV) {
+        console.info("[bookings] insert returned no row; recovered an existing request", {
+          bookingId: existing.id,
+          rideId,
+        });
+      }
+      return existing;
+    }
+    throw new DataError(
+      "The seat request was not saved. Please check your connection and try again.",
+      "unknown",
+    );
+  }
+
+  const booking = rowToBooking(rows[0]);
   if (import.meta.env.DEV) {
     console.info("[bookings] requested", { bookingId: booking.id, rideId, seats, status: booking.status });
   }
   return booking;
+};
+
+/**
+ * Most recent request this rider still holds on a ride, or null. Used to tell
+ * "the write failed" apart from "the write succeeded but the response did not
+ * include the row".
+ */
+const findActiveBookingForRider = async (
+  client: ReturnType<typeof getSupabaseClient>,
+  rideId: string,
+  riderId: string,
+): Promise<Booking | null> => {
+  const { data, error } = await client
+    .from(BOOKING_TABLE)
+    .select(BOOKING_COLUMNS)
+    .eq("ride_id", rideId)
+    .eq("rider_id", riderId)
+    .in("status", ["pending", "confirmed"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return null;
+  return data ? rowToBooking(data as BookingRow) : null;
 };
 
 /**

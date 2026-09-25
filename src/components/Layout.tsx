@@ -5,6 +5,7 @@ import {
   Car,
   CarFront,
   CircleUserRound,
+  CloudOff,
   Ellipsis,
   Home,
   PlusCircle,
@@ -49,7 +50,7 @@ function getUnreadCount(notifications: AppNotification[], userId?: string): numb
 }
 
 export function Layout() {
-  const { loading, activeUser, notifications } = useApp();
+  const { loading, loadError, activeUser, notifications, refresh } = useApp();
   const { authUser } = useAuth();
   const location = useLocation();
   const moreMenuRef = useRef<HTMLDivElement>(null);
@@ -81,7 +82,7 @@ export function Layout() {
 
   if (loading) {
     return (
-      <div className="app-loading" role="status" aria-live="polite">
+      <div className="app-loading" role="status" aria-live="polite" data-testid="app-loading">
         <span className="app-loading__logo" aria-hidden="true">
           <CarFront size={32} />
         </span>
@@ -93,7 +94,7 @@ export function Layout() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-testid="app-shell">
       <a className="app-skip-link" href="#main-content">
         Skip to content
       </a>
@@ -157,6 +158,17 @@ export function Layout() {
         </header>
 
         <main className="app-main" id="main-content">
+          {loadError ? (
+            // A refresh failed but the last known data is still on screen, so this
+            // is a dismissible warning rather than a blocking error.
+            <div className="app-refresh-warning" role="status" data-testid="load-warning">
+              <CloudOff size={16} aria-hidden="true" />
+              <span>{loadError}</span>
+              <button type="button" onClick={() => void refresh()} data-testid="load-warning-retry">
+                Retry
+              </button>
+            </div>
+          ) : null}
           <Outlet />
         </main>
       </div>

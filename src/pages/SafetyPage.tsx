@@ -459,7 +459,7 @@ export function SafetyPage() {
             <h2>Your safety information stays in this browser</h2>
             <p>Emergency contacts are private to the active demo profile. In a real emergency, use your phone to contact local emergency services directly.</p>
           </div>
-          <button className="rt-safety-demo-button" type="button" onClick={() => setSosOpen(true)}>
+          <button className="rt-safety-demo-button" data-testid="sos-open" type="button" onClick={() => setSosOpen(true)}>
             <PhoneCall size={19} /> <span>Open SOS <span className="rt-safety-demo-label">Demo</span></span>
           </button>
         </section>
@@ -480,7 +480,7 @@ export function SafetyPage() {
               <h2 id="emergency-contacts-title">Emergency contacts</h2>
               <p>{ownedContacts.length} {ownedContacts.length === 1 ? "contact" : "contacts"} saved for the active profile.</p>
             </div>
-            <button className="rt-safety-add" type="button" onClick={openAdd}><Plus size={15} /> Add contact</button>
+            <button className="rt-safety-add" data-testid="contact-add" type="button" onClick={openAdd}><Plus size={15} /> Add contact</button>
           </div>
 
           {feedback && (
@@ -507,7 +507,7 @@ export function SafetyPage() {
                   <span className="rt-safety-contact-phone"><Phone size={12} />{contact.phone}</span>
                 </div>
                 <div className="rt-safety-contact-actions">
-                  <button className="rt-safety-icon-button" type="button" onClick={() => openEdit(contact)} aria-label={`Edit ${contact.name}`}><Pencil size={14} /></button>
+                  <button className="rt-safety-icon-button" data-testid={`contact-edit-${contact.id}`} type="button" onClick={() => openEdit(contact)} aria-label={`Edit ${contact.name}`}><Pencil size={14} /></button>
                   <button className="rt-safety-icon-button rt-safety-icon-button-danger" type="button" onClick={() => setPendingDelete(contact)} aria-label={`Delete ${contact.name}`}><Trash2 size={14} /></button>
                 </div>
               </article>
@@ -557,23 +557,23 @@ export function SafetyPage() {
           <div className="rt-safety-form-grid">
             <label className="rt-safety-field rt-safety-field-full">
               <span className="rt-safety-label">Full name</span>
-              <input className="rt-safety-input" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} placeholder="e.g. Priya Sharma" autoComplete="name" aria-invalid={Boolean(errors.name)} />
+              <input className="rt-safety-input" data-testid="contact-name" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} placeholder="e.g. Priya Sharma" autoComplete="name" aria-invalid={Boolean(errors.name)} />
               {errors.name && <span className="rt-safety-field-error"><AlertCircle size={12} />{errors.name}</span>}
             </label>
             <label className="rt-safety-field rt-safety-field-full">
               <span className="rt-safety-label">Phone number</span>
-              <input className="rt-safety-input" type="tel" value={draft.phone} onChange={(event) => updateDraft("phone", event.target.value)} placeholder="e.g. +91 98765 43210" autoComplete="tel" aria-invalid={Boolean(errors.phone)} />
+              <input className="rt-safety-input" data-testid="contact-phone" type="tel" value={draft.phone} onChange={(event) => updateDraft("phone", event.target.value)} placeholder="e.g. +91 98765 43210" autoComplete="tel" aria-invalid={Boolean(errors.phone)} />
               {errors.phone && <span className="rt-safety-field-error"><AlertCircle size={12} />{errors.phone}</span>}
             </label>
             <label className="rt-safety-field rt-safety-field-full">
               <span className="rt-safety-label">Relationship</span>
-              <input className="rt-safety-input" value={draft.relationship} onChange={(event) => updateDraft("relationship", event.target.value)} placeholder="e.g. Family, friend, colleague" autoComplete="off" aria-invalid={Boolean(errors.relationship)} />
+              <input className="rt-safety-input" data-testid="contact-relationship" value={draft.relationship} onChange={(event) => updateDraft("relationship", event.target.value)} placeholder="e.g. Family, friend, colleague" autoComplete="off" aria-invalid={Boolean(errors.relationship)} />
               {errors.relationship && <span className="rt-safety-field-error"><AlertCircle size={12} />{errors.relationship}</span>}
             </label>
           </div>
           <div className="rt-safety-form-actions">
             <button className="rt-safety-secondary" type="button" onClick={closeForm} disabled={saving}>Cancel</button>
-            <button className="rt-safety-primary" type="submit" disabled={saving}><Check size={15} /> {saving ? "Saving…" : "Save contact"}</button>
+            <button className="rt-safety-primary" data-testid="contact-save" type="submit" disabled={saving}><Check size={15} /> {saving ? "Saving…" : "Save contact"}</button>
           </div>
         </form>
       </Modal>

@@ -86,7 +86,7 @@ export function RideCard({
   const rootClassName = ["ride-card", className].filter(Boolean).join(" ");
 
   return (
-    <article className={rootClassName}>
+    <article className={rootClassName} data-testid={`ride-card-${ride.id}`}>
       <div className="ride-card__header">
         <div className="ride-card__driver">
           {driver?.avatar ? (

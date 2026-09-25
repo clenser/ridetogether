@@ -62,6 +62,7 @@ export function UserMenu({ user, email, compact = false }: UserMenuProps) {
     >
       <button
         className="user-menu__trigger"
+        data-testid="user-menu-trigger"
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -95,6 +96,7 @@ export function UserMenu({ user, email, compact = false }: UserMenuProps) {
           </Link>
           <button
             className="user-menu__item user-menu__item--danger"
+            data-testid="user-menu-signout"
             type="button"
             role="menuitem"
             onClick={() => void handleSignOut()}

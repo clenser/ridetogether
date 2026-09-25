@@ -401,6 +401,7 @@ export function ChatPage() {
                       <label className="rt-chat-label" htmlFor="ride-message">Message</label>
                       <textarea
                         id="ride-message"
+                        data-testid="chat-input"
                         className="rt-chat-textarea"
                         value={draft}
                         rows={1}
@@ -416,11 +417,11 @@ export function ChatPage() {
                       />
                       <span className="rt-chat-count" aria-hidden="true">{draft.length}/1000</span>
                     </div>
-                    <button className="rt-chat-send" type="submit" disabled={sending || !draft.trim()} aria-label="Send message" title="Send message">
+                    <button className="rt-chat-send" data-testid="chat-send" type="submit" disabled={sending || !draft.trim()} aria-label="Send message" title="Send message">
                       {sending ? <LoaderCircle className="rt-chat-spin" size={19} /> : <Send size={19} />}
                     </button>
                   </div>
-                  {error ? <p className="rt-chat-error" id="chat-send-error" role="alert"><AlertCircle size={14} />{error}</p> : <span id="chat-message-help" style={{ display: "none" }}>Press Enter to send or Shift plus Enter for a new line.</span>}
+                  {error ? <p className="rt-chat-error" id="chat-send-error" role="alert" data-testid="chat-error"><AlertCircle size={14} />{error}</p> : <span id="chat-message-help" style={{ display: "none" }}>Press Enter to send or Shift plus Enter for a new line.</span>}
                 </form>
                 <p className="rt-chat-privacy" style={{ padding: "6px 0 0", border: 0, background: "transparent" }}><CornerDownLeft size={12} /> Enter sends · Shift + Enter adds a line</p>
               </>

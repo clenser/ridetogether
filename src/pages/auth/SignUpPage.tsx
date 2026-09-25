@@ -94,7 +94,7 @@ export function SignUpPage() {
       <form onSubmit={handleSubmit} noValidate>
         <div className="rt-auth__body" style={{ padding: 0, gap: 16 }}>
           {formError ? (
-            <p className="rt-auth__notice rt-auth__notice--error" role="alert">
+            <p className="rt-auth__notice rt-auth__notice--error" role="alert" data-testid="signup-error">
               <AlertCircle size={16} aria-hidden="true" />
               {formError}
             </p>
@@ -127,7 +127,7 @@ export function SignUpPage() {
             <span className="rt-auth__label">Email address</span>
             <input
               className="rt-auth__input"
-              type="email"
+              data-testid="signup-email"
               value={email}
               onChange={(event) => {
                 setEmail(event.target.value);
@@ -149,7 +149,7 @@ export function SignUpPage() {
             <span className="rt-auth__label">Password</span>
             <input
               className="rt-auth__input"
-              type="password"
+              data-testid="signup-password"
               value={password}
               onChange={(event) => {
                 setPassword(event.target.value);
@@ -173,7 +173,7 @@ export function SignUpPage() {
             <span className="rt-auth__label">Confirm password</span>
             <input
               className="rt-auth__input"
-              type="password"
+              data-testid="signup-confirm-password"
               value={confirmPassword}
               onChange={(event) => {
                 setConfirmPassword(event.target.value);
@@ -191,7 +191,7 @@ export function SignUpPage() {
             ) : null}
           </label>
 
-          <button className="rt-auth__submit" type="submit" disabled={submitting}>
+          <button className="rt-auth__submit" data-testid="signup-submit" type="submit" disabled={submitting}>
             {submitting ? (
               <>
                 <LoaderCircle className="spin" size={17} aria-hidden="true" /> Creating account…
