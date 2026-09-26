@@ -564,8 +564,26 @@ them. So neither can produce a duplicate push.
 ### 7. Verify
 
 ```bash
-supabase functions deploy send-push
+supabase functions deploy send-push --no-verify-jwt
 ```
+
+`--no-verify-jwt` is required, not a convenience. The only caller of this function is
+the database, and the database authenticates with `PUSH_DISPATCH_SECRET` rather than
+a Supabase JWT (there is no user session behind a statement trigger). With JWT
+verification left on - the CLI default, and what this command used to say - the
+platform gateway rejects the dispatch before the function is entered:
+
+```
+HTTP 401  {"code":"UNAUTHORIZED_INVALID_JWT_FORMAT","message":"Invalid JWT"}
+```
+
+The function never runs, so nothing is encrypted or sent, and the failure is silent
+from the database's point of view: `pg_net` queues the request and only records the
+status in its own response table, so `public.push_dispatch_failures` stays empty and
+the notification row looks perfectly healthy. Nothing reaches the member's device.
+Turning verification off does not open the function up, because the function then
+authenticates every caller itself with a constant-time comparison against
+`PUSH_DISPATCH_SECRET` and fails closed when that secret is unset.
 
 Then check the delivery path is actually complete:
 
