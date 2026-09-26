@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -34,16 +35,30 @@ import {
 import { getSupabaseConfigStatus, type SupabaseConfigIssue } from "../services/supabase";
 import type { User } from "../types";
 
-export type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "unavailable";
+/**
+ * Coarse authentication phase.
+ *
+ * `initializing` is a startup-only value: the first `getSession()` resolves
+ * exactly once, during application bootstrap. Every later transition goes
+ * straight to `authenticated` or `unauthenticated`, and nothing ever returns
+ * to `initializing`. That is what keeps a background token refresh or a tab
+ * resume from re-rendering the "Restoring your session..." screen.
+ */
+export type AuthStatus = "initializing" | "authenticated" | "unauthenticated" | "unavailable";
 
 /**
- * - "idle"     signed out, or a user just became known and the load is queued
- * - "loading"  the profile row is being fetched from Supabase
- * - "ready"    a row was fetched from Supabase
- * - "missing"  Supabase answered and there is no row for this user
- * - "error"    the fetch failed; the row may still exist
+ * Profile phase, tracked separately from the auth phase so that refetching a
+ * profile can never blank the application.
+ *
+ * - "idle"       signed out, no user to load
+ * - "loading"    first fetch for this user; there is nothing to show yet
+ * - "refreshing" re-fetch for a user we already have an answer for; the
+ *                previous answer stays on screen
+ * - "ready"      a row was fetched from Supabase
+ * - "missing"    Supabase answered and there is no row for this user
+ * - "error"      the fetch failed and no previous answer is available
  */
-export type ProfileStatus = "idle" | "loading" | "ready" | "missing" | "error";
+export type ProfileStatus = "idle" | "loading" | "refreshing" | "ready" | "missing" | "error";
 
 export interface AuthContextValue {
   status: AuthStatus;
@@ -58,10 +73,10 @@ export interface AuthContextValue {
   profileStatus: ProfileStatus;
   profileLoading: boolean;
   /**
-   * True only once Supabase has definitively answered for the current user.
-   * Route guards must wait for this before deciding to show profile completion,
-   * otherwise a returning user is bounced to the completion screen while their
-   * profile is still being fetched.
+   * True once Supabase has definitively answered for the *current* user, or
+   * once a previous answer is being retained. Route guards must not treat an
+   * unsettled profile as "incomplete": a returning user must never be bounced
+   * to the completion screen by an in-flight or failed background refetch.
    */
   profileSettled: boolean;
   profileError: string | null;
@@ -106,8 +121,11 @@ const logProfileCompleteness = (row: ProfileRow | null, stage = "loaded"): void 
 };
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  // Startup-only. The initial `getSession()` below resolves this exactly once;
+  // no later code path assigns "initializing", so `isLoading` cannot flicker
+  // back to true when Supabase refreshes a token in the background.
   const [status, setStatus] = useState<AuthStatus>(() =>
-    CONFIG.configured ? "loading" : "unavailable",
+    CONFIG.configured ? "initializing" : "unavailable",
   );
   const [session, setSession] = useState<Session | null>(null);
   const [authUser, setAuthUser] = useState<SupabaseUser | null>(null);
@@ -115,26 +133,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [profileStatus, setProfileStatus] = useState<ProfileStatus>("idle");
   const [profileError, setProfileError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  /** Bumped by `reloadProfile` to re-run the profile effect for the same user. */
+  const [profileReloadToken, setProfileReloadToken] = useState(0);
 
   const authUserId = authUser?.id ?? null;
 
   /**
-   * Marks the profile as in-flight and clears any previous row. Called in the
-   * same React batch that sets a new auth user, so there is never a render in
-   * which a signed-in user still shows the previous "idle" profile state.
+   * The last definitive answer we obtained for a user id. Lets the profile
+   * effect tell a *first* load (blocking) apart from a *re*-load (non-blocking),
+   * and lets a failed refetch keep the previous row instead of discarding it.
    */
-  const beginProfileLoad = useCallback((nextUserId: string | null) => {
-    if (!nextUserId) {
-      setProfile(null);
-      setProfileStatus("idle");
-      setProfileError(null);
-      return;
-    }
+  const settledProfileRef = useRef<{ userId: string | null; status: ProfileStatus }>({
+    userId: null,
+    status: "idle",
+  });
+
+  const resetProfile = useCallback(() => {
+    settledProfileRef.current = { userId: null, status: "idle" };
     setProfile(null);
-    setProfileStatus("loading");
+    setProfileStatus("idle");
     setProfileError(null);
   }, []);
 
+  /**
+   * Initial session restoration. Runs once at startup, in parallel with the
+   * auth listener below. The listener is registered independently so that a
+   * session arriving during this call is never dropped.
+   */
   useEffect(() => {
     if (!CONFIG.configured) return undefined;
 
@@ -143,14 +168,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       try {
         const restored = await getCurrentSession();
         if (cancelled) return;
-        beginProfileLoad(restored?.user?.id ?? null);
         setSession(restored);
         setAuthUser(restored?.user ?? null);
         setStatus(restored ? "authenticated" : "unauthenticated");
         if (restored) logAuth("restored session", restored.user.id);
       } catch (error) {
         if (cancelled) return;
-        beginProfileLoad(null);
         setSessionNotice(describeAuthError(error, "session"));
         setStatus("unauthenticated");
       }
@@ -160,16 +183,28 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [beginProfileLoad]);
+  }, []);
 
+  /**
+   * Auth state listener, registered exactly once for the lifetime of the
+   * provider.
+   *
+   * This callback is intentionally synchronous and touches only session state.
+   * Awaits inside `onAuthStateChange` can deadlock supabase-js event delivery,
+   * and mutating profile state here is what previously reset the UI to a
+   * full-screen loader on every `TOKEN_REFRESHED`. The profile is loaded by the
+   * effect keyed on the user id, so an event that does not change the user id
+   * (`TOKEN_REFRESHED`, `USER_UPDATED`, `INITIAL_SESSION`) leaves the current
+   * session, profile and route untouched.
+   */
   useEffect(() => {
     if (!CONFIG.configured) return undefined;
 
     return onAuthStateChange((event, nextSession) => {
       const nextUserId = nextSession?.user?.id ?? null;
-      beginProfileLoad(nextUserId);
 
       if (event === "SIGNED_OUT") {
+        resetProfile();
         setSession(null);
         setAuthUser(null);
         setStatus("unauthenticated");
@@ -177,38 +212,67 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         if (import.meta.env.DEV) console.info("[auth] signed out");
         return;
       }
+
       if (event === "SIGNED_IN") {
         setSessionNotice(null);
         logAuth("signed in", nextUserId);
-      }
-      if (event === "TOKEN_REFRESHED" && nextUserId) {
+      } else if (event === "TOKEN_REFRESHED" && nextUserId) {
+        // Background refresh only. The session, profile and route stay as they
+        // are; nothing below returns to a loading state.
         logAuth("token refreshed", nextUserId);
       }
+
       setSession(nextSession);
       setAuthUser(nextSession?.user ?? null);
       setStatus(nextSession ? "authenticated" : "unauthenticated");
     });
-  }, [beginProfileLoad]);
+  }, [resetProfile]);
 
-  // Supabase `profiles` is the single source of truth for the current user.
+  /**
+   * Supabase `profiles` is the single source of truth for the current user.
+   *
+   * Keyed on the user id, so it re-runs when the *identity* changes and stays
+   * dormant for events that keep the same identity (token refresh, tab resume).
+   * A re-run for a user we already have an answer for is a non-blocking
+   * `refreshing` that keeps the previous row on screen; a failed re-run keeps
+   * that row too, so a transient network error can neither blank the app nor
+   * send the user back to Complete Profile.
+   */
   useEffect(() => {
     if (!authUserId) {
-      setProfile(null);
-      setProfileStatus("idle");
-      setProfileError(null);
+      resetProfile();
       return;
     }
 
     let cancelled = false;
     // Guard against a stale fetch resolving after a sign-out or user switch.
     const requestedUserId = authUserId;
-    setProfileStatus("loading");
+    const previousStatus = settledProfileRef.current.status;
+    // A usable previous answer exists only if Supabase already gave us one for
+    // this exact user. A previous *error* does not count.
+    const hasAnswer =
+      settledProfileRef.current.userId === requestedUserId &&
+      (previousStatus === "ready" || previousStatus === "missing");
+
+    if (hasAnswer) {
+      setProfileStatus("refreshing");
+    } else {
+      // First load for this identity: nothing safe to show yet, so discard any
+      // row that belonged to a previous user.
+      settledProfileRef.current = { userId: requestedUserId, status: "loading" };
+      setProfile(null);
+      setProfileStatus("loading");
+    }
     setProfileError(null);
 
     void (async () => {
       try {
         const row = await fetchProfile(requestedUserId);
         if (cancelled) return;
+        settledProfileRef.current = {
+          userId: requestedUserId,
+          status: row ? "ready" : "missing",
+        };
         setProfile(row);
         setProfileStatus(row ? "ready" : "missing");
         if (import.meta.env.DEV) {
@@ -220,7 +284,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
       } catch (error) {
         if (cancelled) return;
-        setProfileError(describeProfileFailure(error));
+        const message = describeProfileFailure(error);
+        setProfileError(message);
+        if (hasAnswer) {
+          // Keep the row we already trust and stay settled. The error stays
+          // available for a quiet retry, but the application keeps working.
+          setProfileStatus(previousStatus === "missing" ? "missing" : "ready");
+          if (import.meta.env.DEV) {
+            console.warn("[profile] refetch failed, keeping the previous profile", {
+              userId: requestedUserId,
+              reason: message,
+            });
+          }
+          return;
+        }
+        settledProfileRef.current = { userId: requestedUserId, status: "error" };
         setProfileStatus("error");
       }
     })();
@@ -228,22 +306,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [authUserId]);
+  }, [authUserId, profileReloadToken, resetProfile]);
 
-  const signIn = useCallback(
-    async (input: SignInInput): Promise<void> => {
-      const nextSession = await supabaseSignIn(input);
-      setSessionNotice(null);
-      // Same batch as the auth user, so the guard never sees a stale "idle"
-      // profile and bounces a returning user to profile completion.
-      beginProfileLoad(nextSession.user.id);
-      setSession(nextSession);
-      setAuthUser(nextSession.user);
-      setStatus("authenticated");
-      logAuth("signed in", nextSession.user.id);
-    },
-    [beginProfileLoad],
-  );
+  const signIn = useCallback(async (input: SignInInput): Promise<void> => {
+    const nextSession = await supabaseSignIn(input);
+    setSessionNotice(null);
+    // The profile effect is keyed on the user id, so setting the user here is
+    // what schedules the profile load. No loading state is entered by hand.
+    setSession(nextSession);
+    setAuthUser(nextSession.user);
+    setStatus("authenticated");
+    logAuth("signed in", nextSession.user.id);
+  }, []);
 
   const signInWithGoogle = useCallback(async (): Promise<void> => {
     setSessionNotice(null);
@@ -258,7 +332,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setSessionNotice(null);
       const newUser = result.user;
       if (result.session && newUser) {
-        beginProfileLoad(newUser.id);
         setSession(result.session);
         setAuthUser(newUser);
         setStatus("authenticated");
@@ -268,21 +341,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
       return result;
     },
-    [beginProfileLoad],
+    [],
   );
 
   const signOut = useCallback(async (): Promise<void> => {
     await supabaseSignOut();
     // Clears local state only. The Supabase profile row is untouched, so
     // signing back in restores the exact same profile.
+    resetProfile();
     setSession(null);
     setAuthUser(null);
-    setProfile(null);
-    setProfileStatus("idle");
-    setProfileError(null);
     setStatus("unauthenticated");
     if (import.meta.env.DEV) console.info("[auth] signed out, profile left intact in Supabase");
-  }, []);
+  }, [resetProfile]);
 
   const updateProfile = useCallback(
     async (changes: ProfileChanges): Promise<ProfileRow> => {
@@ -292,6 +363,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const row = await saveProfileRow(authUserId, changes);
       // Adopt the saved row immediately so the guard sees a complete profile
       // without waiting for a refetch, then confirm against Supabase.
+      settledProfileRef.current = { userId: authUserId, status: "ready" };
       setProfile(row);
       setProfileStatus("ready");
       setProfileError(null);
@@ -299,6 +371,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       const confirmed = await fetchProfile(authUserId).catch(() => row);
       if (confirmed) {
+        settledProfileRef.current = { userId: authUserId, status: "ready" };
         setProfile(confirmed);
         setProfileStatus("ready");
         if (import.meta.env.DEV) logProfileCompleteness(confirmed, "confirmed in Supabase");
@@ -308,33 +381,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     [authUserId],
   );
 
-  const reloadProfile = useCallback(async (): Promise<void> => {
-    if (!authUserId) return;
-    setProfileStatus("loading");
-    try {
-      const row = await fetchProfile(authUserId);
-      setProfile(row);
-      setProfileStatus(row ? "ready" : "missing");
-      setProfileError(null);
-      if (import.meta.env.DEV) logProfileCompleteness(row, "reloaded");
-    } catch (error) {
-      setProfileError(describeProfileFailure(error));
-      setProfileStatus("error");
-    }
+  /**
+   * Explicit retry. Delegates to the profile effect so one code path owns every
+   * first-load, refresh and failure rule. A retry after a hard failure shows the
+   * blocking loader again; a retry while an answer is on screen is silent.
+   */
+  const reloadProfile = useCallback((): Promise<void> => {
+    if (!authUserId) return Promise.resolve();
+    setProfileReloadToken((token) => token + 1);
+    return Promise.resolve();
   }, [authUserId]);
 
   const clearSessionNotice = useCallback(() => setSessionNotice(null), []);
 
   const profileUser = useMemo(() => toAppUser(profile, authUser), [profile, authUser]);
   const profileComplete = useMemo(() => isProfileComplete(profile), [profile]);
-  // Only a definitive "ready" or "missing" answer counts as settled. "idle",
-  // "loading" and "error" must never trigger the completion redirect.
-  const profileSettled = profileStatus === "ready" || profileStatus === "missing";
+  // Settled means "we have an answer we trust for the current user". A
+  // background `refreshing` that retains that answer is settled, so neither a
+  // token refresh nor a failed refetch can trigger the completion redirect.
+  // "idle", a first `loading` and a first-load `error` are not settled.
+  const profileSettled = profileStatus === "ready" || profileStatus === "missing" || profileStatus === "refreshing";
 
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
-      isLoading: status === "loading",
+      // Startup-only. Never true again once the initial session resolved.
+      isLoading: status === "initializing",
       isAuthenticated: status === "authenticated",
       isAvailable: CONFIG.configured,
       configIssue: CONFIG.configured ? null : CONFIG.issue,

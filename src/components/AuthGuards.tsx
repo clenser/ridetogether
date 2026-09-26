@@ -96,7 +96,19 @@ const ISSUE_COPY: Record<string, string> = {
   "unsafe-key": "VITE_SUPABASE_PUBLISHABLE_KEY looks like a secret key. Use the public publishable key only.",
 };
 
-export function AuthLoadingScreen({ message = "Restoring your session…" }: { message?: string }) {
+/**
+ * Shown only while the initial authentication bootstrap resolves at startup.
+ * It must never be rendered for a token refresh, a tab resume, a profile
+ * refetch, realtime updates or a route change.
+ */
+const RESTORING_SESSION = "Restoring your session…";
+
+/**
+ * Full-screen startup loader. `message` is deliberately required so the
+ * session-restore copy can never be reused for a different wait, and so
+ * "Restoring your session…" stays unique to initial authentication bootstrap.
+ */
+export function AuthLoadingScreen({ message }: { message: string }) {
   return (
     <div className="app-loading" role="status" aria-live="polite" data-testid="app-loading">
       <span className="app-loading__logo" aria-hidden="true">
@@ -144,7 +156,9 @@ export function RequireAuth() {
   const location = useLocation();
 
   if (!isAvailable) return <SupabaseUnavailableScreen />;
-  if (isLoading) return <AuthLoadingScreen />;
+  // Only the startup bootstrap shows this. A background token refresh keeps
+  // `isAuthenticated` true, so the current route stays mounted.
+  if (isLoading) return <AuthLoadingScreen message={RESTORING_SESSION} />;
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
@@ -156,7 +170,6 @@ export function RequireCompleteProfile() {
     isLoading,
     isAuthenticated,
     isAvailable,
-    profileLoading,
     profileStatus,
     profileSettled,
     profileComplete,
@@ -165,12 +178,15 @@ export function RequireCompleteProfile() {
   } = useAuth();
 
   if (!isAvailable) return <SupabaseUnavailableScreen />;
-  if (isLoading) return <AuthLoadingScreen />;
+  if (isLoading) return <AuthLoadingScreen message={RESTORING_SESSION} />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  // The profile is still being determined. Waiting here is what stops a
-  // returning user from being shown the completion screen again.
-  if (!profileSettled) return <AuthLoadingScreen />;
+  // Only a *first* profile load blocks. A background `refreshing` keeps the
+  // previous answer on screen and stays settled, so neither a tab resume nor a
+  // token refresh replaces the current page with a loader.
+  if (!profileSettled && profileStatus === "loading") {
+    return <AuthLoadingScreen message="Loading your account…" />;
+  }
 
   if (profileStatus === "error" && !profileComplete) {
     return (
@@ -203,7 +219,7 @@ export function RedirectIfAuthenticated({ children }: { children: ReactNode }) {
   const { isLoading, isAuthenticated, isAvailable } = useAuth();
 
   if (!isAvailable) return <SupabaseUnavailableScreen />;
-  if (isLoading) return <AuthLoadingScreen />;
+  if (isLoading) return <AuthLoadingScreen message={RESTORING_SESSION} />;
   if (isAuthenticated) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
