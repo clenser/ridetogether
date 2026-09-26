@@ -74,16 +74,15 @@ export function ResetPasswordPage() {
       <AuthShell
         eyebrow="Account recovery"
         title="Password recovery unavailable"
-        subtitle="RideTogether is not connected to Supabase yet."
+        subtitle="RideTogether cannot reach its sign-in service."
       >
         <div className="rt-auth__done">
           <span className="rt-auth__done-icon" aria-hidden="true">
             <AlertCircle size={30} />
           </span>
-          <p className="rt-auth__done-title">Supabase is not connected</p>
+          <p className="rt-auth__done-title">Sign-in service unavailable</p>
           <p className="rt-auth__done-copy">
-            Add the public project URL and publishable key to your .env file, then request a new
-            reset link.
+            We could not verify your reset link. Please request a new one and try again.
           </p>
           <Link className="rt-auth__submit" to="/forgot-password">
             Request a new link
@@ -256,7 +255,7 @@ export function ResetPasswordPage() {
 
           <p className="rt-auth__notice">
             <Info size={16} aria-hidden="true" />
-            Your new password is sent straight to Supabase Auth. This app never stores it.
+            Your new password is sent straight to our sign-in service. This app never stores it.
           </p>
         </div>
       </form>

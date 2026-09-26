@@ -160,4 +160,57 @@ test.describe("session continuity across tab switches", () => {
     await expect(page.getByTestId("login-submit")).toBeVisible();
     await expect(page.getByTestId("app-shell")).toHaveCount(0);
   });
+
+  test("a background refresh uses the subtle indicator, never a full-page loader", async ({ page, context }) => {
+    const errors = collectErrors(page);
+    await signIn(page, creds!);
+    await page.goto("/find");
+    await waitForApp(page);
+
+    // The non-blocking indicator exists but is idle on a settled page.
+    const indicator = page.getByTestId("app-refresh");
+    await expect(indicator).toHaveAttribute("data-active", "false");
+    await expect(page.getByTestId("app-loading")).toHaveCount(0);
+
+    const other = await context.newPage();
+    await expectNoBootLoader(page, () => simulateTabSwitch(page, other));
+
+    // Whatever happened underneath, the page is still the current route and the
+    // full-page loader is not in the document.
+    expect(new URL(page.url()).pathname).toBe("/find");
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await expect(page.getByTestId("app-loading")).toHaveCount(0);
+    assertNoErrors(errors);
+  });
+
+  test("client-side navigation across primary routes never shows a full-page loader", async ({ page }) => {
+    const errors = collectErrors(page);
+    await signIn(page, creds!);
+    await waitForApp(page);
+
+    // Links, not `goto`, so this exercises the SPA router rather than a document
+    // load: the case where a route change could blank the app.
+    const routes: Array<[string, string]> = [
+      ["Find a ride", "/find"],
+      ["Offer a ride", "/offer"],
+      ["My rides", "/rides"],
+      ["My bookings", "/bookings"],
+      ["Profile", "/profile"],
+      ["Home", "/"],
+    ];
+
+    for (const [label, path] of routes) {
+      const link = page.getByRole("link", { name: label, exact: true }).first();
+      await expect(link).toBeVisible();
+      await link.click();
+
+      await expect(page).toHaveURL(new RegExp(`${path.replace("/", "\\/")}$`));
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      // The guard is the point of the test: a settled authenticated route must
+      // never be replaced by the bootstrap loader.
+      await expect(page.getByTestId("app-loading")).toHaveCount(0);
+      await expect(page.getByTestId("app-refresh")).toHaveAttribute("data-active", "false");
+    }
+    assertNoErrors(errors);
+  });
 });

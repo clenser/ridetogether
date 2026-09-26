@@ -209,7 +209,7 @@ export function SignUpPage() {
 
       <p className="rt-auth__notice">
         <Info size={16} aria-hidden="true" />
-        Your profile record is created automatically by the database when your account is created.
+        Your profile is created for you as soon as your account is.
       </p>
 
       <p className="rt-auth__foot">
@@ -220,7 +220,7 @@ export function SignUpPage() {
       </p>
       <p className="rt-auth__legal">
         <CheckCircle2 size={12} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 4 }} />
-        Passwords are handled by Supabase Auth and are never stored by this app.
+        Passwords are handled securely and are never stored by this app.
       </p>
     </AuthShell>
   );

@@ -22,6 +22,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { DraftBanner } from "../components/DraftBanner";
+import { AppLoadingScreen } from "../components/LoadingScreen";
 import { PageHeader } from "../components/PageHeader";
 import { Stars } from "../components/Stars";
 import { useApp } from "../context/AppContext";
@@ -453,7 +454,7 @@ export function ProfilePage() {
   if (!activeUser) {
     return (
       <div className="rt-profile-page">
-        <div className="rt-profile-loading">Loading your profile…</div>
+        <AppLoadingScreen label="Loading your profile" />
       </div>
     );
   }
@@ -641,7 +642,7 @@ export function ProfilePage() {
                   />
                   <span className="rt-profile-hint">
                     <Lock size={12} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 4 }} />
-                    Your sign-in email is managed by Supabase Auth.
+                    Your sign-in email cannot be changed here.
                   </span>
                 </label>
                 <label className="rt-profile-field">
@@ -676,7 +677,7 @@ export function ProfilePage() {
                         aria-label="Choose a photo to upload"
                       />
                       <p className="rt-profile-hint">
-                        Uploads a JPG, PNG, WebP or GIF up to {Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB to RideTogether cloud storage.
+                        Uploads a JPG, PNG, WebP or GIF up to {Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB to your RideTogether account.
                         {uploadingAvatar ? " Uploading…" : ""}
                       </p>
                       {avatarError && <span className="rt-profile-error"><AlertCircle size={12} />{avatarError}</span>}

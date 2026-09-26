@@ -1338,8 +1338,87 @@ tbody tr:hover {
   font-weight: 800;
   text-align: center;
 }
+/*
+ * Non-blocking progress indicator.
+ *
+ * Pinned to the top of the viewport and out of document flow, so background
+ * work (a profile refresh, a session refresh after a tab resume) never replaces
+ * the page the member is looking at. `data-active="false"` collapses it to
+ * nothing, which keeps the DOM stable and the layout unchanged.
+ */
+.app-refresh {
+  position: fixed;
+  z-index: 2600;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  pointer-events: none;
+}
 
+.app-refresh[data-active="true"] {
+  height: 2px;
+}
+
+.app-refresh__bar {
+  height: 2px;
+  width: 100%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, rgba(21, 148, 71, 0) 0%, var(--rt-primary) 45%, rgba(21, 148, 71, 0) 100%);
+  background-size: 220% 100%;
+  animation: rt-refresh-sweep 1.15s ease-in-out infinite;
+}
+
+.app-refresh__dot {
+  position: fixed;
+  top: 10px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--rt-primary);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(12, 40, 22, 0.16);
+}
+
+:root[data-theme="dark"] .app-refresh__bar {
+  background: linear-gradient(90deg, rgba(66, 201, 110, 0) 0%, #42c96e 45%, rgba(66, 201, 110, 0) 100%);
+}
+
+:root[data-theme="dark"] .app-refresh__dot {
+  color: #42c96e;
+  background: rgba(21, 38, 26, 0.94);
+}
+
+@keyframes rt-refresh-sweep {
+  0% { background-position: 120% 0; opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { background-position: -20% 0; opacity: 0.55; }
+}
+
+.inline-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--rt-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-refresh__bar {
+    animation: none;
+    opacity: 0.9;
+  }
+}
+
+/*
+ * Full-page loader copy is intentionally absent. `.app-loading` renders the logo
+ * and spinner only, so no technical wording about sessions, profiles or the
+ * backend can reach the screen.
+ */
 .app-loading {
+
   position: fixed;
   z-index: 3000;
   inset: 0;

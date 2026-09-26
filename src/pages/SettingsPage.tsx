@@ -437,7 +437,7 @@ export function SettingsPage() {
       await clearLocalCache();
       await refreshLocalDataFlag();
       setResetOpen(false);
-      setResetMessage({ type: "success", text: "Local browser data was cleared. Your cloud data is unchanged." });
+      setResetMessage({ type: "success", text: "Local browser data was cleared. Your account data is unchanged." });
     } catch (error) {
       setResetMessage({ type: "error", text: error instanceof Error ? error.message : "Unable to clear local data." });
     } finally {
@@ -580,7 +580,7 @@ export function SettingsPage() {
                   </details>
                   <details className="rt-faq">
                     <summary>Where is my data stored?<ChevronDown size={16} /></summary>
-                    <p className="rt-faq-answer">Your rides, bookings, messages, notifications, ratings, vehicles and safety contacts are stored in your RideTogether Supabase database and are shared across every device you sign in on. Only your display preferences on this page are kept in localStorage on this device.</p>
+                    <p className="rt-faq-answer">Your rides, bookings, messages, notifications, ratings, vehicles and safety contacts are stored in your RideTogether account and are shared across every device you sign in on. Only your display preferences on this page are kept in this browser.</p>
                   </details>
                 </div>
                 <div className="rt-help-guide">
@@ -602,17 +602,17 @@ export function SettingsPage() {
                   <div className="rt-about-item"><span>Storage</span><strong>{cloudConfigured ? "Cloud" : "Unavailable"}</strong></div>
                   <div className="rt-about-item"><span>Accounts</span><strong>{activeUser ? "Signed in" : "Guest"}</strong></div>
                 </div>
-                <p className="rt-about-copy">RideTogether is a responsive carpooling demonstration with real maps and cloud-synced trip data. It is not a live transportation or emergency service.</p>
+                <p className="rt-about-copy">RideTogether is a responsive carpooling demonstration with real maps and trip data that syncs across your devices. It is not a live transportation or emergency service.</p>
                 {hasLocalData ? (
                   <div className="rt-reset-row">
                     <div className="rt-reset-copy">
                       <RotateCcw size={18} />
-                      <span><strong>Clear local browser data</strong><span>Removes trip records an older version of RideTogether cached on this device. Nothing in the cloud is affected.</span></span>
+                      <span><strong>Clear local browser data</strong><span>Removes trip records an older version of RideTogether cached on this device. Nothing in your account is affected.</span></span>
                     </div>
                     <button className="rt-reset-button" type="button" onClick={() => { setResetOpen(true); setResetMessage(null); }} disabled={resetting}><RotateCcw size={14} /> Clear local data</button>
                   </div>
                 ) : (
-                  <p className="rt-reset-modal-copy">No leftover local trip data is stored on this device. Everything you see here is read from the cloud.</p>
+                  <p className="rt-reset-modal-copy">No leftover local trip data is stored on this device. Everything you see here is loaded fresh when you sign in.</p>
                 )}
               </div>
             </section>
@@ -621,8 +621,8 @@ export function SettingsPage() {
       </div>
 
       <Modal isOpen={resetOpen} onClose={() => !resetting && setResetOpen(false)} title="Clear local browser data?" size="sm">
-        <div className="rt-reset-warning"><Info size={18} /><span>This clears the leftover demo records this browser cached in IndexedDB before RideTogether moved to cloud storage.</span></div>
-        <p className="rt-reset-modal-copy">It does not delete anything from the cloud. Your rides, bookings, messages, vehicles, ratings and safety contacts stay safe in your RideTogether database and are still shared across your devices. Your saved settings and appearance preference on this device will remain unchanged.</p>
+        <div className="rt-reset-warning"><Info size={18} /><span>This clears the leftover demo records an older version of RideTogether kept in this browser before your data moved online.</span></div>
+        <p className="rt-reset-modal-copy">It does not delete anything from your account. Your rides, bookings, messages, vehicles, ratings and safety contacts stay safe and are still shared across your devices. Your saved settings and appearance preference on this device will remain unchanged.</p>
         <div className="rt-reset-modal-actions">
           <button className="rt-settings-secondary" type="button" onClick={() => setResetOpen(false)} disabled={resetting}>Cancel</button>
           <button className="rt-settings-danger" type="button" onClick={() => void handleReset()} disabled={resetting}><RotateCcw size={14} /> {resetting ? "Clearing…" : "Clear local data"}</button>

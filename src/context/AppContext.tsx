@@ -562,7 +562,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }
 
       if (changes.email !== undefined && changes.email.trim() !== (authUser?.email ?? "")) {
-        throw new Error("Your sign-in email is managed by Supabase Auth and cannot be edited here.");
+        throw new Error("Your sign-in email cannot be changed here.");
       }
 
       await updateProfile({

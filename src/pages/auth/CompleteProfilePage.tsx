@@ -5,6 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { isProfileComplete } from "../../repositories/profileRepository";
 import { validateFullName, validatePhone } from "../../services/auth";
 import { useDraft } from "../../services/drafts";
+import { AppLoadingScreen } from "../../components/LoadingScreen";
 import { AuthShell } from "./AuthShell";
 
 interface ProfileForm {
@@ -145,21 +146,10 @@ export function CompleteProfilePage() {
 
   const previewInitials = getInitials(form.fullName || profileUser?.name || "");
 
-  // While the stored profile is still in flight, do not render an empty form -
-  // that is what made returning users think their profile had been lost.
+  // Only for a first load with no stored answer to fall back on. Branded
+  // loader, no technical copy. A background refresh keeps the form on screen.
   if (profileLoading && !hydrated) {
-    return (
-      <AuthShell
-        eyebrow="One more step"
-        title="Loading your profile"
-        subtitle="Checking the details we already have for your account."
-      >
-        <div className="rt-auth__done">
-          <span className="app-loading__spinner" aria-hidden="true" />
-          <p className="rt-auth__done-copy">Fetching your saved profile from Supabase…</p>
-        </div>
-      </AuthShell>
-    );
+    return <AppLoadingScreen label="Loading your profile" />;
   }
 
   return (
@@ -260,7 +250,7 @@ export function CompleteProfilePage() {
             ) : (
               <span className="rt-auth__hint">
                 <ImageIcon size={12} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 4 }} />
-                Optional. Paste an image link now; direct uploads can be added with Supabase Storage later.
+                Optional. Paste a link to a profile photo.
               </span>
             )}
           </label>
@@ -288,8 +278,8 @@ export function CompleteProfilePage() {
 
           <p className="rt-auth__locked">
             <ShieldCheck size={14} aria-hidden="true" />
-            Signed in as {profileUser?.email ?? "your account"}. Your sign-in email is managed by Supabase
-            Auth and cannot be changed here.
+            Signed in as {profileUser?.email ?? "your account"}. Your sign-in email cannot be
+            changed here.
           </p>
 
           <button className="rt-auth__submit" type="submit" disabled={saving || profileLoading}>

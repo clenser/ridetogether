@@ -461,7 +461,7 @@ export function VehiclesPage() {
             <span className="rt-vehicles-summary-icon"><CarFront size={22} /></span>
             <span className="rt-vehicles-summary-copy">
               <strong>{loading ? "Loading…" : `${ownedVehicles.length} ${ownedVehicles.length === 1 ? "vehicle" : "vehicles"}`}</strong>
-              <span>{loading ? "Fetching your saved vehicles from the cloud." : ownedVehicles.length ? "Only you can edit or remove these vehicles." : "Add a vehicle before offering a ride."}</span>
+              <span>{loading ? "Getting your vehicles." : ownedVehicles.length ? "Only you can edit or remove these vehicles." : "Add a vehicle before offering a ride."}</span>
             </span>
           </div>
           <button className="rt-vehicles-add" data-testid="vehicle-add" type="button" onClick={openAdd}>
@@ -484,7 +484,7 @@ export function VehiclesPage() {
             <div className="rt-vehicles-empty">
               <div className="rt-vehicles-loading" role="status">
                 <LoaderCircle className="rt-vehicles-spin" size={24} aria-hidden="true" />
-                <span>Loading your vehicles…</span>
+                <span className="sr-only">Loading your vehicles</span>
               </div>
             </div>
           ) : ownedVehicles.length === 0 ? (

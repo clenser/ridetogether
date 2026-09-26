@@ -53,9 +53,9 @@ export const describeProfileFailure = (error: unknown): string => {
   if (error instanceof Error && error.message.startsWith("Supabase is not configured")) {
     return describeAuthError(error, "profile");
   }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
+  // Anything else is mapped rather than passed through. A raw `Error.message`
+  // from the client can name tables, columns or env vars, none of which belong
+  // in front of a member.
   return describeProfileError(error);
 };
 

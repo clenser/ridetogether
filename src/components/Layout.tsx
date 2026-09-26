@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { UserMenu } from "./UserMenu";
+import { AppLoadingScreen, InlineRefreshIndicator } from "./LoadingScreen";
 import { useApp } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
 import type { AppNotification } from "../types";
@@ -51,7 +52,7 @@ function getUnreadCount(notifications: AppNotification[], userId?: string): numb
 
 export function Layout() {
   const { loading, loadError, activeUser, notifications, refresh } = useApp();
-  const { authUser } = useAuth();
+  const { authUser, profileStatus } = useAuth();
   const location = useLocation();
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
@@ -81,20 +82,16 @@ export function Layout() {
   }, [isMoreOpen]);
 
   if (loading) {
-    return (
-      <div className="app-loading" role="status" aria-live="polite" data-testid="app-loading">
-        <span className="app-loading__logo" aria-hidden="true">
-          <CarFront size={32} />
-        </span>
-        <strong>RideTogether</strong>
-        <span className="app-loading__spinner" aria-hidden="true" />
-        <span>Preparing your rides…</span>
-      </div>
-    );
+    // Only reachable on sign-in/sign-out and an account switch, where there is
+    // genuinely nothing to render yet.
+    return <AppLoadingScreen label="Loading your rides" />;
   }
 
   return (
     <div className="app-shell" data-testid="app-shell">
+      {/* Background profile/session refreshes surface here instead of replacing
+          the page, so the member keeps their route and their scroll position. */}
+      <InlineRefreshIndicator active={profileStatus === "refreshing"} label="Syncing your details" />
       <a className="app-skip-link" href="#main-content">
         Skip to content
       </a>

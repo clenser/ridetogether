@@ -392,7 +392,8 @@ export function ChatPage() {
           </div>
 
           <div className="rt-chat-composer">
-            <div className="rt-chat-privacy"><ShieldCheck size={13} /> Messages are stored in the cloud for this ride and are visible only to its driver and confirmed riders.</div>
+              <div className="rt-chat-privacy"><ShieldCheck size={13} /> Messages for this ride are visible only to its driver and confirmed riders.</div>
+
             {canSend ? (
               <>
                 <form className="rt-chat-form" onSubmit={handleSubmit}>

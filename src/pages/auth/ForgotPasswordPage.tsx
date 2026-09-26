@@ -102,7 +102,8 @@ export function ForgotPasswordPage() {
           {!isAvailable ? (
             <p className="rt-auth__notice rt-auth__notice--error" role="alert">
               <AlertCircle size={16} aria-hidden="true" />
-              RideTogether is not connected to Supabase yet, so password recovery is unavailable.
+              RideTogether cannot reach its sign-in service, so password recovery is unavailable right
+              now.
             </p>
           ) : null}
 
@@ -170,7 +171,7 @@ export function ForgotPasswordPage() {
       </p>
       <p className="rt-auth__legal">
         <CheckCircle2 size={12} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 4 }} />
-        Passwords are handled by Supabase Auth and are never stored by this app.
+        Passwords are handled securely and are never stored by this app.
       </p>
     </AuthShell>
   );

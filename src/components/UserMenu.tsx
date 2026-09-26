@@ -86,7 +86,7 @@ export function UserMenu({ user, email, compact = false }: UserMenuProps) {
         <div className="user-menu__panel" role="menu" aria-label="Account">
           <div className="user-menu__panel-head">
             <strong>{displayName}</strong>
-            <span>{email || "Signed in with Supabase"}</span>
+            <span>{email || "Signed in"}</span>
           </div>
           <Link className="user-menu__item" to="/profile" role="menuitem" onClick={() => setOpen(false)}>
             <CircleUserRound size={16} aria-hidden="true" /> Your profile

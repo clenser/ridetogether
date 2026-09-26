@@ -12,13 +12,21 @@
  * `tests/session-resume.spec.ts`.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const read = (relativePath) => readFileSync(join(ROOT, relativePath), "utf8");
+
+/** Every rendered source file, so banned copy cannot reappear unnoticed. */
+const collectTsx = (dir) =>
+  readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) return collectTsx(path);
+    return entry.name.endsWith(".tsx") ? [read(path)] : [];
+  });
 
 const failures = [];
 
@@ -130,20 +138,122 @@ check(
   /keeping the previous profile/.test(authContext),
 );
 
-// 7. The loader copy is unique to the startup branch.
+// 7. The full-page loader is copy-free, so no technical wording can reach the
+//    screen, and the session-restore copy is gone entirely.
+const loadingScreen = read("src/components/LoadingScreen.tsx");
+const layout = read("src/components/Layout.tsx");
+const completeProfile = read("src/pages/auth/CompleteProfilePage.tsx");
+
 check(
-  "AuthLoadingScreen requires an explicit message",
-  /export function AuthLoadingScreen\(\{ message \}: \{ message: string \}\)/.test(authGuards),
+  "AuthLoadingScreen delegates to the shared branded loader",
+  /export function AuthLoadingScreen\(\) \{\s*return <AppLoadingScreen /.test(authGuards),
+);
+check("the shared loader exists", /export function AppLoadingScreen/.test(loadingScreen));
+check(
+  "the shared loader renders only a logo, a spinner and screen-reader text",
+  /CarFront/.test(loadingScreen)
+    && /app-loading__spinner/.test(loadingScreen)
+    && /className="sr-only"/.test(loadingScreen),
 );
 check(
-  "the session-restore copy is a named startup constant",
-  /const RESTORING_SESSION = "Restoring your session…"/.test(authGuards),
+  "the shared loader accepts no visible message prop",
+  !/AppLoadingScreen\([^)]*message/.test(loadingScreen),
 );
-const restoreUsages = [...authGuards.matchAll(/AuthLoadingScreen message=\{RESTORING_SESSION\}/g)];
-check("the session-restore loader is only rendered from the auth bootstrap branch", restoreUsages.length === 3);
 check(
-  "a first profile load uses its own copy, not the session-restore copy",
-  /AuthLoadingScreen message="Loading your account…"/.test(authGuards),
+  "a non-blocking refresh indicator exists",
+  /export function InlineRefreshIndicator/.test(loadingScreen),
+);
+check(
+  "the shell shows the refresh indicator while a profile refresh is in flight",
+  /<InlineRefreshIndicator active=\{profileStatus === "refreshing"\}/.test(layout),
+);
+check(
+  "the profile form keeps using the branded loader for a first load",
+  /<AppLoadingScreen label="Loading your profile" \/>/.test(completeProfile),
+);
+
+// 9. No implementation vocabulary may be rendered to a member. These strings
+//    are the ones that were previously visible on a loading or error screen.
+const BANNED_COPY = [
+  "Restoring your session",
+  "Loading your account",
+  "Fetching your saved",
+  "from Supabase",
+  "to Supabase yet",
+  "Supabase is not connected",
+  "Supabase Auth",
+  "Supabase Storage",
+  "Supabase database",
+  "by Supabase",
+  "Fetching your saved vehicles",
+  "from the cloud",
+  "in the cloud",
+  "cloud storage",
+  "cloud data",
+  "cloud-synced",
+  "by the database",
+  "Checking the details we already have",
+  // Browser-storage internals are implementation detail, not product language.
+  "IndexedDB",
+  "localStorage",
+  "sessionStorage",
+];
+/** Removes block and line comments so prose in JSDoc is not treated as copy. */
+const stripComments = (text) =>
+  text
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)\/\/.*$/, "$1"))
+    .join("\n");
+
+/**
+ * Removes whole `console.*(...)` statements, including multi-line ones. A
+ * development log may name the backend; a member never sees it.
+ */
+const stripConsoleCalls = (text) => {
+  const out = [];
+  let index = 0;
+  while (index < text.length) {
+    const match = /\bconsole\.(?:info|warn|error|debug|log)\s*\(/.exec(text.slice(index));
+    if (!match) {
+      out.push(text.slice(index));
+      break;
+    }
+    out.push(text.slice(index, index + match.index));
+    let depth = 1;
+    let cursor = index + match.index + match[0].length;
+    while (cursor < text.length && depth > 0) {
+      if (text[cursor] === "(") depth += 1;
+      else if (text[cursor] === ")") depth -= 1;
+      cursor += 1;
+    }
+    index = cursor;
+  }
+  return out.join("");
+};
+
+/**
+ * Blanks out storage API *calls* so a phrase like `localStorage` is only
+ * rejected when it appears in something a member reads. Calling the API is
+ * legitimate code; telling someone their profile "is kept in localStorage" is
+ * not.
+ */
+const stripStorageApiUsage = (text) =>
+  text
+    .replace(/\bwindow\.(?:local|session)Storage\b/g, " ")
+    .replace(/\b(?:local|session)Storage\s*\.\s*[A-Za-z]+/g, " ")
+    .replace(/\b(?:local|session)Storage\s*\[[^\]]*\]/g, " ");
+
+const renderedCopy = [...collectTsx("src")]
+  .map((text) => stripStorageApiUsage(stripConsoleCalls(stripComments(text))))
+  .join("\n");
+for (const phrase of BANNED_COPY) {
+  check(`no rendered copy contains ${JSON.stringify(phrase)}`, !renderedCopy.includes(phrase));
+}
+
+check(
+  "no page reload is used as a workaround",
+  !/location\.reload\(/.test(authContext + authGuards + main + layout),
 );
 
 // 8. The service worker must never touch Supabase traffic.

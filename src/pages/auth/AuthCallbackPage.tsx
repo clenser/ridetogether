@@ -25,7 +25,7 @@ export function AuthCallbackPage() {
   if (!isAvailable) return <SupabaseUnavailableScreen />;
 
   // The session (or the absence of one) is still being determined.
-  if (isLoading) return <AuthLoadingScreen message="Completing your sign-in…" />;
+  if (isLoading) return <AuthLoadingScreen />;
 
   if (isAuthenticated) return <Navigate to="/" replace />;
 

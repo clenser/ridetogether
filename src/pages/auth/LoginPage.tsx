@@ -167,7 +167,7 @@ export function LoginPage() {
         </Link>
       </p>
       <p className="rt-auth__legal">
-        Passwords are handled by Supabase Auth and are never stored by this app.
+        Passwords are handled securely and are never stored by this app.
       </p>    </AuthShell>
   );
 }

@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { CarFront, RefreshCw, ShieldAlert } from "lucide-react";
+import { RefreshCw, ShieldAlert } from "lucide-react";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { AppLoadingScreen } from "./LoadingScreen";
 
 /**
  * Shared by every full-screen auth state (loading, unavailable, profile error,
@@ -87,43 +88,36 @@ export const guardStyles = `
 [data-theme="dark"] .rt-guard__button--secondary { border-color: #3b4e41; color: #eef7f1; background: #1a251e; }
 `;
 
-const ISSUE_COPY: Record<string, string> = {
-  "missing-url": "VITE_SUPABASE_URL is not set in your .env file.",
-  "missing-key": "VITE_SUPABASE_PUBLISHABLE_KEY is not set in your .env file.",
-  "placeholder-url": "VITE_SUPABASE_URL still contains the placeholder value from .env.example.",
-  "placeholder-key": "VITE_SUPABASE_PUBLISHABLE_KEY still contains the placeholder value.",
-  "invalid-url": "VITE_SUPABASE_URL is not a valid Supabase project URL.",
-  "unsafe-key": "VITE_SUPABASE_PUBLISHABLE_KEY looks like a secret key. Use the public publishable key only.",
+/**
+ * Copy for a misconfigured deployment, deliberately free of environment
+ * variable names, file paths and vendor names. This screen is shown to whoever
+ * opens the app, which may not be the person who deployed it, so the actionable
+ * detail lives in the server logs and the deployment checklist instead.
+ */
+const UNAVAILABLE_COPY: Record<string, string> = {
+  "missing-url": "The service address is missing.",
+  "missing-key": "The public access key is missing.",
+  "placeholder-url": "The service address is still the example value.",
+  "placeholder-key": "The public access key is still the example value.",
+  "invalid-url": "The service address is not valid.",
+  "unsafe-key": "The configured key is not a public key.",
 };
 
 /**
- * Shown only while the initial authentication bootstrap resolves at startup.
- * It must never be rendered for a token refresh, a tab resume, a profile
- * refetch, realtime updates or a route change.
+ * Shown only while the app knows nothing yet: the initial session bootstrap, or
+ * a first profile load for a user with no prior answer. Branded logo + spinner,
+ * no copy. Never rendered for a token refresh, tab resume, profile refetch,
+ * realtime update or route change.
  */
-const RESTORING_SESSION = "Restoring your session…";
-
-/**
- * Full-screen startup loader. `message` is deliberately required so the
- * session-restore copy can never be reused for a different wait, and so
- * "Restoring your session…" stays unique to initial authentication bootstrap.
- */
-export function AuthLoadingScreen({ message }: { message: string }) {
-  return (
-    <div className="app-loading" role="status" aria-live="polite" data-testid="app-loading">
-      <span className="app-loading__logo" aria-hidden="true">
-        <CarFront size={32} />
-      </span>
-      <strong>RideTogether</strong>
-      <span className="app-loading__spinner" aria-hidden="true" />
-      <span>{message}</span>
-    </div>
-  );
+export function AuthLoadingScreen() {
+  return <AppLoadingScreen label="Loading RideTogether" />;
 }
 
 export function SupabaseUnavailableScreen() {
   const { configIssue } = useAuth();
-  const detail = configIssue ? ISSUE_COPY[configIssue] : "Supabase environment variables are not configured.";
+  const detail = configIssue
+    ? UNAVAILABLE_COPY[configIssue]
+    : "RideTogether could not reach its sign-in service.";
 
   return (
     <section className="rt-guard" aria-labelledby="rt-guard-unavailable">
@@ -132,14 +126,11 @@ export function SupabaseUnavailableScreen() {
         <span className="rt-guard__icon rt-guard__icon--warning" aria-hidden="true">
           <ShieldAlert size={30} />
         </span>
-        <h1 className="rt-guard__title" id="rt-guard-unavailable">Supabase is not connected</h1>
+        <h1 className="rt-guard__title" id="rt-guard-unavailable">We could not start RideTogether</h1>
         <p className="rt-guard__copy">
-          RideTogether signs users in with Supabase Auth, so the project URL and publishable key must be
-          present before the app can start. Copy the example file and add your own public values.
+          The sign-in service is not available right now, so there is no way to confirm who you are. This
+          usually clears on its own, so please try again in a moment.
         </p>
-        <span className="rt-guard__code">
-          <code>cp .env.example .env</code>
-        </span>
         <p className="rt-guard__copy">{detail}</p>
         <div className="rt-guard__actions">
           <Link className="rt-guard__button rt-guard__button--secondary" to="/login">
@@ -158,7 +149,7 @@ export function RequireAuth() {
   if (!isAvailable) return <SupabaseUnavailableScreen />;
   // Only the startup bootstrap shows this. A background token refresh keeps
   // `isAuthenticated` true, so the current route stays mounted.
-  if (isLoading) return <AuthLoadingScreen message={RESTORING_SESSION} />;
+  if (isLoading) return <AuthLoadingScreen />;
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
@@ -178,16 +169,19 @@ export function RequireCompleteProfile() {
   } = useAuth();
 
   if (!isAvailable) return <SupabaseUnavailableScreen />;
-  if (isLoading) return <AuthLoadingScreen message={RESTORING_SESSION} />;
+  if (isLoading) return <AuthLoadingScreen />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  // Only a *first* profile load blocks. A background `refreshing` keeps the
-  // previous answer on screen and stays settled, so neither a tab resume nor a
-  // token refresh replaces the current page with a loader.
+  // A *first* profile load blocks, because there is genuinely nothing to show
+  // yet. A background `refreshing` keeps the previous answer on screen and stays
+  // settled, so neither a tab resume nor a token refresh replaces the page.
   if (!profileSettled && profileStatus === "loading") {
-    return <AuthLoadingScreen message="Loading your account…" />;
+    return <AuthLoadingScreen />;
   }
 
+  // Reachable only when there is no previous answer to fall back on, so this
+  // is a genuine startup failure rather than a background blip. The stored
+  // profile is never discarded because of it.
   if (profileStatus === "error" && !profileComplete) {
     return (
       <section className="rt-guard" aria-labelledby="rt-guard-profile-error">
@@ -197,7 +191,11 @@ export function RequireCompleteProfile() {
             <ShieldAlert size={30} />
           </span>
           <h1 className="rt-guard__title" id="rt-guard-profile-error">We could not load your profile</h1>
-          <p className="rt-guard__copy">{profileError ?? "Please try again."}</p>
+          <p className="rt-guard__copy">
+            Your details are safe, we just could not fetch them right now. Check your connection and try
+            again.
+          </p>
+          {profileError ? <p className="rt-guard__copy">{profileError}</p> : null}
           <div className="rt-guard__actions">
             <button className="rt-guard__button rt-guard__button--primary" type="button" onClick={() => void reloadProfile()}>
               <RefreshCw size={16} /> Try again
@@ -219,7 +217,7 @@ export function RedirectIfAuthenticated({ children }: { children: ReactNode }) {
   const { isLoading, isAuthenticated, isAvailable } = useAuth();
 
   if (!isAvailable) return <SupabaseUnavailableScreen />;
-  if (isLoading) return <AuthLoadingScreen message={RESTORING_SESSION} />;
+  if (isLoading) return <AuthLoadingScreen />;
   if (isAuthenticated) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
