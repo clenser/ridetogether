@@ -990,6 +990,123 @@ create trigger push_subscriptions_set_updated_at
 
 create extension if not exists pg_net;
 
+-- Every dispatch that could not be handed to pg_net, so a broken configuration
+-- is visible without tailing server logs. Kept deliberately small and pruned by
+-- the same statement that inserts into it.
+create table if not exists public.push_dispatch_failures (
+  id bigint generated always as identity primary key,
+  user_id uuid references public.profiles (id) on delete cascade,
+  reason text not null,
+  detail text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists push_dispatch_failures_recent_idx
+on public.push_dispatch_failures (created_at desc);
+
+-- What the Edge Function has already sent, so a replayed trigger or a retried
+-- HTTP request cannot notify a member twice. The primary key on notification_id
+-- is the guarantee: the second insert raises, the function skips, and the member
+-- sees one notification per event however many times the database replays it.
+create table if not exists public.push_deliveries (
+  notification_id uuid primary key references public.notifications (id) on delete cascade,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  delivered integer not null default 0,
+  attempted integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists push_deliveries_created_idx
+on public.push_deliveries (created_at desc);
+
+alter table public.push_deliveries enable row level security;
+
+drop policy if exists push_deliveries_read_own on public.push_deliveries;
+create policy push_deliveries_read_own
+on public.push_deliveries for select to authenticated
+using (user_id = auth.uid());
+
+alter table public.push_dispatch_failures enable row level security;
+
+drop policy if exists push_dispatch_failures_read_own on public.push_dispatch_failures;
+create policy push_dispatch_failures_read_own
+on public.push_dispatch_failures for select to authenticated
+using (user_id is null or user_id = auth.uid());
+
+/**
+ * Records one dispatch failure, and can never itself fail.
+ *
+ * This runs inside the transaction that created the notification, so an error
+ * here would abort a seat request or a chat message to report a *push* problem.
+ * Every statement is therefore guarded, and a nested exception block is used
+ * rather than an outer one because an exception raised inside a block already
+ * being run for an exception rolls back to the implicit savepoint at the start of
+ * that block - which would discard the failure row along with the error.
+ */
+create or replace function public.record_push_dispatch_failure(
+  target_user_id uuid,
+  failure_reason text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  begin
+    insert into public.push_dispatch_failures (user_id, reason, detail)
+    values (target_user_id, left(coalesce(failure_reason, 'unknown'), 200), '')
+    on conflict do nothing;
+  exception when others then
+    null;
+  end;
+end;
+$$;
+
+comment on function public.record_push_dispatch_failure(uuid, text) is
+  'Appends a Web Push dispatch failure. Never raises, so it cannot fail the write that triggered it.';
+
+/**
+ * Whether the database side of Web Push is wired up, as plain booleans.
+ *
+ * The Settings screen has to tell three states apart: the browser has a
+ * subscription, the server can actually deliver, and delivery is broken. Without
+ * this it can only see its own half and would have to claim push works the moment
+ * a subscription row exists, which is precisely the false confirmation this
+ * function exists to prevent.
+ *
+ * It reports *presence only*. The values themselves stay in Vault, readable
+ * solely by `security definer` code, and the function is granted to `authenticated`
+ * so no client role can read `vault.decrypted_secrets` directly.
+ *
+ * It cannot report the Edge Function's own VAPID secrets, which live in Supabase
+ * Edge secrets rather than Vault and are invisible from SQL. A member whose
+ * subscription is stored and whose Vault wiring is present can therefore still
+ * be waiting on an unconfigured function; that gap is closed by the deployment
+ * check in supabase/README.md, not by guessing here.
+ */
+create or replace function public.push_service_status()
+returns table (
+  dispatch_secret_set boolean,
+  function_url_set boolean
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select
+    exists (select 1 from vault.decrypted_secrets where name = 'push_dispatch_secret'),
+    exists (select 1 from vault.decrypted_secrets where name = 'push_function_url')
+    and exists (
+      select 1 from vault.decrypted_secrets
+      where name = 'push_function_url' and btrim(decrypted_secret) <> ''
+    );
+$$;
+
+comment on function public.push_service_status() is
+  'Presence-only booleans for the Vault half of Web Push, so the UI never claims delivery works when the server is unwired.';
+
 create or replace function public.dispatch_push_for_notifications()
 returns trigger
 language plpgsql
@@ -1007,20 +1124,33 @@ begin
   if v_secret is null then
     -- Fail quietly: the notification row is already stored and still shows up
     -- in the app, so a missing secret must not break the write that created it.
-    raise warning 'push_dispatch_secret is not set in Vault; Web Push delivery skipped';
+    -- Recorded rather than merely warned, because a deployment that is missing
+    -- this secret looks healthy from the app's point of view forever otherwise.
+    perform public.record_push_dispatch_failure(
+      null, 'push_dispatch_secret is not set in Vault; Web Push delivery skipped');
     return null;
   end if;
 
   select decrypted_secret into v_url
     from vault.decrypted_secrets where name = 'push_function_url' limit 1;
 
-  if v_url is null or v_url = '' then
-    raise warning 'push_function_url is not set in Vault; Web Push delivery skipped';
+  if v_url is null or btrim(v_url) = '' then
+    perform public.record_push_dispatch_failure(
+      null, 'push_function_url is not set in Vault; Web Push delivery skipped');
     return null;
   end if;
 
+  -- Grouped by the notification id, which is exact: one dispatch per row the
+  -- triggers actually created. The Edge Function records what it has delivered
+  -- and refuses to send the same id twice, so a replayed trigger statement or a
+  -- retried HTTP request cannot produce a second notification on a member's
+  -- phone. Grouping by recipient instead - as an earlier version did - also
+  -- collapsed genuinely different notifications addressed to the same member
+  -- inside one statement, so a member could be sent a booking request and
+  -- silently never hear about the cancellation that followed it in the same
+  -- transaction.
   for v_target in
-    select distinct on (user_id) user_id::text, title, body, url
+    select id, user_id::text, title, body, url
       from inserted
      order by user_id, created_at
   loop
@@ -1042,6 +1172,7 @@ begin
           'Authorization', 'Bearer ' || v_secret
         ),
         body := jsonb_build_object(
+          'notification_id', v_target.id,
           'user_id', v_target.user_id,
           'title', coalesce(v_target.title, 'RideTogether'),
           'body', coalesce(v_target.body, ''),
@@ -1052,8 +1183,22 @@ begin
     exception when others then
       raise warning 'Web Push dispatch failed for notification to %: %',
         v_target.user_id, sqlerrm;
+      perform public.record_push_dispatch_failure(
+        v_target.user_id::uuid, sqlerrm);
     end;
   end loop;
+
+  -- One row per dispatch statement is enough for a support question; the history
+  -- of a busy deployment is not interesting and an unbounded table in the same
+  -- transaction path is a liability.
+  delete from public.push_dispatch_failures
+   where created_at < now() - interval '7 days';
+
+  -- The delivery log only exists to be de-duplicated against, so it is trimmed
+  -- on the same path. Long enough that a replayed trigger - which happens within
+  -- a transaction retry, not days later - still finds its row.
+  delete from public.push_deliveries
+   where created_at < now() - interval '30 days';
 
   return null;
 end;
@@ -1325,13 +1470,24 @@ begin
     'public.notify_new_message()',
     'public.sync_profile_rating()',
     'public.push_notification(uuid,text,text,text,uuid)',
-    'public.dispatch_push_for_notifications()'
+    'public.dispatch_push_for_notifications()',
+    'public.record_push_dispatch_failure(uuid,text)'
   ]
   loop
     execute format('revoke execute on function %s from public', fn);
     execute format('revoke execute on function %s from anon', fn);
     execute format('revoke execute on function %s from authenticated', fn);
   end loop;
+end
+$$;
+
+-- Read-only, presence-only status for the signed-in Settings screen. The values
+-- stay in Vault; this exposes booleans, and only to a member who is signed in.
+do $$
+begin
+  execute 'revoke execute on function public.push_service_status() from public';
+  execute 'revoke execute on function public.push_service_status() from anon';
+  execute 'grant execute on function public.push_service_status() to authenticated';
 end
 $$;
 

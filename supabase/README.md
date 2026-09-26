@@ -411,6 +411,36 @@ see another's rides through a cached API response on a shared device.
 Push is optional. Without it the app is fully functional; members just have to
 have the app open to see a new notification.
 
+### Where the configuration lives
+
+Three different places, and confusing them is the most common way to end up with
+a half-configured deployment. Nothing in the first column may ever be written to
+the second or third.
+
+| Value | Belongs in | Visible to the browser? |
+| --- | --- | --- |
+| `VITE_VAPID_PUBLIC_KEY` | `.env` / `.env.example` / Cloudflare Pages env | **Yes** - it is a public key by design |
+| `VAPID_PUBLIC_KEY_X` | `supabase secrets set` | No |
+| `VAPID_PUBLIC_KEY_Y` | `supabase secrets set` | No |
+| `VAPID_PRIVATE_KEY` | `supabase secrets set` | No |
+| `VAPID_SUBJECT` | `supabase secrets set` | No |
+| `PUSH_DISPATCH_SECRET` | `supabase secrets set` **and** Vault `push_dispatch_secret` | No |
+| `push_function_url` | Vault only | No |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Edge secrets, auto-provisioned | No |
+
+The VAPID pair is a single key pair split across two representations, which is
+the easiest thing to get wrong here:
+
+- the **browser** needs the uncompressed P-256 point `0x04 || x || y`
+  (65 bytes, base64url) as `VITE_VAPID_PUBLIC_KEY`;
+- the **function** needs the JWK's `x`, `y` and `d` coordinates separately,
+  because that is the form `jose` can import.
+
+`VITE_VAPID_PUBLIC_KEY` is the only push value the frontend ever reads. A
+subscription row in `push_subscriptions` holds the *receiver's* public key
+(`p256dh`) and auth secret for that one device; neither is a VAPID key and
+neither can sign a request.
+
 ### 1. Generate a VAPID key pair
 
 ```bash
@@ -433,6 +463,9 @@ supabase secrets set VAPID_SUBJECT=mailto:you@example.com
 supabase secrets set PUSH_DISPATCH_SECRET=$(openssl rand -hex 32)
 ```
 
+`SUPABASE_SERVICE_ROLE_KEY` is provisioned automatically for Edge Functions on a
+linked project; you only need to set it by hand for a self-hosted runtime.
+
 Put the public key in `.env` as `VITE_VAPID_PUBLIC_KEY`. Rotating any part of the
 pair invalidates every existing browser subscription, because the push service
 checks the key that signed it.
@@ -441,8 +474,8 @@ checks the key that signed it.
 
 The notification triggers write `public.notifications` rows, and a statement
 trigger forwards each new row to the Edge Function over `pg_net`, one request per
-recipient. The endpoint URL and the shared secret live in Vault, not in
-`schema.sql`:
+row, carrying the row's own `id`. The endpoint URL and the shared secret live in
+Vault, not in `schema.sql`:
 
 ```sql
 create extension if not exists pg_net;
@@ -453,10 +486,36 @@ select vault.create_secret(
 );
 ```
 
-If either secret is missing the trigger logs a warning and the notification row
-is still written - the row is the source of truth, push is best-effort.
+If either secret is missing the trigger records the reason in
+`public.push_dispatch_failures`, logs a warning, and the notification row is still
+written - the row is the source of truth, push is best-effort.
 
-### 4. Why the function is locked down
+### 4. What the Settings screen is allowed to claim
+
+The browser can see its own subscription; it cannot see whether anything is
+listening on the other end. `public.push_service_status()` closes that gap by
+returning two presence-only booleans (`dispatch_secret_set`, `function_url_set`)
+read from Vault. It is `SECURITY DEFINER` because no client role may read
+`vault.decrypted_secrets`, and it returns only `exists` results - never a value.
+
+The toggle therefore reports one of three distinct states rather than a single
+"enabled":
+
+| State | What the member is told |
+| --- | --- |
+| No `VITE_VAPID_PUBLIC_KEY` | Push is not available in this deployment yet |
+| Subscription saved, Vault empty | Subscribed on this device, **delivery is unavailable** |
+| Subscription saved, Vault wired | Push is on for this device |
+
+A saved subscription is **not** evidence that delivery works, and the UI must not
+imply otherwise. Note the remaining blind spot: the Edge Function's own VAPID
+secrets live in Supabase Edge secrets, which SQL cannot read, so
+`push_service_status()` cannot report them. A deployment with a valid subscription
+and full Vault wiring can still be waiting on an unconfigured function. That is
+what step 6 below is for - the gap is closed by a manual check, not by a guess in
+the client.
+
+### 5. Why the function is locked down
 
 `send-push` holds the VAPID private key **and** uses the service role to read any
 member's subscription rows, so anyone who can call it can notify arbitrary
@@ -477,19 +536,57 @@ than by importing the receiver's 65-byte public key as an AES key (which would
 fail with an invalid-key-length error). The record's `keyid` is the base64url
 *text* of the receiver's auth secret, so `idlen` is 22, not 16.
 
-### 5. Verify
+### 6. Duplicate suppression
+
+A member may have a phone, a tablet and a laptop, each with its own row in
+`push_subscriptions`; all of them are targeted on every event, and the unique
+constraint on `endpoint` means one browser is never targeted twice. Re-sending is
+suppressed on `notifications.id`:
+
+- the function **claims** the id by inserting into `push_deliveries` *before*
+  sending, and a unique-violation (`23505`) means this call is a duplicate of work
+  already in flight or already done, so it returns `skipped` without sending;
+- a claim that delivered nothing is **deleted** afterwards, so a transient push
+  service 5xx is retried rather than being permanently suppressed by its own
+  de-duplication row;
+- the claim is released on the "no subscriptions" path for the same reason.
+
+The dispatch trigger iterates the inserted rows by id rather than grouping by
+recipient. Grouping by recipient alone - as an earlier version did - also
+collapsed genuinely different notifications aimed at the same member inside one
+statement, so a member could be sent a booking request and silently never hear
+about the cancellation that followed it in the same transaction.
+
+Realtime events and page refreshes are not dispatch sources at all: notifications
+are created by database triggers, and a reload reads rows rather than writing
+them. So neither can produce a duplicate push.
+
+### 7. Verify
 
 ```bash
 supabase functions deploy send-push
 ```
 
-Then, with the app closed, have another member request a seat. The
+Then check the delivery path is actually complete:
+
+```sql
+select * from public.push_service_status();      -- both columns must be true
+select count(*) from public.push_dispatch_failures;  -- must be 0
+```
+
+With the app closed, have another member request a seat. The
 `notifications_dispatch_push` trigger fires, the function logs one line per
 device, and a `signatureRejected` count above zero means the deployed
 `VAPID_*` secrets do not match `VITE_VAPID_PUBLIC_KEY`. Endpoints that answer
 404/410 are deleted automatically.
 
+The multi-device path is: driver publishes a ride, a second browser profile signed
+in as the rider requests a seat, and both browsers have push enabled. Every step -
+request, confirm, reject, cancel, chat, complete, rate - must produce exactly one
+OS notification on the *other* member's devices and none on the actor's.
+
 ---
+
 
 ## Deployment
 

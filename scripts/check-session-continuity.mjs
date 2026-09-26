@@ -333,6 +333,159 @@ check(
   !/from:\s*location\.pathname\s*\}\s*\/>/.test(authGuards),
 );
 
+// 11. Web Push. Two separate promises are being made - "this device is
+//     subscribed" and "the server can deliver" - and the Settings screen used to
+//     conflate them, so a member with a saved subscription and no delivery path
+//     was told push was on. The copy has to be driven by both halves.
+const pushRepository = read("src/repositories/pushRepository.ts");
+const pushStatusRepository = read("src/repositories/pushStatusRepository.ts");
+const pushToggle = read("src/components/PushNotificationToggle.tsx");
+const serviceWorkerPush = read("public/sw.js");
+
+// Nothing private may be reachable from the browser, by name or by value.
+for (const secretName of [
+  "VAPID_PRIVATE_KEY",
+  "VAPID_PUBLIC_KEY_X",
+  "VAPID_PUBLIC_KEY_Y",
+  "VAPID_SUBJECT",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "PUSH_DISPATCH_SECRET",
+]) {
+  check(
+    `no browser source file mentions ${secretName}`,
+    !renderedCopy.includes(secretName),
+  );
+  check(
+    `the service worker does not mention ${secretName}`,
+    !serviceWorkerPush.includes(secretName),
+  );
+}
+
+// Permission may only be requested from the member's click.
+check(
+  "the browser permission prompt is requested in exactly one place",
+  (pushRepository.match(/Notification\.requestPermission\(/g) ?? []).length === 1,
+);
+// Scoped to the getPushState body: a lazy match across the whole file would run
+// from getPushState forward and find the request inside subscribeToPush, which is
+// exactly where it is supposed to be.
+const getPushStateBody =
+  pushRepository.match(/export const getPushState[\s\S]*?\n};/)?.[0] ?? "";
+check(
+  "getPushState body could be read for the read-only check",
+  getPushStateBody.length > 0,
+);
+check(
+  "the permission request is not made while reading push state",
+  !/requestPermission/.test(getPushStateBody),
+);
+check(
+  "the toggle never requests permission on mount",
+  !/requestPermission/.test(pushToggle),
+);
+check(
+  "requesting permission requires a service worker registration first",
+  /const registration = await getRegistration\(\);[\s\S]{0,400}?Notification\.requestPermission/.test(
+    pushRepository,
+  ),
+);
+
+// The confirmation must be conditional on the server actually being able to send.
+check(
+  "the toggle reads the server-side delivery status",
+  /getPushServiceStatus/.test(pushToggle),
+);
+check(
+  "\"push is on\" is only claimed when the delivery path is wired",
+  /isPushDeliveryWired\(service\)/.test(pushToggle),
+);
+check(
+  "a saved subscription with no delivery path is not reported as enabled",
+  /subscribed\s*&&\s*!delivered/.test(pushToggle),
+);
+check(
+  "the subscription cannot be claimed as on without consulting the server",
+  /note\s*===\s*"on"[\s\S]*?subscribed\s*&&\s*!delivered/.test(pushToggle) === false,
+);
+
+// A notification click must never be able to leave the app.
+check(
+  "the push handler validates the notification target",
+  /safeNotificationPath/.test(serviceWorkerPush),
+);
+check(
+  "notificationclick re-validates the target it navigates to",
+  /addEventListener\("notificationclick"[\s\S]*?safeNotificationPath\(event\.notification\.data/.test(
+    serviceWorkerPush,
+  ),
+);
+check(
+  "a protocol-relative target is rejected",
+  /!\s*value\.startsWith\("\/\/"\)/.test(serviceWorkerPush),
+);
+check(
+  "a backslash target is rejected",
+  /!\s*value\.startsWith\("\/\\\\"\)/.test(serviceWorkerPush),
+);
+check(
+  "an existing client is matched by parsed origin, not by substring",
+  /new URL\(client\.url\)\.origin\s*!==\s*origin/.test(serviceWorkerPush),
+);
+check(
+  "the loose substring origin check is gone",
+  !/client\.url\.includes\(/.test(serviceWorkerPush),
+);
+
+// One subscription row per endpoint, so re-enabling or a second tab cannot
+// double-target the same device.
+check(
+  "a subscription is upserted on its endpoint",
+  /onConflict:\s*"endpoint"/.test(pushRepository),
+);
+check(
+  "unsubscribing scopes the delete to the current member",
+  /\.eq\("user_id",\s*userId\)[\s\S]{0,120}?\.eq\("endpoint",\s*endpoint\)/.test(pushRepository),
+);
+// Every device of a member is a target, not just the first.
+const pushFunction = read("supabase/functions/send-push/index.ts");
+check(
+  "the function loads every subscription for the member",
+  /\.from\("push_subscriptions"\)[\s\S]{0,200}?\.eq\("user_id",\s*userId\)/.test(pushFunction),
+);
+check(
+  "the function fans out to all of them",
+  /Promise\.allSettled\(\s*subscriptions\.map/.test(pushFunction),
+);
+check(
+  "a dead endpoint is pruned rather than retried",
+  /GONE_STATUSES\.has\(result\.value\)/.test(pushFunction),
+);
+check(
+  "delivery is de-duplicated on the notification id",
+  /push_deliveries/.test(pushFunction) && /23505/.test(pushFunction),
+);
+check(
+  "the dispatch secret is compared in constant time",
+  /timingSafeEqual\(presented,\s*dispatchSecret\)/.test(pushFunction),
+);
+check(
+  "the function fails closed when the dispatch secret is unset",
+  /if\s*\(!dispatchSecret\)[\s\S]{0,120}?return json/.test(pushFunction),
+);
+// The status RPC must be read-only from the client: no secret can come back.
+check(
+  "the client status read is a presence-only RPC",
+  /rpc\("push_service_status"\)/.test(pushStatusRepository),
+);
+check(
+  "the client status maps to booleans only",
+  /dispatchSecretSet:\s*record\.dispatch_secret_set\s*===\s*true/.test(pushStatusRepository),
+);
+check(
+  "an unreadable status is treated as not-configured, never as working",
+  /isPushDeliveryWired[\s\S]{0,200}?status\s*!==\s*null/.test(pushStatusRepository),
+);
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} session-continuity check(s) failed:`);
   for (const failure of failures) console.error(`  - ${failure}`);

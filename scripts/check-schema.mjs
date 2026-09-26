@@ -10,6 +10,20 @@ const strip = sql.replace(/--[^\n]*/g, "");
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); };
 
+/**
+ * SECURITY DEFINER functions that a client role may call, each verified to return
+ * presence flags only and never a secret value.
+ *
+ * `push_service_status` has to be SECURITY DEFINER because `vault.decrypted_secrets`
+ * is unreadable by any client role, and it is the whole point of the function: the
+ * app must be able to tell a working server from an unwired one. It answers two
+ * `exists` booleans and returns no column from Vault, so the capability it grants
+ * is "is this deployment configured", which is not sensitive - the same fact is in
+ * the client's own Settings screen. Adding a name here means also adding a
+ * `comment on function` explaining why it is safe; the check below enforces that.
+ */
+const PRESENCE_ONLY = new Set(["public.push_service_status"]);
+
 // ---------------------------------------------------------------- $$ pairing
 const dollars = (strip.match(/\$\$/g) || []).length;
 check(dollars % 2 === 0, `unbalanced $$ quoting (${dollars} occurrences)`);
@@ -51,7 +65,7 @@ for (const m of strip.matchAll(refRe)) {
     declared.get(name) === args,
     `signature mismatch for ${name}: declared(${declared.get(name)}) vs referenced(${args})`,
   );
-  if (role === "authenticated" && definerFns.has(name)) {
+  if (role === "authenticated" && definerFns.has(name) && !PRESENCE_ONLY.has(name)) {
     failures.push(`${name} is SECURITY DEFINER but is granted to authenticated`);
   }
 }
@@ -126,6 +140,97 @@ check(
 check(
   /referencing\s+new\s+table\s+as\s+inserted/.test(strip),
   "dispatch trigger is missing its transition table",
+);
+
+// --------------------------------------------------- Web Push safety invariants
+for (const name of PRESENCE_ONLY) {
+  // An allowlist entry is a promise that the function returns no secret. Enforce
+  // that it is documented, so the exemption cannot be taken silently.
+  check(
+    new RegExp(`comment\\s+on\\s+function\\s+${name.replace(/\./g, "\\.")}\\s*\\(\\)`).test(strip),
+    `${name} is granted to a client role but has no "comment on function" justifying it`,
+  );
+}
+
+// The status function must not be able to hand a Vault value to the client.
+const statusDecl = strip.match(
+  /create\s+or\s+replace\s+function\s+public\.push_service_status\(\)\s*\nreturns\s+([\s\S]*?)as\s+\$\$/i,
+);
+const statusHeader = statusDecl?.[1] ?? "";
+const statusBody = strip.match(
+  /create\s+or\s+replace\s+function\s+public\.push_service_status\(\)[\s\S]*?as\s+\$\$([\s\S]*?)\$\$/i,
+)?.[1] ?? "";
+check(
+  statusBody.length > 0,
+  "public.push_service_status() body could not be read for the presence-only check",
+);
+check(
+  /table\s*\(\s*dispatch_secret_set\s+boolean\s*,\s*function_url_set\s+boolean\s*\)/i.test(
+    statusHeader,
+  ),
+  "public.push_service_status() must return only booleans",
+);
+check(
+  !/select\s+decrypted_secret\b/i.test(statusBody),
+  "public.push_service_status() must never select a secret value into its result",
+);
+check(
+  (statusBody.match(/vault\.decrypted_secrets/gi) ?? []).length > 0,
+  "public.push_service_status() does not read Vault, so it cannot report configuration",
+);
+
+// Dispatch must degrade to a recorded warning rather than aborting the write that
+// created the notification, and must reach pg_net for every distinct recipient.
+const dispatchBody = strip.match(
+  /create\s+or\s+replace\s+function\s+public\.dispatch_push_for_notifications\(\)[\s\S]*?as\s+\$\$([\s\S]*?)\$\$/i,
+)?.[1] ?? "";
+check(
+  dispatchBody.length > 0,
+  "public.dispatch_push_for_notifications() body could not be read",
+);
+check(
+  /exception\s+when\s+others\s+then/.test(dispatchBody),
+  "dispatch trigger does not guard its pg_net call, so a bad URL would abort the booking",
+);
+check(
+  /record_push_dispatch_failure/.test(dispatchBody),
+  "dispatch trigger does not record a failure, so a broken path is invisible",
+);
+// Delivery must be de-duplicated by the notification's own id, and that id must
+// reach the function. Grouping by recipient alone would drop distinct
+// notifications aimed at the same member; keying on the id makes a replayed
+// trigger statement skippable instead.
+check(
+  /select\s+id\s*,\s*user_id::text\s*,\s*title\s*,\s*body\s*,\s*url\s*\n\s*from\s+inserted/i.test(
+    dispatchBody,
+  ),
+  "dispatch trigger does not iterate the inserted rows by id, so duplicates cannot be recognised",
+);
+check(
+  /'notification_id'\s*,\s*v_target\.id/.test(dispatchBody),
+  "dispatch trigger does not pass notification_id, so the function cannot de-duplicate",
+);
+check(
+  !/distinct\s+on\s*\(\s*user_id\s*\)/i.test(dispatchBody),
+  "dispatch trigger groups by recipient alone, which drops distinct notifications",
+);
+check(
+  /create\s+table\s+if\s+not\s+exists\s+public\.push_deliveries/i.test(strip),
+  "public.push_deliveries is missing, so a replayed dispatch can notify twice",
+);
+check(
+  /notification_id\s+uuid\s+primary\s+key\s+references\s+public\.notifications/i.test(strip),
+  "push_deliveries.notification_id must be a primary key for the de-duplication to be exact",
+);
+
+// The notification helpers must never notify the member who caused the event.
+check(
+  /partner\.participant\s*<>\s*new\.driver_id/.test(strip),
+  "ride completion notifies the driver about their own action",
+);
+check(
+  /recipient\.participant\s*<>\s*new\.sender_id/.test(strip),
+  "message trigger notifies the sender about their own message",
 );
 
 if (failures.length > 0) {

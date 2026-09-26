@@ -137,6 +137,20 @@ self.addEventListener("fetch", (event) => {
  * Web Push
  * ------------------------------------------------------------------------- */
 
+/** ---------------------------------------------------------------------------
+ * A notification target is only ever an in-app path.
+ *
+ * Re-checked here as well as in the push handler: `notification.data` outlives
+ * the handler that wrote it, so a notification raised by an older version of
+ * this file - or by any other code holding a registration - must not be able to
+ * navigate a member off-site. `//host` and `/\host` are both rejected because the
+ * browser normalises the backslashes before resolving it.
+ * ------------------------------------------------------------------------ */
+const safeNotificationPath = (value) =>
+  typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")
+    ? value
+    : "/";
+
 self.addEventListener("push", (event) => {
   // A push with no payload is still worth surfacing so a member learns that
   // something happened while the app was closed.
@@ -145,15 +159,10 @@ self.addEventListener("push", (event) => {
     try {
       const parsed = event.data.json();
       if (parsed && typeof parsed.title === "string") {
-        // A same-origin path is trusted to stay in-app. `//host` is rejected too:
-        // it is a protocol-relative URL, so allowing it would let a crafted
-        // payload navigate a member off-site from what looks like our own window.
-        const isSafePath = (value) =>
-          typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
         payload = {
           title: parsed.title.slice(0, 80),
           body: typeof parsed.body === "string" ? parsed.body.slice(0, 240) : "",
-          url: isSafePath(parsed.url) ? parsed.url : "/",
+          url: safeNotificationPath(parsed.url),
           tag: typeof parsed.tag === "string" ? parsed.tag.slice(0, 64) : "ride-together",
         };
       }
@@ -178,16 +187,20 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = event.notification.data?.url ?? "/";
+  const target = safeNotificationPath(event.notification.data?.url);
+  // Scoped to our own origin before any focus, so a client that somehow ended up
+  // on another origin is never adopted.
+  const origin = new URL(self.location.href).origin;
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       // Focus an existing tab rather than stacking duplicates.
       for (const client of clients) {
-        if (client.url.includes(self.location.origin) && "focus" in client) {
-          void client.navigate?.(target);
-          return client.focus();
-        }
+        if (typeof client.focus !== "function") continue;
+        // Compared as a parsed origin rather than with `includes`, which would
+        // also match a foreign URL that merely mentions ours in its query string.
+        if (new URL(client.url).origin !== origin) continue;
+        return client.navigate(target).then(() => client.focus());
       }
       return self.clients.openWindow(target);
     }),

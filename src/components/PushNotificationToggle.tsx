@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Smartphone } from "lucide-react";
+import { AlertCircle, CheckCircle2, LoaderCircle, Smartphone } from "lucide-react";
 import {
   getPushState,
   isPushConfigured,
@@ -8,6 +8,11 @@ import {
   unsubscribeFromPush,
   type PushSupport,
 } from "../repositories/pushRepository";
+import {
+  getPushServiceStatus,
+  isPushDeliveryWired,
+  type PushServiceStatus,
+} from "../repositories/pushStatusRepository";
 
 interface PushNotificationToggleProps {
   /** Mirrored into the local preferences object so Settings stays the one source. */
@@ -23,14 +28,22 @@ interface PushNotificationToggleProps {
  * toggle is switched on. Turning it off removes both the service-worker
  * subscription and its `push_subscriptions` row, so a member who opted out
  * stops being a delivery target everywhere rather than only on this screen.
+ *
+ * What it deliberately does *not* do is claim push works. A subscription row
+ * proves the browser was willing, not that anything is listening, so the copy
+ * below is driven by both halves: this device's state and the server's. Until the
+ * server is wired, the honest sentence is that alerts are queued but not
+ * delivered - anything stronger would be a promise the deployment cannot keep.
  */
 export function PushNotificationToggle({ checked, onChange }: PushNotificationToggleProps) {
   const [state, setState] = useState<PushSupport>("unknown");
+  const [service, setService] = useState<PushServiceStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setState(await getPushState());
+    setService(await getPushServiceStatus());
   }, []);
 
   useEffect(() => {
@@ -40,6 +53,7 @@ export function PushNotificationToggle({ checked, onChange }: PushNotificationTo
 
   const supported = isPushSupported();
   const configured = isPushConfigured();
+  const delivered = isPushDeliveryWired(service);
 
   const handleChange = async (next: boolean) => {
     if (busy) return;
@@ -65,16 +79,24 @@ export function PushNotificationToggle({ checked, onChange }: PushNotificationTo
   // The browser is the source of truth, not the local preference: a member can
   // revoke permission in browser settings while this page is open.
   const active = state === "subscribed" ? true : state === "denied" ? false : checked;
+  const subscribed = state === "subscribed";
 
+  // Three distinct claims, so the screen never states more than it knows.
   let description = "Get a device alert for booking requests, confirmations and new messages.";
+  let note: "on" | "queued" | null = null;
+
   if (!supported) {
     description = "This browser does not support push notifications. In-app updates still work.";
   } else if (state === "denied") {
     description = "Blocked in your browser settings. Re-allow notifications for this site, then switch this on again.";
   } else if (!configured) {
-    description = "Not configured for this deployment yet. Add VITE_VAPID_PUBLIC_KEY to enable.";
-  } else if (state === "subscribed") {
+    description = "Push is not available in this deployment yet. In-app updates still work.";
+  } else if (subscribed && !delivered) {
+    description = "This device is subscribed, but push delivery is not switched on for this deployment yet.";
+    note = "queued";
+  } else if (subscribed) {
     description = "This device will receive ride and booking alerts even when the app is closed.";
+    note = "on";
   }
 
   const disabled = busy || !supported || !configured || state === "denied";
@@ -103,9 +125,16 @@ export function PushNotificationToggle({ checked, onChange }: PushNotificationTo
           <AlertCircle size={13} /> {error}
         </p>
       ) : null}
-      {!error && state === "subscribed" ? (
+      {!error && note === "on" ? (
         <p className="rt-setting-toggle-note">
           <CheckCircle2 size={13} /> Push is on for this device.
+        </p>
+      ) : null}
+      {!error && note === "queued" ? (
+        // Deliberately not a confirmation: the subscription is saved, but nothing
+        // is being sent, so this must not read as "enabled".
+        <p className="rt-setting-toggle-note rt-setting-toggle-note--error" role="status">
+          <LoaderCircle size={13} /> Subscribed on this device, but delivery is unavailable. Alerts will arrive once the server is set up.
         </p>
       ) : null}
     </div>

@@ -333,18 +333,46 @@ Deno.serve(async (request) => {
   const userId = str(raw.user_id, 64);
   if (!userId) return json({ error: "user_id is required." }, 400);
 
+  // Optional. The database sends the notification's own id, which lets a replayed
+  // trigger statement or a retried HTTP request be recognised and skipped instead
+  // of notifying a member a second time.
+  const notificationId = str(raw.notification_id, 64);
+
   const title = str(raw.title, 80) ?? "RideTogether";
   const message = str(raw.body, 240) ?? "";
   const path = str(raw.url, 200) ?? "/notifications";
   // A notification click must not be able to navigate a member to another site:
   // the payload is written by a trigger but the endpoint is remote input.
-  if (!path.startsWith("/") || path.startsWith("//")) {
+  if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/\\")) {
     return json({ error: "url must be a path inside the app." }, 400);
   }
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // Claim the notification before sending, not after: the fan-out below can take
+  // seconds, and two overlapping calls for the same id would both pass a check
+  // made at the end. The primary key on notification_id is what makes the second
+  // claim fail, so exactly one of them proceeds.
+  if (notificationId) {
+    const { error: claimError } = await admin
+      .from("push_deliveries")
+      .insert({ notification_id: notificationId, user_id: userId, delivered: 0, attempted: 0 });
+
+    if (claimError) {
+      // 23505 is the unique violation: this id has already been claimed, so this
+      // call is a duplicate of work already in flight or already done.
+      if (claimError.code === "23505") {
+        return json({ delivered: 0, attempted: 0, skipped: true, reason: "already dispatched" });
+      }
+      // Anything else is a real problem with the delivery log. Carrying on would
+      // mean losing the de-duplication guarantee silently, so it is reported and
+      // the send is refused rather than risking a duplicate.
+      console.error("push delivery log unavailable", claimError);
+      return json({ error: "Could not record the delivery attempt." }, 500);
+    }
+  }
 
   const { data: subscriptions, error } = await admin
     .from("push_subscriptions")
@@ -353,6 +381,12 @@ Deno.serve(async (request) => {
 
   if (error) return json({ error: "Could not read subscriptions." }, 500);
   if (!subscriptions || subscriptions.length === 0) {
+    if (notificationId) {
+      await admin
+        .from("push_deliveries")
+        .update({ attempted: 0, delivered: 0 })
+        .eq("notification_id", notificationId);
+    }
     return json({ delivered: 0, reason: "no subscriptions" });
   }
 
@@ -414,6 +448,22 @@ Deno.serve(async (request) => {
     ({ result }) => result.status === "fulfilled" && result.value < 300,
   ).length;
   const failed = settled.filter(({ result }) => result.status === "rejected").length;
+
+  // A claim that reached this point but delivered nothing is released, so a
+  // transient outage - a push service 5xx, a network blip between here and the
+  // endpoint - is retried by the next dispatch rather than being permanently
+  // suppressed by its own de-duplication row. A claim that did deliver is kept,
+  // because that is the case the de-duplication exists to protect.
+  if (notificationId) {
+    if (delivered > 0) {
+      await admin
+        .from("push_deliveries")
+        .update({ delivered, attempted: subscriptions.length })
+        .eq("notification_id", notificationId);
+    } else {
+      await admin.from("push_deliveries").delete().eq("notification_id", notificationId);
+    }
+  }
 
   return json({
     delivered,
