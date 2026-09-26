@@ -131,8 +131,19 @@ const chatStyles = `
   .rt-chat-page { padding: 18px 12px 24px; }
   .rt-chat-details { width: 100%; }
   .rt-chat-panel { border-radius: 18px; }
-  .rt-chat-route { align-items: flex-start; padding: 14px; }
-  .rt-chat-meta { max-width: 115px; justify-content: flex-end; }
+  /*
+   * The ride title is the one line here that is allowed to be long, and the row
+   * layout left it only what the meta chips did not claim. The chips are
+   * white-space:nowrap inside a max-width:115px box, so a full departure label is
+   * wider than the box holding it: it overflowed to the right, ate into the title
+   * column, and the title - already nowrap with an ellipsis - was cut off
+   * mid-word. Stacking the two and letting the title wrap removes both clips
+   * without touching the desktop row, and stretch keeps the title inside the
+   * panel's padding instead of letting it size to its own content.
+   */
+  .rt-chat-route { flex-direction: column; align-items: stretch; gap: 9px; padding: 14px; }
+  .rt-chat-route h2 { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  .rt-chat-meta { max-width: none; justify-content: flex-start; }
   .rt-chat-meta span:nth-child(2) { display: none; }
   .rt-chat-conversation { padding: 16px 12px; }
   .rt-chat-group-content { max-width: 84%; }
