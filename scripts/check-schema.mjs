@@ -196,6 +196,31 @@ check(
   /record_push_dispatch_failure/.test(dispatchBody),
   "dispatch trigger does not record a failure, so a broken path is invisible",
 );
+// The check above is satisfied by the per-target `net.http_post` guard on its own,
+// which is exactly how an unguarded `vault.decrypted_secrets` read survived next
+// to it: the two Vault selects sat at the top of the function body, above every
+// handler, so a project without the vault schema or pg_net raised 42P01/3F000
+// inside the rider's own INSERT into public.bookings, the transaction rolled
+// back, and the app reported "The app is not in sync with the database".
+//
+// A position-based check cannot express this - a correctly guarded read also
+// precedes the handler that catches it - so the property asserted is nesting:
+// every push reference must sit inside a block opened by a second `begin`, not
+// directly in the function body. Then the handler below turns that failure into
+// a recorded warning.
+const firstPushRef = dispatchBody.search(/from\s+vault\.|perform\s+net\.http_post/i);
+const beginsBeforeFirstPushRef =
+  firstPushRef === -1 ? 0 : (dispatchBody.slice(0, firstPushRef).match(/\bbegin\b/gi) || []).length;
+check(
+  beginsBeforeFirstPushRef >= 2,
+  "dispatch trigger reads a Vault secret or calls pg_net straight from the function body, outside any exception handler, so a project without vault/pg_net cannot create a notification (and therefore cannot create a booking)",
+);
+check(
+  /exception\s*\n?\s*when\s+undefined_function\s+or\s+undefined_table\s+or\s+invalid_schema_name\s+then/i.test(
+    dispatchBody,
+  ),
+  "dispatch trigger has no handler for a missing vault/pg_net object, so a project without the push extension cannot insert a notification - and therefore cannot create a booking",
+);
 // Delivery must be de-duplicated by the notification's own id, and that id must
 // reach the function. Grouping by recipient alone would drop distinct
 // notifications aimed at the same member; keying on the id makes a replayed

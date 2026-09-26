@@ -1118,89 +1118,109 @@ declare
   v_url text;
   v_target record;
 begin
-  select decrypted_secret into v_secret
-    from vault.decrypted_secrets where name = 'push_dispatch_secret' limit 1;
+  -- The whole body is guarded, and that is the point of the function.
+  --
+  -- This trigger runs INSIDE the transaction that wrote the notification, which
+  -- for a seat request is the rider's own INSERT into public.bookings. A push
+  -- integration is not allowed to be able to fail that write, and the previous
+  -- version read `vault.decrypted_secrets` before the only exception handler, so
+  -- on any project where the vault schema was not resolvable the read raised
+  -- `42P01 relation "vault.decrypted_secrets" does not exist`, the booking
+  -- transaction rolled back, and the rider was told "The app is not in sync with
+  -- the database" - a message that points at the app rather than at the push
+  -- feature that actually broke.
+  --
+  -- `3F000` is the same class of failure (a missing `vault` schema) and is called
+  -- out separately so the recorded reason says which one it was.
+  begin
+    select decrypted_secret into v_secret
+      from vault.decrypted_secrets where name = 'push_dispatch_secret' limit 1;
 
-  if v_secret is null then
-    -- Fail quietly: the notification row is already stored and still shows up
-    -- in the app, so a missing secret must not break the write that created it.
-    -- Recorded rather than merely warned, because a deployment that is missing
-    -- this secret looks healthy from the app's point of view forever otherwise.
-    perform public.record_push_dispatch_failure(
-      null, 'push_dispatch_secret is not set in Vault; Web Push delivery skipped');
-    return null;
-  end if;
-
-  select decrypted_secret into v_url
-    from vault.decrypted_secrets where name = 'push_function_url' limit 1;
-
-  if v_url is null or btrim(v_url) = '' then
-    perform public.record_push_dispatch_failure(
-      null, 'push_function_url is not set in Vault; Web Push delivery skipped');
-    return null;
-  end if;
-
-  -- Grouped by the notification id, which is exact: one dispatch per row the
-  -- triggers actually created. The Edge Function records what it has delivered
-  -- and refuses to send the same id twice, so a replayed trigger statement or a
-  -- retried HTTP request cannot produce a second notification on a member's
-  -- phone. Grouping by recipient instead - as an earlier version did - also
-  -- collapsed genuinely different notifications addressed to the same member
-  -- inside one statement, so a member could be sent a booking request and
-  -- silently never hear about the cancellation that followed it in the same
-  -- transaction.
-  for v_target in
-    select id, user_id::text, title, body, url
-      from inserted
-     order by user_id, created_at
-  loop
-    -- net.http_post queues the request and returns immediately, after the
-    -- surrounding transaction commits, so a rolled-back notification is never
-    -- delivered. Failures are surfaced in the Edge Function logs rather than
-    -- here, because raising would roll back the notification row itself.
-    --
-    -- The whole loop is wrapped because this trigger runs inside the transaction
-    -- that created the notification: for a booking that is the rider's INSERT
-    -- into public.bookings. A malformed push_function_url, or any other error
-    -- raised by pg_net, must degrade to a warning rather than abort the write
-    -- and lose the seat request.
-    begin
-      perform net.http_post(
-        url := v_url,
-        headers := jsonb_build_object(
-          'Content-Type', 'application/json',
-          'Authorization', 'Bearer ' || v_secret
-        ),
-        body := jsonb_build_object(
-          'notification_id', v_target.id,
-          'user_id', v_target.user_id,
-          'title', coalesce(v_target.title, 'RideTogether'),
-          'body', coalesce(v_target.body, ''),
-          'url', coalesce(v_target.url, '/notifications')
-        ),
-        timeout_milliseconds := 5000
-      );
-    exception when others then
-      raise warning 'Web Push dispatch failed for notification to %: %',
-        v_target.user_id, sqlerrm;
+    if v_secret is null then
+      -- Fail quietly: the notification row is already stored and still shows up
+      -- in the app, so a missing secret must not break the write that created it.
+      -- Recorded rather than merely warned, because a deployment that is missing
+      -- this secret looks healthy from the app's point of view forever otherwise.
       perform public.record_push_dispatch_failure(
-        v_target.user_id::uuid, sqlerrm);
-    end;
-  end loop;
+        null, 'push_dispatch_secret is not set in Vault; Web Push delivery skipped');
+      return null;
+    end if;
 
-  -- One row per dispatch statement is enough for a support question; the history
-  -- of a busy deployment is not interesting and an unbounded table in the same
-  -- transaction path is a liability.
-  delete from public.push_dispatch_failures
-   where created_at < now() - interval '7 days';
+    select decrypted_secret into v_url
+      from vault.decrypted_secrets where name = 'push_function_url' limit 1;
 
-  -- The delivery log only exists to be de-duplicated against, so it is trimmed
-  -- on the same path. Long enough that a replayed trigger - which happens within
-  -- a transaction retry, not days later - still finds its row.
-  delete from public.push_deliveries
-   where created_at < now() - interval '30 days';
+    if v_url is null or btrim(v_url) = '' then
+      perform public.record_push_dispatch_failure(
+        null, 'push_function_url is not set in Vault; Web Push delivery skipped');
+      return null;
+    end if;
 
-  return null;
+    -- Grouped by the notification id, which is exact: one dispatch per row the
+    -- triggers actually created. The Edge Function records what it has delivered
+    -- and refuses to send the same id twice, so a replayed trigger statement or a
+    -- retried HTTP request cannot produce a second notification on a member's
+    -- phone. Grouping by recipient instead - as an earlier version did - also
+    -- collapsed genuinely different notifications addressed to the same member
+    -- inside one statement, so a member could be sent a booking request and
+    -- silently never hear about the cancellation that followed it in the same
+    -- transaction.
+    for v_target in
+      select id, user_id::text, title, body, url
+        from inserted
+       order by user_id, created_at
+    loop
+      -- net.http_post queues the request and returns immediately, after the
+      -- surrounding transaction commits, so a rolled-back notification is never
+      -- delivered. Guarded per target as well as by the outer block, so one bad
+      -- endpoint cannot cost the member their notification to the other devices.
+      begin
+        perform net.http_post(
+          url := v_url,
+          headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'Authorization', 'Bearer ' || v_secret
+          ),
+          body := jsonb_build_object(
+            'notification_id', v_target.id,
+            'user_id', v_target.user_id,
+            'title', coalesce(v_target.title, 'RideTogether'),
+            'body', coalesce(v_target.body, ''),
+            'url', coalesce(v_target.url, '/notifications')
+          ),
+          timeout_milliseconds := 5000
+        );
+      exception when others then
+        raise warning 'Web Push dispatch failed for notification to %: %',
+          v_target.user_id, sqlerrm;
+        perform public.record_push_dispatch_failure(
+          v_target.user_id::uuid, sqlerrm);
+      end;
+    end loop;
+
+    -- One row per dispatch statement is enough for a support question; the history
+    -- of a busy deployment is not interesting and an unbounded table in the same
+    -- transaction path is a liability.
+    delete from public.push_dispatch_failures
+     where created_at < now() - interval '7 days';
+
+    -- The delivery log only exists to be de-duplicated against, so it is trimmed
+    -- on the same path. Long enough that a replayed trigger - which happens within
+    -- a transaction retry, not days later - still finds its row.
+    delete from public.push_deliveries
+     where created_at < now() - interval '30 days';
+
+    return null;
+  exception
+    when undefined_function or undefined_table or invalid_schema_name then
+      -- The push feature is not installed on this project: no vault schema, no
+      -- pg_net, or neither. That is a deployment gap, and it must not take the
+      -- rider's seat request down with it. The notification row is already
+      -- written by the time we get here, and the warning names the actual cause
+      -- instead of letting a raw 42P01 reach a member.
+      raise warning 'Web Push is not configured on this database (%); delivery skipped', sqlerrm;
+      perform public.record_push_dispatch_failure(
+        null, 'push integration unavailable: ' || left(sqlerrm, 180));
+  end;
 end;
 $$;
 

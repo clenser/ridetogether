@@ -17,18 +17,70 @@ export type DataErrorAction =
   | "cancel"
   | "complete";
 
+interface ErrorShape {
+  code?: unknown;
+  message?: unknown;
+  status?: unknown;
+  details?: unknown;
+  hint?: unknown;
+}
+
+/** The same parts, normalised to strings so they are always printable. */
+type NormalisedErrorShape = {
+  code: string;
+  message: string;
+  status: string;
+  details: string;
+  hint: string;
+};
+
+const readError = (error: unknown): NormalisedErrorShape => {
+  const candidate = (typeof error === "object" && error !== null ? error : {}) as ErrorShape;
+  return {
+    code: typeof candidate.code === "string" ? candidate.code : "",
+    message: typeof candidate.message === "string" ? candidate.message : "",
+    status: candidate.status === undefined || candidate.status === null ? "" : String(candidate.status),
+    details: typeof candidate.details === "string" ? candidate.details : "",
+    hint: typeof candidate.hint === "string" ? candidate.hint : "",
+  };
+};
+
+/**
+ * The parts of a Supabase/PostgREST failure worth keeping once it has been turned
+ * into a friendly message. Retained on every `DataError` so a bug report can be
+ * answered from a log line without re-running the request, and so the mapping
+ * below is inspectable from a test rather than from a browser.
+ */
+export interface DataErrorDiagnostics {
+  /** PostgREST (`PGRST205`) or PostgreSQL SQLSTATE (`42P01`) code, if any. */
+  code: string;
+  message: string;
+  details: string;
+  hint: string;
+  status: string;
+  /** Which operation was being attempted, e.g. `book`. */
+  action: DataErrorAction;
+}
+
 export class DataError extends Error {
   readonly friendlyMessage: string;
   /** Stable machine-readable reason for UI branching (e.g. duplicate plate). */
   readonly reason: DataErrorReason;
   readonly cause?: unknown;
+  readonly diagnostics: DataErrorDiagnostics;
 
-  constructor(friendlyMessage: string, reason: DataErrorReason = "unknown", cause?: unknown) {
+  constructor(
+    friendlyMessage: string,
+    reason: DataErrorReason = "unknown",
+    cause?: unknown,
+    action: DataErrorAction = "load",
+  ) {
     super(friendlyMessage);
     this.name = "DataError";
     this.friendlyMessage = friendlyMessage;
     this.reason = reason;
     this.cause = cause;
+    this.diagnostics = { ...readError(cause), action };
   }
 }
 
@@ -43,26 +95,8 @@ export type DataErrorReason =
   | "cancelled-ride"
   | "empty-result"
   | "schema"
+  | "server-side"
   | "unknown";
-
-interface ErrorShape {
-  code?: unknown;
-  message?: unknown;
-  status?: unknown;
-  details?: unknown;
-  hint?: unknown;
-}
-
-const readError = (error: unknown): Required<ErrorShape> => {
-  const candidate = (typeof error === "object" && error !== null ? error : {}) as ErrorShape;
-  return {
-    code: typeof candidate.code === "string" ? candidate.code : "",
-    message: typeof candidate.message === "string" ? candidate.message : "",
-    status: candidate.status === undefined || candidate.status === null ? "" : String(candidate.status),
-    details: typeof candidate.details === "string" ? candidate.details : "",
-    hint: typeof candidate.hint === "string" ? candidate.hint : "",
-  };
-};
 
 const GENERIC: Record<DataErrorAction, string> = {
   load: "We could not load this right now. Please try again.",
@@ -85,10 +119,33 @@ const NOT_FOUND_PATTERN = /not found|does not exist|foreign key/i;
  */
 const EMPTY_RESULT_PATTERN = /pgrst116|json object requested, multiple \(or no\) rows returned/i;
 /**
- * A missing table or column is a deployment problem, not a missing record, so it
- * must not be reported as "we could not find that".
+ * PostgREST could not resolve a table or column that *this app* asked for. The
+ * app is genuinely out of step with the database, so this is the only case that
+ * deserves the "not in sync" wording.
  */
-const SCHEMA_PATTERN = /relation .* does not exist|column .* does not exist|schema cache|pgrst205|pgrst204/i;
+const SCHEMA_CACHE_PATTERN = /schema cache|pgrst205|pgrst204/i;
+/**
+ * A bare `relation ... does not exist` / `column ... does not exist` is NOT the
+ * same thing. The request resolved fine; something on the server raised the
+ * error, and the usual culprit is a trigger or function referencing an object the
+ * project does not have. Reporting that as "the app is not in sync" is what sent
+ * a failed seat request looking for a stale frontend when the real fault was an
+ * unguarded `vault.decrypted_secrets` read inside a notification trigger aborting
+ * the booking transaction.
+ *
+ * Matched on SQLSTATE as well as text: `3F000 invalid_schema_name` - a missing
+ * `vault` schema, the other way that same read can fail - shares none of the
+ * words "relation" or "column", so on text alone it fell through to
+ * `NOT_FOUND_PATTERN` and told a rider their ride "may have been removed".
+ */
+const SERVER_MISSING_OBJECT_CODES: ReadonlySet<string> = new Set([
+  "42P01", // undefined_table
+  "42703", // undefined_column
+  "3F000", // invalid_schema_name
+  "3F001", // invalid_catalog_name
+]);
+const SERVER_MISSING_OBJECT_PATTERN =
+  /relation .* does not exist|column .* does not exist|schema ".*" does not exist/i;
 const DUPLICATE_PATTERN = /duplicate key|already exists|unique constraint/i;
 const SEATS_PATTERN = /not enough seats/i;
 const SELF_BOOKING_PATTERN = /cannot book a seat on their own ride/i;
@@ -111,28 +168,36 @@ const WRITE_ACTIONS: ReadonlySet<DataErrorAction> = new Set<DataErrorAction>([
  */
 export const toDataError = (error: unknown, action: DataErrorAction): DataError => {
   if (error instanceof DataError) return error;
-  if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
-    console.warn(`[supabase:${action}] unmapped failure`, readError(error));
-  }
 
   const { code, message, status, details, hint } = readError(error);
   const haystack = `${message} ${details} ${hint}`;
 
+  // Development-only, and deliberately the first thing that happens: the exact
+  // Postgres error is the only way to tell a deployment gap from a genuine
+  // constraint, so it is recorded before any of it is flattened into a
+  // user-facing sentence. Never enabled in a production build, and it holds no
+  // credentials - the Supabase error body never carries the session token.
+  if (import.meta.env?.DEV) {
+    console.warn(`[supabase:${action}] failure`, { code, message, details, hint, status });
+  }
+
+  const fail = (friendlyMessage: string, reason: DataErrorReason): DataError =>
+    new DataError(friendlyMessage, reason, error, action);
+
   if (SEATS_PATTERN.test(haystack)) {
-    return new DataError(
+    return fail(
       "There are not enough seats left on that ride to confirm this request.",
       "insufficient-seats",
-      error,
     );
   }
   if (SELF_BOOKING_PATTERN.test(haystack)) {
-    return new DataError("You cannot book a seat on your own ride.", "self-booking", error);
+    return fail("You cannot book a seat on your own ride.", "self-booking");
   }
   if (CANCELLED_PATTERN.test(haystack)) {
-    return new DataError("That ride is no longer accepting bookings.", "cancelled-ride", error);
+    return fail("That ride is no longer accepting bookings.", "cancelled-ride");
   }
   if (code === "23505" || DUPLICATE_PATTERN.test(haystack)) {
-    return new DataError("That already exists. Please use a different value.", "duplicate", error);
+    return fail("That already exists. Please use a different value.", "duplicate");
   }
   if (
     code === "23514"
@@ -143,39 +208,46 @@ export const toDataError = (error: unknown, action: DataErrorAction): DataError 
     // `GENERIC[action]`, not a hard-coded `update`: telling someone adding their
     // first vehicle "we could not update that" hides both the operation they
     // attempted and the fact that a plain retry will not help.
-    return new DataError(GENERIC[action], "invalid", error);
+    return fail(GENERIC[action], "invalid");
   }
   if (code === "42501" || status === "403" || FORBIDDEN_PATTERN.test(haystack)) {
-    return new DataError("You do not have permission to do that.", "forbidden", error);
+    return fail("You do not have permission to do that.", "forbidden");
   }
-  if (code === "PGRST205" || code === "PGRST204" || SCHEMA_PATTERN.test(haystack)) {
-    return new DataError(
-      "The app is not in sync with the database. Please try again in a moment.",
-      "schema",
-      error,
-    );
+  if (code === "PGRST205" || code === "PGRST204" || SCHEMA_CACHE_PATTERN.test(haystack)) {
+    return fail("The app is not in sync with the database. Please try again in a moment.", "schema");
+  }
+  if (SERVER_MISSING_OBJECT_CODES.has(code) || SERVER_MISSING_OBJECT_PATTERN.test(haystack)) {
+    // The write was rolled back by the server, so say so: a retry cannot succeed
+    // and the member should not go on to re-enter the same details.
+    if (WRITE_ACTIONS.has(action)) {
+      return fail(
+        "We could not save that because of a problem on our side, so nothing was changed. "
+        + "Please try again in a moment.",
+        "server-side",
+      );
+    }
+    return fail("We could not load this right now. Please try again.", "server-side");
   }
   if (code === "PGRST116" || EMPTY_RESULT_PATTERN.test(haystack)) {
     // On a read this genuinely means the row is not there. On a write it means
     // the statement completed without producing a readable row, which says
     // nothing about whether the row exists - so never claim it was removed.
     if (!WRITE_ACTIONS.has(action)) {
-      return new DataError("We could not find that. It may have been removed.", "not-found", error);
+      return fail("We could not find that. It may have been removed.", "not-found");
     }
-    return new DataError(
+    return fail(
       "The server accepted the request but did not return the saved record. "
       + "Please refresh to see the current state before trying again.",
       "empty-result",
-      error,
     );
   }
   if (status === "404" || NOT_FOUND_PATTERN.test(haystack)) {
-    return new DataError("We could not find that. It may have been removed.", "not-found", error);
+    return fail("We could not find that. It may have been removed.", "not-found");
   }
   if (code === "failed_to_fetch" || NET_PATTERN.test(haystack)) {
-    return new DataError("We could not reach the server. Check your connection and try again.", "offline", error);
+    return fail("We could not reach the server. Check your connection and try again.", "offline");
   }
-  return new DataError(GENERIC[action], "unknown", error);
+  return fail(GENERIC[action], "unknown");
 };
 
 /** Unwraps a `DataError` message for direct use in a toast or inline error. */

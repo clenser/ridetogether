@@ -451,17 +451,23 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const mutateCloud = useCallback(
     async <T,>(operation: () => Promise<T>, action: Parameters<typeof describeDataFailure>[1]): Promise<T> => {
       if (!activeUserIdRef.current) throw new Error("You need to be signed in to do that.");
+      let result: T;
       try {
-        const result = await operation();
-        await applySnapshot();
-        return result;
+        result = await operation();
       } catch (error) {
-        // Re-read anyway: a partially applied change (for example a trigger that
-        // restored seats before rejecting a second write) must not be left
-        // stale on screen.
+        // A partially applied change (for example a trigger that restored seats
+        // before rejecting a second write) must not be left stale on screen.
         await applySnapshot().catch(() => undefined);
         throw new Error(describeDataFailure(error, action));
       }
+      // Deliberately outside the `try` above. The write has already committed at
+      // this point, so a failure while re-reading it must never be reported as a
+      // failure of the write - that told a rider their seat request had not been
+      // sent when it had, and invited a duplicate request against a ride that now
+      // has one pending booking. `applySnapshot` degrades to a banner rather than
+      // throwing, but the write's outcome has to be returned on its own terms.
+      await applySnapshot().catch(() => undefined);
+      return result;
     },
     [applySnapshot],
   );
