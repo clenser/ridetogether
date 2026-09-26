@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Bell,
+  Check,
   CheckCircle2,
   ChevronDown,
   Download,
@@ -8,6 +9,7 @@ import {
   HelpCircle,
   Info,
   Laptop,
+  LoaderCircle,
   LockKeyhole,
   Mail,
   MessageSquareText,
@@ -17,12 +19,14 @@ import {
   RotateCcw,
   ShieldCheck,
   Sun,
+  Wallet,
 } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { PushNotificationToggle } from "../components/PushNotificationToggle";
 import { useApp } from "../context/AppContext";
 import { hasLegacyLocalData } from "../services/database";
+import { normalizeUpiId, PAYMENT_DISCLAIMER } from "../services/payment";
 import { isSupabaseConfigured } from "../services/supabase";
 import { readAppearance, saveAppearance, type Appearance } from "../services/theme";
 import {
@@ -169,6 +173,24 @@ const settingsStyles = `
   line-height: 1.4;
 }
 .rt-setting-toggle-note--error { color: #bd3434; }
+/* The four push facts (supported / permission / this device / delivery). Two
+   columns on a phone, four on a desktop card: each fact is read from the browser
+   or the database so a member can tell a working setup from a broken one. */
+.rt-push-status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: -2px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+.rt-push-status li { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rt-push-status span { color: #8b968f; font-size: .66rem; letter-spacing: .04em; text-transform: uppercase; }
+.rt-push-status strong { color: #3a4a41; font-size: .74rem; font-weight: 700; }
+.rt-push-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.rt-push-actions .rt-settings-secondary { display: inline-flex; align-items: center; gap: 7px; }
+[data-theme="dark"] .rt-push-status span { color: #8d9b92; }
+[data-theme="dark"] .rt-push-status strong { color: #e6f0e9; }
 .rt-install-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; flex-wrap: wrap; }
 .rt-install-copy { min-width: 0; }
 .rt-install-copy strong { display: block; color: #304238; font-size: .83rem; }
@@ -286,7 +308,15 @@ const settingsStyles = `
 [data-theme="dark"] .rt-settings-card-head, [data-theme="dark"] .rt-setting-toggle, [data-theme="dark"] .rt-faq { border-color: #2b3a30; }
 [data-theme="dark"] .rt-settings-card-head p, [data-theme="dark"] .rt-setting-toggle-copy span, [data-theme="dark"] .rt-faq-answer, [data-theme="dark"] .rt-help-step span, [data-theme="dark"] .rt-about-copy { color: #a6b5ac; }
 [data-theme="dark"] .rt-setting-toggle-copy strong, [data-theme="dark"] .rt-faq summary { color: #eef7f1; }
-[data-theme="dark"] .rt-setting-toggle-icon, [data-theme="dark"] .rt-help-step, [data-theme="dark"] .rt-about-item, [data-theme="dark"] .rt-settings-note { background: #1c2820; }
+[data-theme="dark"] .rt-setting-toggle-icon, [data-theme="dark"] .rt-help-step, [data-theme="dark"] .rt-about-item, [data-theme="dark"] .rt-settings-note, [data-theme="dark"] .rt-settings-card-icon { background: #1c2820; }
+/* The icon rules above hard-code the light-theme green, but the containers they
+   sit on are re-coloured for dark mode. Without this the nav and note icons stay
+   #159447 on a #17211a card, which lands near 3.9:1 and reads as a dim smudge
+   next to the #bdc9c1 label beside it. On mobile that nav is a horizontal strip
+   of these icons, so it is the most visible place the shortfall shows up. */
+[data-theme="dark"] .rt-settings-nav a svg,
+[data-theme="dark"] .rt-settings-note svg,
+[data-theme="dark"] .rt-settings-card-icon { color: #8be0a6; }
 [data-theme="dark"] .rt-appearance-option, [data-theme="dark"] .rt-settings-secondary { color: #eef7f1; background: #17211a; border-color: #34463a; }
 [data-theme="dark"] .rt-appearance-preview { background: #29372d; }
 [data-theme="dark"] .rt-appearance-side { background: #17211a; border-color: #405046; }
@@ -296,7 +326,18 @@ const settingsStyles = `
 [data-theme="dark"] .rt-reset-copy span { color: #d7a7a7; }
 @media (max-width: 820px) {
   .rt-settings-layout { grid-template-columns: 1fr; }
-  .rt-settings-nav { position: static; display: flex; align-items: center; gap: 4px; overflow-x: auto; }
+  /* Becomes a horizontal strip of clickable icon+label links. Momentum scrolling
+     keeps it usable with a thumb, and the side insets stop the first and last
+     links sitting under a landscape notch or gesture bar. */
+  .rt-settings-nav {
+    position: static;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+    -webkit-overflow-scrolling: touch;
+  }
   .rt-settings-nav-title { display: none; }
   .rt-settings-nav a { flex: 0 0 auto; }
 }
@@ -308,6 +349,38 @@ const settingsStyles = `
   .rt-reset-row { align-items: stretch; flex-direction: column; }
   .rt-reset-button { width: 100%; }
   .rt-reset-modal-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* The input takes the full row on a phone so it is not squeezed to an
+     unusable width by two buttons, which then wrap onto their own row. */
+  .rt-settings-upi-row { grid-template-columns: 1fr; }
+  .rt-settings-upi-row .rt-settings-primary,
+  .rt-settings-upi-row .rt-settings-secondary { width: 100%; }
+}
+.rt-settings-upi { display: grid; gap: 7px; margin-top: 4px; }
+.rt-settings-upi label { color: #33443a; font-size: .8rem; font-weight: 720; }
+.rt-settings-upi-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+.rt-settings-upi-row input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid #dbe6de;
+  border-radius: 11px;
+  background: #fff;
+  color: #17231c;
+  font: inherit;
+  font-size: .86rem;
+}
+.rt-settings-upi-row input::placeholder { color: #9aa79f; }
+.rt-settings-upi-row input:focus { border-color: #159447; outline: none; box-shadow: 0 0 0 3px rgba(21, 148, 71, .18); }
+.rt-settings-upi-row input[aria-invalid="true"] { border-color: #c93f3f; }
+.rt-settings-upi-hint { color: #748178; font-size: .74rem; line-height: 1.45; }
+.rt-settings-upi-hint:empty { display: none; }
+[data-theme="dark"] .rt-settings-upi label { color: #eef7f1; }
+[data-theme="dark"] .rt-settings-upi-row input { background: #131d17; border-color: #33453a; color: #eef7f1; }
+[data-theme="dark"] .rt-settings-upi-row input::placeholder { color: #6f7e75; }
+[data-theme="dark"] .rt-settings-upi-hint { color: #a6b5ac; }
+.rt-settings-spin { animation: rt-global-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .rt-settings-spin { animation-duration: 2.4s; }
 }
 `;
 
@@ -333,6 +406,25 @@ function readPreferences(): Preferences {
   }
 }
 
+/**
+ * Turns a repository failure into something a member can act on.
+ *
+ * The context already rewrites Supabase errors into plain sentences, so this
+ * only needs a fallback for the case where something below that layer threw.
+ * The raw message is not shown: it can contain column names and constraint
+ * details, which help nobody reading a settings page.
+ */
+const describeUpiError = (error: unknown, action: "load" | "save" | "clear") => {
+  if (error instanceof Error && error.message && !/select|insert|update|policy|relation|column/i.test(error.message)) {
+    return error.message;
+  }
+  return action === "load"
+    ? "We could not load your saved UPI ID. You can still save a new one below."
+    : action === "save"
+      ? "We could not save your UPI ID. Check your connection and try again."
+      : "We could not remove your UPI ID. Check your connection and try again.";
+};
+
 function SettingToggle({ id, icon, title, description, checked, onChange }: ToggleProps) {
   return (
     <label className="rt-setting-toggle" htmlFor={id}>
@@ -347,7 +439,11 @@ function SettingToggle({ id, icon, title, description, checked, onChange }: Togg
 }
 
 export function SettingsPage() {
-  const { clearLocalCache, activeUser } = useApp();
+  const { clearLocalCache, activeUser, activeUserId, readMyUpiId, saveUpiId, clearUpiId } = useApp();
+  const [upiDraft, setUpiDraft] = useState("");
+  const [upiStored, setUpiStored] = useState<string | undefined>(undefined);
+  const [upiSaving, setUpiSaving] = useState(false);
+  const [upiMessage, setUpiMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [preferences, setPreferences] = useState<Preferences>(readPreferences);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -425,6 +521,72 @@ export function SettingsPage() {
     setResetMessage(null);
   };
 
+  /*
+   * The UPI field keeps its own state rather than folding into `preferences`,
+   * because that object is mirrored into localStorage as "settings on this
+   * device" - it is not where a payment handle belongs, and it is not
+   * something that should survive on a shared machine.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await readMyUpiId();
+        if (cancelled) return;
+        setUpiStored(stored);
+        setUpiDraft(stored ?? "");
+      } catch (error) {
+        // A failure here must not block the rest of the page. The field simply
+        // starts empty, and saving will report the real failure.
+        if (!cancelled) setUpiMessage({ type: "error", text: describeUpiError(error, "load") });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeUserId, readMyUpiId]);
+
+  const handleUpiSave = async () => {
+    if (upiSaving) return;
+    const { upiId, error } = normalizeUpiId(upiDraft);
+    if (error) {
+      setUpiMessage({ type: "error", text: error });
+      return;
+    }
+    if (!upiId) {
+      setUpiMessage({ type: "error", text: "Enter a UPI ID, or use Clear to remove the saved one." });
+      return;
+    }
+    setUpiSaving(true);
+    setUpiMessage(null);
+    try {
+      await saveUpiId(upiId);
+      setUpiDraft(upiId);
+      setUpiStored(upiId);
+      setUpiMessage({ type: "success", text: "UPI ID saved to your private payment profile." });
+    } catch (caught) {
+      setUpiMessage({ type: "error", text: describeUpiError(caught, "save") });
+    } finally {
+      setUpiSaving(false);
+    }
+  };
+
+  const handleUpiClear = async () => {
+    if (upiSaving) return;
+    setUpiSaving(true);
+    setUpiMessage(null);
+    try {
+      await clearUpiId();
+      setUpiDraft("");
+      setUpiStored(undefined);
+      setUpiMessage({ type: "success", text: "UPI ID removed." });
+    } catch (caught) {
+      setUpiMessage({ type: "error", text: describeUpiError(caught, "clear") });
+    } finally {
+      setUpiSaving(false);
+    }
+  };
+
   const setAppearance = (appearance: Appearance) => {
     saveAppearance(appearance);
     setPreferences((current) => ({ ...current, appearance }));
@@ -467,6 +629,7 @@ export function SettingsPage() {
             <a href="#rt-notifications"><Bell size={15} /> Notifications</a>
             <a href="#rt-appearance"><Palette size={15} /> Appearance</a>
             <a href="#rt-privacy"><LockKeyhole size={15} /> Privacy</a>
+            <a href="#rt-payments"><Wallet size={15} /> Payments</a>
             <a href="#rt-app"><Download size={15} /> Install</a>
             <a href="#rt-help"><HelpCircle size={15} /> Help</a>
             <a href="#rt-about"><Info size={15} /> About</a>
@@ -531,6 +694,59 @@ export function SettingsPage() {
               <div className="rt-settings-card-body">
                 <SettingToggle id="rt-show-profile" icon={<Laptop size={17} />} title="Show profile to co-riders" description="Allow people in your rides to see your basic profile and contact details." checked={preferences.privacy.showProfile} onChange={(value) => updatePrivacy("showProfile", value)} />
                 <SettingToggle id="rt-share-trip-details" icon={<ExternalLink size={17} />} title="Share trip details" description="Save your preference to share pickup, destination, and timing with confirmed co-riders." checked={preferences.privacy.shareTripDetails} onChange={(value) => updatePrivacy("shareTripDetails", value)} />
+              </div>
+            </section>
+
+            <section className="rt-settings-card" id="rt-payments">
+              <div className="rt-settings-card-head">
+                <span className="rt-settings-card-icon"><Wallet size={20} /></span>
+                <div><h2>Payments</h2><p>Save the UPI handle a driver would send contributions to.</p></div>
+              </div>
+              <div className="rt-settings-card-body">
+                <p className="rt-settings-note"><Info size={15} /> {PAYMENT_DISCLAIMER}</p>
+                <p className="rt-settings-note"><LockKeyhole size={15} /> Optional, and private to you. It is stored in your own payment profile and is never shown on your public profile or to anyone you share a ride with.</p>
+                <form
+                  className="rt-settings-upi"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleUpiSave();
+                  }}
+                >
+                  <label htmlFor="rt-upi-id">UPI ID</label>
+                  <div className="rt-settings-upi-row">
+                    <input
+                      id="rt-upi-id"
+                      type="text"
+                      inputMode="text"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="name@bank"
+                      value={upiDraft}
+                      onChange={(event) => {
+                        setUpiDraft(event.target.value);
+                        setUpiMessage(null);
+                      }}
+                      aria-describedby="rt-upi-hint"
+                      aria-invalid={upiMessage?.type === "error"}
+                    />
+                    <button className="rt-settings-primary" type="submit" disabled={upiSaving}>
+                      {upiSaving ? <LoaderCircle className="rt-settings-spin" size={16} /> : <Check size={16} />}
+                      Save
+                    </button>
+                    {upiDraft.trim() ? (
+                      <button className="rt-settings-secondary" type="button" disabled={upiSaving} onClick={() => void handleUpiClear()}>
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  <span id="rt-upi-hint" className="rt-settings-upi-hint">
+                    {upiMessage
+                      ? upiMessage.text
+                      : upiStored
+                        ? `Currently saved as ${upiStored}. Leave blank to keep it.`
+                        : "No UPI ID saved yet. You can leave this empty."}
+                  </span>
+                </form>
               </div>
             </section>
 

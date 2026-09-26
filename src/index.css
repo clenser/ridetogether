@@ -26,6 +26,15 @@
   --rt-danger-ring: rgba(201, 63, 63, 0.24);
   --rt-sidebar-width: 264px;
   --rt-topbar-height: 72px;
+  /* Space the OS status bar / notch occupies above the app. Zero in a browser, and
+     zero on desktop. The native shell is edge-to-edge, so without this the sticky
+     top bar sits underneath the status bar and its icons collide with the clock. */
+  --rt-safe-top: env(safe-area-inset-top, 0px);
+  --rt-safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* What the top bar actually occupies on screen, safe area included. Anything
+     that reserves room for the top bar must subtract this, not --rt-topbar-height,
+     or the page is one status bar taller than the bar above it. */
+  --rt-topbar-total: calc(var(--rt-topbar-height) + var(--rt-safe-top));
   --rt-mobile-nav-height: 72px;
   /* Vertical space the fixed bottom nav occupies at the foot of the page. Zero on
      desktop, where the nav is not rendered. A page that fills the viewport - the
@@ -745,25 +754,75 @@ tbody tr:hover {
   background: var(--rt-surface-subtle);
 }
 
+/*
+ * Hidden by clipping, not by translation.
+ *
+ * This used to be `top: calc(10px + var(--rt-safe-top))` plus
+ * `transform: translateY(-160%)`, which is a fixed-height guess rather than a
+ * real hidden state. The percentage resolves against the link's own height, so
+ * the only thing keeping it on screen was the link staying a single short line,
+ * and the extra `env(safe-area-inset-top)` in `top` pushed it back down by
+ * exactly as much as the transform moved it up. On a device with a non-zero
+ * safe-area top - a notched phone, or any Android phone running the installed
+ * PWA - that left a clipped sliver of the white pill sitting on top of the
+ * mobile header, permanently, with no way to dismiss it.
+ *
+ * A 1px clipped box is height-independent, cannot overflow the viewport in any
+ * direction, and keeps the link focusable and announced to assistive tech, so it
+ * still works for exactly the keyboard users it is for. The visible state is
+ * restored only on focus, inside the safe area so it is never under a notch or
+ * a landscape cutout, and it is bounded to the viewport width so it cannot
+ * create a horizontal scrollbar.
+ */
 .app-skip-link {
   position: fixed;
   z-index: 2000;
-  top: 10px;
-  left: 12px;
-  padding: 10px 14px;
-  border-radius: 9px;
-  background: #ffffff;
-  box-shadow: var(--rt-shadow-md);
-  color: var(--rt-primary-deep);
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  color: var(--rt-primary-strong);
   font-size: 0.84rem;
   font-weight: 760;
   text-decoration: none;
-  transform: translateY(-160%);
-  transition: transform var(--rt-transition);
 }
 
-.app-skip-link:focus {
-  transform: translateY(0);
+/* `:focus` and not `:focus-visible` alone: some mobile browsers and in-app
+   webviews only ever mark a link as `:focus`, and a skip link that cannot be
+   revealed at all is worse than one that reveals itself slightly eagerly. */
+.app-skip-link:focus,
+.app-skip-link:focus-visible {
+  top: calc(var(--rt-safe-top) + 8px);
+  left: max(8px, env(safe-area-inset-left));
+  width: auto;
+  height: auto;
+  max-width: calc(100% - 16px);
+  margin: 0;
+  padding: 10px 14px;
+  overflow: visible;
+  clip: auto;
+  clip-path: none;
+  white-space: normal;
+  border: 1px solid var(--rt-border);
+  border-radius: 9px;
+  background: var(--rt-surface-raised);
+  color: var(--rt-primary-strong);
+  box-shadow: var(--rt-shadow-md);
+}
+
+/* The skip-link target is focused programmatically, not by a pointer, so it
+   should not paint a focus ring around the whole page. Same reasoning as
+   `.modal:focus` below. */
+.app-main:focus,
+.app-main:focus-visible {
+  outline: none;
 }
 
 .app-sidebar {
@@ -1103,12 +1162,15 @@ tbody tr:hover {
   position: sticky;
   z-index: 50;
   top: 0;
-  height: var(--rt-topbar-height);
+  /* The status bar is drawn over the top of the app in the native shell, so the
+     bar is grown by that inset and padded down. With the global border-box this
+     keeps the content area at exactly --rt-topbar-height. */
+  height: var(--rt-topbar-total);
+  padding: var(--rt-safe-top) 28px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 0 28px;
   border-bottom: 1px solid var(--rt-border);
   background: color-mix(in srgb, var(--rt-surface) 91%, transparent);
   box-shadow: 0 4px 18px rgba(24, 62, 38, 0.025);
@@ -1229,8 +1291,8 @@ tbody tr:hover {
 
 .app-main {
   min-width: 0;
-  min-height: calc(100vh - var(--rt-topbar-height));
-  min-height: calc(100dvh - var(--rt-topbar-height));
+  min-height: calc(100vh - var(--rt-topbar-total));
+  min-height: calc(100dvh - var(--rt-topbar-total));
   background: var(--rt-surface-subtle);
 }
 
@@ -1290,6 +1352,43 @@ tbody tr:hover {
 
 .app-bottom-nav__link.is-active {
   font-weight: 800;
+}
+
+/*
+ * The raised Offer action.
+ *
+ * Filled rather than tinted so it reads as the one commit action in the bar.
+ * The label sits below the icon rather than being replaced by one, because at
+ * 320px "Offer" and "Find" differ by a single character and an icon-only
+ * button would make them indistinguishable.
+ */
+.app-bottom-nav__link--emphasis {
+  color: var(--rt-primary-strong);
+  font-weight: 760;
+}
+
+.app-bottom-nav__link--emphasis svg {
+  padding: 5px;
+  width: 33px;
+  height: 33px;
+  border-radius: 11px;
+  background: var(--rt-primary);
+  color: #ffffff;
+  box-shadow: 0 4px 12px var(--rt-ring);
+  transition: transform var(--rt-transition), background-color var(--rt-transition);
+}
+
+.app-bottom-nav__link--emphasis:hover:not(.is-active) {
+  background: transparent;
+}
+
+.app-bottom-nav__link--emphasis.is-active {
+  color: var(--rt-primary-strong);
+  background: transparent;
+}
+
+.app-bottom-nav__link--emphasis.is-active svg {
+  background: var(--rt-primary-strong);
 }
 
 .app-bottom-nav__button {
@@ -1756,6 +1855,64 @@ tbody tr:hover {
 
 .ride-map-marker--waypoint::before {
   box-shadow: 0 5px 14px rgba(14, 47, 26, 0.24);
+}
+
+/*
+ * The driver's live position.
+ *
+ * Circular rather than teardrop: the teardrop shape already points at A and B
+ * and would be ambiguous about which way the car is facing. Instead the arrow
+ * inside rotates to the reported heading, and a stale fix greys out and slows its
+ * pulse rather than pretending the car is moving.
+ */
+.ride-map-live {
+  --rt-marker-color: #1f6fd0;
+  width: 34px;
+  height: 34px;
+}
+
+.ride-map-live::before {
+  border-radius: 50%;
+  transform: none;
+  animation: ride-map-pulse 2.4s ease-out infinite;
+}
+
+.ride-map-live__arrow {
+  position: relative;
+  width: 0;
+  height: 0;
+  border-right: 6px solid transparent;
+  border-bottom: 13px solid #ffffff;
+  border-left: 6px solid transparent;
+  transform-origin: 50% 62%;
+  filter: drop-shadow(0 1px 1px rgba(6, 26, 44, 0.35));
+}
+
+.ride-map-live--stale {
+  --rt-marker-color: #6d7c88;
+}
+
+.ride-map-live--stale::before {
+  animation: none;
+  opacity: 0.82;
+}
+
+@keyframes ride-map-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(31, 111, 208, 0.5), 0 6px 16px rgba(6, 26, 44, 0.3);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(31, 111, 208, 0), 0 6px 16px rgba(6, 26, 44, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(31, 111, 208, 0), 0 6px 16px rgba(6, 26, 44, 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ride-map-live::before {
+    animation: none;
+  }
 }
 
 :root[data-theme="dark"] .ride-map {
@@ -2854,8 +3011,8 @@ tbody tr:hover {
   }
 
   .app-main {
-    min-height: calc(100vh - var(--rt-topbar-height));
-    min-height: calc(100dvh - var(--rt-topbar-height));
+    min-height: calc(100vh - var(--rt-topbar-total));
+    min-height: calc(100dvh - var(--rt-topbar-total));
     /* Reserving the nav here is what lets a full-height page subtract exactly the
        same amount and stay flush with the top of the nav. */
     padding-bottom: var(--rt-mobile-nav-inset);

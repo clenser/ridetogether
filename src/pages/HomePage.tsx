@@ -8,6 +8,7 @@ import {
   Clock3,
   MapPinned,
   MessageCircle,
+  Navigation,
   Route as RouteIcon,
   ShieldCheck,
   Sparkles,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import RideCard from "../components/RideCard";
 import { useApp } from "../context/AppContext";
+import { ACTIVE_BOOKING_STATUSES } from "../types";
 
 const formatDeparture = (date: string, time: string) => {
   const value = new Date(date.includes("T") ? date : `${date}T${time || "00:00"}`);
@@ -38,6 +40,21 @@ const homeStyles = `
 .rt-home-page { min-height: 100%; overflow: hidden; color: #17231c; background: #f7fbf8; }
 .rt-home-page .container { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
 .rt-home-page h1, .rt-home-page h2, .rt-home-page h3, .rt-home-page p { margin-top: 0; }
+/*
+ * The live-trip banner.
+ *
+ * Sits above the hero rather than inside it, because a running trip is a state,
+ * not a promotion: it has to be the first thing on the page and it must not
+ * scroll away with the marketing copy. Tinted from the same tokens as every
+ * other surface so it does not read as a different product in dark mode.
+ */
+.rt-home-page .live-trip { position: relative; z-index: 2; padding: 12px 0; border-bottom: 1px solid var(--rt-border); background: var(--rt-primary-soft); }
+.rt-home-page .live-trip__inner { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.rt-home-page .live-trip__icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: #fff; background: var(--rt-primary); box-shadow: 0 4px 12px var(--rt-ring); }
+.rt-home-page .live-trip__copy { min-width: 0; flex: 1; }
+.rt-home-page .live-trip__copy strong { display: block; color: var(--rt-primary-strong); font-size: .9rem; font-weight: 780; }
+.rt-home-page .live-trip__copy span { display: block; margin-top: 2px; overflow: hidden; color: var(--rt-muted); font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.rt-home-page .live-trip__action { flex: 0 0 auto; }
 .rt-home-page .hero-section { position: relative; padding: 76px 0 82px; background: radial-gradient(circle at 78% 20%, rgba(191, 239, 207, .7), transparent 30%), linear-gradient(135deg, #f5fbf6 0%, #e8f6ec 100%); }
 .rt-home-page .hero-section::after { content: ""; position: absolute; width: 360px; height: 360px; right: -160px; bottom: -220px; border: 1px solid rgba(21, 148, 71, .13); border-radius: 50%; box-shadow: 0 0 0 28px rgba(21, 148, 71, .035), 0 0 0 58px rgba(21, 148, 71, .025); pointer-events: none; }
 .rt-home-page .hero-grid { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(360px, .98fr); align-items: center; gap: 64px; }
@@ -135,6 +152,15 @@ const homeStyles = `
 }
 @media (max-width: 620px) {
   .rt-home-page .container { width: min(100% - 28px, 1180px); }
+  /* The route line is allowed to wrap to two rows rather than ellipsised: on a
+     320px screen an ellipsis turns the trip into "Sector 42 to…" and the member
+     cannot tell which ride they are about to open. */
+  .rt-home-page .live-trip { padding: 10px 0; }
+  .rt-home-page .live-trip__inner { flex-wrap: wrap; gap: 9px 11px; }
+  .rt-home-page .live-trip__copy { flex: 1 1 100%; order: 2; }
+  .rt-home-page .live-trip__icon { order: 1; }
+  .rt-home-page .live-trip__action { order: 1; margin-left: auto; min-height: 40px; padding-inline: 13px; }
+  .rt-home-page .live-trip__copy span { white-space: normal; line-height: 1.4; }
   .rt-home-page .hero-section { padding: 52px 0 58px; }
   .rt-home-page .hero-copy h1 { font-size: 2.65rem; }
   .rt-home-page .hero-copy > p { font-size: .95rem; }
@@ -156,6 +182,16 @@ const homeStyles = `
 
 export default function HomePage() {
   const { loading, activeUser, rides, bookings, notifications, users, vehicles } = useApp();
+
+  /**
+   * Who is actually in the car: confirmed and boarded riders on one ride.
+   * Used only for the live-trip banner, where an accurate headcount matters
+   * more than a total of every booking ever made against it.
+   */
+  const partyFor = (rideId: string) => bookings.filter((booking) => (
+    booking.rideId === rideId
+    && (booking.status === "confirmed" || booking.status === "picked_up")
+  )).length;
 
   const featuredRides = useMemo(
     () =>
@@ -180,6 +216,33 @@ export default function HomePage() {
       return Number.isFinite(departure) && departure >= now;
     });
   }, [featuredRides]);
+
+  /**
+   * A trip that is under way right now, from either side of it.
+   *
+   * The featured panel below only ever looks at future departures, so a member
+   * who is mid-journey - driving with passengers, or riding - would open the app
+   * and be told there is "no upcoming rides yet" while the trip they are in is
+   * running. This takes priority over the panel so the most time-sensitive thing
+   * on the product is the first thing on the home page.
+   */
+  const liveTrip = useMemo(() => {
+    const mine = rides.filter((ride) => ride.status === "in_progress");
+    const driven = mine.find((ride) => ride.driverId === activeUser?.id);
+    if (driven) return { ride: driven, asDriver: true, party: partyFor(driven.id) };
+    const booked = mine.find((ride) => bookings.some((booking) => (
+      booking.rideId === ride.id
+      && booking.riderId === activeUser?.id
+      && ACTIVE_BOOKING_STATUSES.includes(booking.status)
+    )));
+    if (booked) return { ride: booked, asDriver: false, party: partyFor(booked.id) };
+    return null;
+    // `partyFor` reads the same `bookings` array the memo is given, so it does
+    // not need to be a dependency of its own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookings, rides, activeUser?.id]);
+
+  const liveTripDriver = users.find((user) => user.id === liveTrip?.ride.driverId);
 
   const nextRideDriver = users.find((user) => user.id === nextRide?.driverId);
   const nextRideVehicle = vehicles.find((vehicle) => vehicle.id === nextRide?.vehicleId);
@@ -211,6 +274,30 @@ export default function HomePage() {
   return (
     <main className="rt-home-page home-page">
       <style>{homeStyles}</style>
+      {liveTrip ? (
+        <section className="live-trip" aria-label="Trip in progress">
+          <div className="container live-trip__inner">
+            <span className="live-trip__icon" aria-hidden="true">
+              <Navigation size={19} />
+            </span>
+            <div className="live-trip__copy">
+              <strong>
+                {liveTrip.asDriver ? "You are driving now" : `On the way with ${liveTripDriver?.name ?? "your driver"}`}
+              </strong>
+              <span>
+                {liveTrip.ride.origin.label} to {liveTrip.ride.destination.label}
+                {liveTrip.asDriver
+                  ? ` \u00b7 ${liveTrip.party} ${liveTrip.party === 1 ? "rider" : "riders"} on board`
+                  : " \u00b7 follow the driver's live position"}
+              </span>
+            </div>
+            <Link className="btn btn-primary live-trip__action" to={`/rides/${liveTrip.ride.id}`}>
+              {liveTrip.asDriver ? "Manage trip" : "Open trip"}
+              <ArrowRight size={17} />
+            </Link>
+          </div>
+        </section>
+      ) : null}
       <section className="hero-section">
         <div className="container hero-grid">
           <div className="hero-copy">

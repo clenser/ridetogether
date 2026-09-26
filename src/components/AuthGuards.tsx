@@ -15,7 +15,10 @@ export const guardStyles = `
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 24px 18px;
+  /* Full-screen, outside the app shell: keep the card clear of the status bar and
+     the gesture bar rather than relying on a top bar that is not rendered here. */
+  padding: calc(24px + var(--rt-safe-top, env(safe-area-inset-top, 0px))) 18px
+    calc(24px + var(--rt-safe-bottom, env(safe-area-inset-bottom, 0px)));
   color: #17231c;
   background:
     radial-gradient(circle at 50% 8%, rgba(185, 235, 202, .58), transparent 34%),

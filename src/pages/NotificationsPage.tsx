@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
+  AlarmClock,
   AlertCircle,
   Bell,
   BellRing,
@@ -11,10 +12,15 @@ import {
   ChevronRight,
   Clock3,
   LoaderCircle,
+  LocateFixed,
   MessageCircle,
+  Navigation,
   Star,
   TicketCheck,
+  Timer,
   TriangleAlert,
+  UserX,
+  Wallet,
   XCircle,
 } from "lucide-react";
 import { EmptyState } from "../components/EmptyState";
@@ -25,7 +31,7 @@ import type { AppNotification, NotificationType } from "../types";
 interface NotificationVisual {
   label: string;
   icon: LucideIcon;
-  tone: "request" | "success" | "warning" | "danger" | "message" | "rating";
+  tone: "request" | "success" | "warning" | "danger" | "message" | "rating" | "travel" | "payment";
 }
 
 const notificationStyles = `
@@ -61,6 +67,8 @@ const notificationStyles = `
 .rt-notification-icon--danger { color: #a33a3a; background: #fdeaea; }
 .rt-notification-icon--message { color: #2563a7; background: #eaf2fb; }
 .rt-notification-icon--rating { color: #7955a5; background: #f1eafb; }
+.rt-notification-icon--travel { color: #1a6a72; background: #e2f4f5; }
+.rt-notification-icon--payment { color: #8a5a12; background: #fbeed6; }
 .rt-notification-copy { min-width: 0; }
 .rt-notification-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .rt-notification-type { color: #6f7c74; font-size: .65rem; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
@@ -85,6 +93,24 @@ const notificationStyles = `
 [data-theme="dark"] .rt-notification--unread { background: linear-gradient(135deg, #19301f, #17211a); border-color: #31533d; }
 [data-theme="dark"] .rt-notification-body { color: #a6b5ac; }
 [data-theme="dark"] .rt-notification-read { color: #c5d0c9; background: #1a251e; border-color: #35453b; }
+/*
+ * Dark values for the eight notification tones.
+ *
+ * These are the most colourful elements on the page, and each one is a filled
+ * chip. Left on their light-mode values they become a row of bright stickers
+ * against a near-black card, which is unreadable and reads as a rendering fault
+ * rather than a design. Each tone keeps its own hue so the type of update is
+ * still distinguishable at a glance, and the label beside it carries the meaning
+ * in either theme.
+ */
+[data-theme="dark"] .rt-notification-icon--request { color: #f0d199; background: #33290f; }
+[data-theme="dark"] .rt-notification-icon--success { color: #a9e0c1; background: #16301f; }
+[data-theme="dark"] .rt-notification-icon--warning { color: #f5c877; background: #362a10; }
+[data-theme="dark"] .rt-notification-icon--danger { color: #f0b4b4; background: #341c1c; }
+[data-theme="dark"] .rt-notification-icon--message { color: #bcd8f0; background: #1d2c3a; }
+[data-theme="dark"] .rt-notification-icon--rating { color: #d3bdf0; background: #2a1f3d; }
+[data-theme="dark"] .rt-notification-icon--travel { color: #a5dfe3; background: #143034; }
+[data-theme="dark"] .rt-notification-icon--payment { color: #e8cfa0; background: #33280f; }
 @media (max-width: 680px) {
   .rt-notifications-page { padding: 18px 14px 44px; }
   .rt-notifications-mark-all { width: 100%; }
@@ -99,11 +125,17 @@ const notificationStyles = `
 
 const notificationVisuals: Record<NotificationType, NotificationVisual> = {
   "booking-request": { label: "Booking request", icon: BellRing, tone: "request" },
+  "booking-accepted": { label: "Seat accepted", icon: Timer, tone: "request" },
   "booking-confirmed": { label: "Booking confirmed", icon: TicketCheck, tone: "success" },
   "booking-rejected": { label: "Booking declined", icon: XCircle, tone: "danger" },
   "booking-cancelled": { label: "Booking cancelled", icon: XCircle, tone: "warning" },
+  "booking-no-show": { label: "Marked as no-show", icon: UserX, tone: "danger" },
   "ride-cancelled": { label: "Ride cancelled", icon: TriangleAlert, tone: "warning" },
   "ride-completed": { label: "Ride completed", icon: CheckCheck, tone: "success" },
+  "ride-started": { label: "Trip started", icon: Navigation, tone: "travel" },
+  "ride-reminder": { label: "Departure reminder", icon: AlarmClock, tone: "travel" },
+  "driver-approaching": { label: "Driver approaching", icon: LocateFixed, tone: "travel" },
+  "payment-status": { label: "Payment", icon: Wallet, tone: "payment" },
   message: { label: "New message", icon: MessageCircle, tone: "message" },
   "rating-request": { label: "Rate your ride", icon: Star, tone: "rating" },
 };

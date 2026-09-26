@@ -556,6 +556,16 @@ export default function OfferRidePage() {
       contribution,
       distanceKm: route.distanceKm,
       durationMinutes: route.durationMinutes,
+      /*
+       * The Valhalla geometry that was just drawn on the map is stored with the
+       * ride. Find Ride matches against this corridor rather than re-routing
+       * every candidate: it is the only way to tell "your stop is on the way"
+       * from "your stop is two kilometres off the highway", and it is also what
+       * the pickup suggestions are cut from. Leaving it out would not fail
+       * loudly - matching would quietly fall back to straight-line distance and
+       * the results would claim "no road corridor" without saying why.
+       */
+      routeGeometry: route.geometry,
     };
 
     setPublishing(true);

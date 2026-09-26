@@ -9,24 +9,40 @@ import {
   CheckCircle2,
   Clock3,
   Edit3,
+  Flag,
   LoaderCircle,
   MapPin,
   MessageCircle,
+  Navigation,
+  PlayCircle,
   RefreshCw,
   Route as RouteIcon,
   ShieldCheck,
   Star,
+  UserCheck,
+  UserX,
   Users,
+  Wallet,
   WalletCards,
   X,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import RideMap from "../components/RideMap";
 import { Stars } from "../components/Stars";
+import {
+  BOOKING_STATUS_META,
+  BookingStatusBadge,
+  isLiveRide,
+  nextStepFor,
+  RideStatusBadge,
+} from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
+import { useRideLocation } from "../hooks/useRideLocation";
 import { formatRupees } from "../services/fare";
 import { getRoute } from "../services/routing";
-import type { BookingStatus, Coordinates, RouteResult } from "../types";
+import { PAYMENT_DISCLAIMER } from "../services/payment";
+import { ACTIVE_BOOKING_STATUSES } from "../types";
+import type { Booking, Coordinates, RouteResult } from "../types";
 
 const formatDeparture = (date: string, time: string) => {
   const value = new Date(date.includes("T") ? date : `${date}T${time || "00:00"}`);
@@ -53,14 +69,6 @@ const formatDuration = (minutes?: number) => {
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
-const statusLabel: Record<BookingStatus, string> = {
-  pending: "Pending",
-  confirmed: "Confirmed",
-  rejected: "Rejected",
-  cancelled: "Cancelled",
-  completed: "Completed",
-};
-
 const initials = (name: string) =>
   name
     .split(" ")
@@ -68,6 +76,112 @@ const initials = (name: string) =>
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("") || "RT";
+
+type BookingAction = "accept" | "reject" | "pickup" | "no-show" | "cancel" | "pay" | "paid" | "unpaid";
+
+/**
+ * What one member sees about their own seat.
+ *
+ * Separate from the host's list because the available actions are the mirror
+ * image: a rider can pay or withdraw, and can do nothing at all about being
+ * collected. The state name alone is not enough here, so the panel also says
+ * whose turn it is - otherwise a rider waits on a driver who is waiting on them.
+ */
+function CurrentBookingPanel({
+  booking,
+  isDriver,
+  actionLoading,
+  onAction,
+}: {
+  booking: Booking;
+  isDriver: boolean;
+  actionLoading: string;
+  onAction: (action: BookingAction, success: string, fallback: string) => void;
+}) {
+  const { Icon } = BOOKING_STATUS_META[booking.status];
+  const nextStep = nextStepFor(booking.status, isDriver);
+  const busy = Boolean(actionLoading);
+  const canPay = booking.status === "payment_pending";
+  const canCancel = booking.status === "pending"
+    || booking.status === "payment_pending"
+    || booking.status === "confirmed";
+
+  return (
+    <div className={`current-booking booking-${booking.status}`} data-testid="current-booking" data-status={booking.status}>
+      <div className="current-booking-icon"><Icon size={21} /></div>
+      <div>
+        <BookingStatusBadge status={booking.status} />
+        <span>
+          {booking.seats} {booking.seats === 1 ? "seat" : "seats"}
+          {typeof booking.fareAmount === "number"
+            ? ` · ${formatRupees(booking.fareAmount)}`
+            : ""}
+        </span>
+        {nextStep ? <p className="current-booking-next">{nextStep}</p> : null}
+        {booking.pickup ? (
+          <p className="current-booking-pickup">
+            <MapPin size={13} />
+            <span>
+              {booking.pickup.label}
+              {typeof booking.pickup.walkDistanceKm === "number" && booking.pickup.walkDistanceKm > 0
+                ? ` · ${booking.pickup.walkDistanceKm} km walk`
+                : ""}
+            </span>
+          </p>
+        ) : null}
+        {booking.dropoff ? (
+          <p className="current-booking-pickup">
+            <Flag size={13} />
+            <span>
+              Set down at {booking.dropoff.label}
+              {typeof booking.dropoff.detourKm === "number" && booking.dropoff.detourKm > 0
+                ? ` · adds ${booking.dropoff.detourKm} km to the driver`
+                : ""}
+            </span>
+          </p>
+        ) : null}
+        {canPay ? (
+          <>
+            <button
+              className="btn btn-primary btn-block"
+              type="button"
+              data-testid="pay-booking"
+              disabled={busy}
+              onClick={() => onAction(
+                "pay",
+                "Payment opened. The driver marks it received to confirm your seat.",
+                "We could not open the payment for this seat.",
+              )}
+            >
+              {actionLoading === `${booking.id}:pay` ? <LoaderCircle className="spin" size={17} /> : <Wallet size={17} />}
+              Pay {formatRupees(booking.fareAmount ?? 0)} to confirm
+            </button>
+            <p className="control-hint">{PAYMENT_DISCLAIMER}</p>
+          </>
+        ) : null}
+        {canCancel ? (
+          <button
+            className="btn btn-ghost btn-block danger-text"
+            type="button"
+            data-testid="cancel-booking"
+            disabled={busy}
+            onClick={() => onAction(
+              "cancel",
+              "Your booking was cancelled and the seat is free again.",
+              "We could not cancel this booking.",
+            )}
+          >
+            {actionLoading === `${booking.id}:cancel` ? <LoaderCircle className="spin" size={17} /> : <X size={17} />}
+            Cancel my booking
+          </button>
+        ) : null}
+        {booking.status === "picked_up" ? (
+          <p className="current-booking-next"><Clock3 size={13} /> Have a safe trip. The driver ends the trip on arrival.</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 const rideDetailsStyles = `
 .rt-details-page { min-height: 100%; color: #17231c; background: #f7fbf8; }
@@ -178,13 +292,31 @@ const rideDetailsStyles = `
 .rt-details-page .confirmed-summary span { color: #718878; font-size: .68rem; }
 .rt-details-page .driver-controls { display: grid; gap: 8px; margin-top: 16px; padding-top: 15px; border-top: 1px solid #edf2ee; }
 .rt-details-page .current-booking { display: flex; align-items: flex-start; gap: 10px; padding: 13px; border-radius: 12px; }
+.rt-details-page .current-booking > div:last-child { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.rt-details-page .current-booking .btn { margin-top: 4px; }
+.rt-details-page .current-booking .control-hint { margin: 0; }
 .rt-details-page .booking-pending { color: #7a5b17; background: #fff7df; }
+.rt-details-page .booking-payment_pending { color: #7a5b17; background: #fff7df; }
 .rt-details-page .booking-confirmed { color: #176b39; background: #e9f8ed; }
+.rt-details-page .booking-picked_up { color: #1a5a80; background: #e9f2fa; }
 .rt-details-page .booking-completed { color: #425b49; background: #edf3ef; }
+.rt-details-page .booking-rejected { color: #8f3232; background: #fdeeee; }
+.rt-details-page .booking-cancelled { color: #4f5f55; background: #eef2ef; }
+.rt-details-page .booking-no_show { color: #8f3232; background: #fdeeee; }
 .rt-details-page .current-booking-icon { display: grid; place-items: center; flex: 0 0 auto; }
 .rt-details-page .current-booking strong, .rt-details-page .current-booking span { display: block; }
 .rt-details-page .current-booking strong { font-size: .79rem; }
 .rt-details-page .current-booking span { margin-top: 4px; color: #6f8175; font-size: .7rem; line-height: 1.4; }
+.rt-details-page .current-booking-next { display: flex; align-items: flex-start; gap: 6px; margin: 2px 0 0; color: inherit; font-size: .7rem; line-height: 1.45; }
+.rt-details-page .current-booking-next svg { flex: 0 0 auto; margin-top: 2px; }
+.rt-details-page .current-booking-pickup { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: #51685a; font-size: .69rem; line-height: 1.45; }
+.rt-details-page .current-booking-pickup svg { flex: 0 0 auto; margin-top: 2px; color: #159447; }
+.rt-details-page .request-meeting { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 7px 9px; border-radius: 9px; color: #4a6353; background: #f1f8f3; font-size: .68rem; line-height: 1.4; }
+.rt-details-page .request-meeting svg { flex: 0 0 auto; margin-top: 1px; color: #159447; }
+.rt-details-page .live-status { display: flex; align-items: center; gap: 7px; margin: 0; padding: 9px 22px; color: #1c5c96; background: #eef5fc; font-size: .71rem; font-weight: 730; }
+.rt-details-page .live-status svg { flex: 0 0 auto; }
+.rt-details-page .live-status--stale { color: #5d6b74; background: #f0f3f5; }
+.rt-details-page .live-status--error { color: #a13b3b; background: #fff3f3; }
 .rt-details-page .request-form { display: grid; gap: 8px; }
 .rt-details-page .request-form label { color: #52655a; font-size: .76rem; font-weight: 750; }
 .rt-details-page .request-form select { width: 100%; min-height: 43px; padding: 8px 10px; border: 1px solid #d7e3da; border-radius: 10px; color: #263d2e; background: #fff; outline: none; font: inherit; font-size: .8rem; }
@@ -241,9 +373,16 @@ export default function RideDetailsPage() {
     bookings,
     ratings,
     requestBooking,
-    updateBookingStatus,
+    acceptBooking,
+    rejectBooking,
+    markPickedUp,
+    markNoShow,
+    cancelBooking,
     cancelRide,
+    startRide,
     completeRide,
+    payBooking,
+    resolvePayment,
     submitRating,
   } = useApp();
   const ride = rides.find((item) => item.id === rideId);
@@ -311,16 +450,19 @@ export default function RideDetailsPage() {
     [bookings, ride?.id],
   );
    const pendingBookings = rideBookings.filter((booking) => booking.status === "pending");
+   const payingBookings = rideBookings.filter((booking) => booking.status === "payment_pending");
    const confirmedBookings = rideBookings.filter((booking) => booking.status === "confirmed");
+   const onBoardBookings = rideBookings.filter((booking) => booking.status === "picked_up");
+   /**
+    * Who took part. A request that was declined, cancelled or never collected
+    * did not share the car, so it is not reviewable - and the database enforces
+    * the same rule, so a client that disagrees simply fails to save.
+    */
    const reviewableBookings = rideBookings.filter(
-     (booking) => booking.status === "confirmed" || booking.status === "completed",
+     (booking) => booking.status === "picked_up" || booking.status === "completed",
    );
    const currentBooking = [...rideBookings]
-     .filter(
-       (booking) =>
-         booking.riderId === activeUserId
-         && (booking.status === "pending" || booking.status === "confirmed" || booking.status === "completed"),
-     )
+     .filter((booking) => booking.riderId === activeUserId)
      .sort((first, second) => {
        const firstTime = new Date(first.updatedAt || first.createdAt).getTime();
        const secondTime = new Date(second.updatedAt || second.createdAt).getTime();
@@ -332,6 +474,7 @@ export default function RideDetailsPage() {
   const hasValidDeparture = Number.isFinite(departureTimestamp);
   const hasDeparted = hasValidDeparture && departureTimestamp <= currentTime;
   const isDriver = Boolean(ride && activeUserId === ride.driverId);
+  const isRunning = ride?.status === "in_progress";
   const canRequest = Boolean(
     ride &&
       !isDriver &&
@@ -341,12 +484,35 @@ export default function RideDetailsPage() {
       !hasDeparted &&
       !currentBooking,
   );
-   const canComplete = Boolean(
-     isDriver &&
-       ride?.status === "active" &&
-       pendingBookings.length === 0,
+   /**
+    * A trip can only be finished from the running state: the host presses Start
+    * when they set off, and End when they arrive. Anything still uncollected at
+    * that point is settled as a no-show by the database, so the host is not asked
+    * to resolve a passenger one by one at the roadside.
+    */
+    const canStart = Boolean(isDriver && ride?.status === "active" && ride.availableSeats >= 0);
+    const canComplete = Boolean(isDriver && ride?.status === "in_progress");
+   /**
+    * Chat is a shared space for people who are actually travelling together, so
+    * it is keyed on a booking that has not been walked away from. Without the
+    * status check a declined or cancelled request still left the Chat button on
+    * the page, and the link led somewhere the row-level security then refuses.
+    */
+   const hasChatAccess = isDriver || Boolean(
+     currentBooking
+     && (ACTIVE_BOOKING_STATUSES.includes(currentBooking.status) || currentBooking.status === "completed"),
    );
-   const hasChatAccess = isDriver || Boolean(currentBooking);
+   /**
+    * Only the host publishes a position, and only while the trip is running.
+    * Passengers read it, so the hook is active for them too - it is the
+    * subscription that fills the map, not the write.
+    */
+   const live = useRideLocation({
+     rideId: ride?.id ?? "",
+     share: isDriver,
+     isRunning: ride?.status === "in_progress",
+   });
+   const liveLocation = live.location;
    const isConfirmedRider = currentBooking?.status === "confirmed" || currentBooking?.status === "completed";
    const reviewTargets = isDriver
      ? reviewableBookings
@@ -407,46 +573,79 @@ export default function RideDetailsPage() {
     }
   };
 
-  const handleBookingStatus = async (bookingId: string, status: "confirmed" | "rejected") => {
-    if (!ride || !isDriver) return;
+  /**
+   * One entry point for every booking-state change on this page.
+   *
+   * Each of these has exactly one legal transition and one person allowed to
+   * perform it, and the database checks both. Keeping them behind a single
+   * helper means the button, the spinner key, the success copy and the error
+   * copy cannot drift apart per action.
+   */
+  const runBookingAction = async (
+    booking: Booking,
+    action: "accept" | "reject" | "pickup" | "no-show" | "cancel" | "pay" | "paid" | "unpaid",
+    success: string,
+    fallback: string,
+  ) => {
+    if (actionLoading) return;
     setActionError("");
     setActionSuccess("");
-    setActionLoading(`${bookingId}:${status}`);
+    setActionLoading(`${booking.id}:${action}`);
     try {
-      await updateBookingStatus(bookingId, status);
-      setActionSuccess(`Booking ${status}.`);
+      switch (action) {
+        case "accept":
+          await acceptBooking(booking.id);
+          break;
+        case "reject":
+          await rejectBooking(booking.id);
+          break;
+        case "pickup":
+          await markPickedUp(booking.id);
+          break;
+        case "no-show":
+          await markNoShow(booking.id);
+          break;
+        case "cancel":
+          await cancelBooking(booking.id);
+          break;
+        case "pay":
+          await payBooking(booking.id);
+          break;
+        case "paid":
+          await resolvePayment(booking.id, "success");
+          break;
+        case "unpaid":
+          await resolvePayment(booking.id, "failed", "The driver did not receive this payment.");
+          break;
+        default:
+          return;
+      }
+      setActionSuccess(success);
     } catch (error: unknown) {
-      setActionError(errorMessage(error, `We could not ${status} that booking.`));
+      setActionError(errorMessage(error, fallback));
     } finally {
       setActionLoading("");
     }
   };
 
-  const handleCancelRide = async () => {
-    if (!ride || !isDriver || !window.confirm("Cancel this ride for everyone?")) return;
+  const runRideAction = async (
+    action: "start" | "complete" | "cancel",
+    success: string,
+    fallback: string,
+    confirm?: string,
+  ) => {
+    if (!ride || actionLoading) return;
+    if (confirm && !window.confirm(confirm)) return;
     setActionError("");
     setActionSuccess("");
-    setActionLoading("cancel");
+    setActionLoading(action);
     try {
-      await cancelRide(ride.id);
-      setActionSuccess("The ride has been cancelled and riders have been notified.");
+      if (action === "start") await startRide(ride.id);
+      else if (action === "complete") await completeRide(ride.id);
+      else await cancelRide(ride.id);
+      setActionSuccess(success);
     } catch (error: unknown) {
-      setActionError(errorMessage(error, "We could not cancel this ride."));
-    } finally {
-      setActionLoading("");
-    }
-  };
-
-  const handleCompleteRide = async () => {
-    if (!ride || !canComplete || !window.confirm("Mark this ride as completed?")) return;
-    setActionError("");
-    setActionSuccess("");
-    setActionLoading("complete");
-    try {
-      await completeRide(ride.id);
-      setActionSuccess("The ride is now marked completed. Riders can leave a rating.");
-    } catch (error: unknown) {
-      setActionError(errorMessage(error, "We could not complete this ride."));
+      setActionError(errorMessage(error, fallback));
     } finally {
       setActionLoading("");
     }
@@ -504,7 +703,7 @@ export default function RideDetailsPage() {
       <div className="container page-container">
         <div className="back-row">
           <Link className="back-link" to="/find"><ArrowLeft size={17} /> Back to rides</Link>
-          <span className={`status-badge status-${ride.status}`}>{ride.status}</span>
+          <RideStatusBadge status={ride.status} />
         </div>
         <PageHeader
           eyebrow="Ride details"
@@ -539,9 +738,26 @@ export default function RideDetailsPage() {
                 </button>
               </div>
               <div className="map-wrap map-wrap-tall">
-                <RideMap origin={ride.origin} destination={ride.destination} waypoints={ride.waypoints} route={route?.geometry} />
+                <RideMap
+                  origin={ride.origin}
+                  destination={ride.destination}
+                  waypoints={ride.waypoints}
+                  route={route?.geometry}
+                  liveLocation={liveLocation
+                    ? { lat: liveLocation.lat, lon: liveLocation.lon, heading: liveLocation.heading, stale: live.isStale }
+                    : null}
+                />
                 {routeLoading && <div className="map-overlay"><LoaderCircle className="spin" size={23} /> Refreshing your real route…</div>}
               </div>
+              {liveLocation ? (
+                <p className={`live-status${live.isStale ? " live-status--stale" : ""}`}>
+                  <Navigation size={14} />
+                  {live.isStale
+                    ? `Driver's last position was ${live.ageSeconds}s ago.`
+                    : "Showing the driver's live position."}
+                </p>
+              ) : null}
+              {isRunning && live.error ? <p className="live-status live-status--error" role="alert"><AlertCircle size={14} />{live.error}</p> : null}
               {routeError && <div className="map-error" role="alert"><AlertCircle size={17} /><span>{routeError} The map and ride markers remain available.</span></div>}
               <div className="route-facts">
                 <div><RouteIcon size={18} /><span><strong>{route?.distanceKm !== undefined ? `${route.distanceKm.toFixed(1)} km` : ride.distanceKm !== undefined ? `${ride.distanceKm.toFixed(1)} km` : "Distance pending"}</strong><small>Distance</small></span></div>
@@ -602,16 +818,17 @@ export default function RideDetailsPage() {
             </section>
 
             <section className="card booking-panel">
-              <div className="card-title-row"><div><span className="section-kicker">Seats</span><h2>{isDriver ? "Manage requests" : "Request a seat"}</h2></div><Users size={20} /></div>
+              <div className="card-title-row"><div><span className="section-kicker">Seats</span><h2>{isDriver ? "Manage requests" : "Your booking"}</h2></div><Users size={20} /></div>
               {isDriver ? (
                 <>
                   {pendingBookings.length > 0 ? (
                     <div className="request-list">
                       {pendingBookings.map((booking) => {
                         const rider = users.find((user) => user.id === booking.riderId);
-                        const canConfirm = booking.seats <= ride.availableSeats;
-                        const confirming = actionLoading === `${booking.id}:confirmed`;
-                        const rejecting = actionLoading === `${booking.id}:rejected`;
+                        // Accepting holds the seat immediately, so a full car cannot
+                        // be over-committed between this check and the write.
+                        const canAccept = booking.seats <= ride.availableSeats;
+                        const busy = Boolean(actionLoading);
                         return (
                           <div className="request-item" key={booking.id}>
                             <div className="request-person">
@@ -621,23 +838,45 @@ export default function RideDetailsPage() {
                                 <span>{booking.seats} {booking.seats === 1 ? "seat" : "seats"} requested</span>
                               </div>
                             </div>
+                            {booking.pickup ? (
+                              <p className="request-meeting">
+                                <MapPin size={13} />
+                                {booking.pickup.label}
+                                {typeof booking.pickup.walkDistanceKm === "number" && booking.pickup.walkDistanceKm > 0
+                                  ? ` · ${booking.pickup.walkDistanceKm} km walk`
+                                  : ""}
+                                {typeof booking.pickup.detourKm === "number" && booking.pickup.detourKm > 0
+                                  ? ` · adds ${booking.pickup.detourKm} km`
+                                  : ""}
+                              </p>
+                            ) : null}
                             <div className="request-actions">
                               <button
                                 className="btn btn-primary btn-small"
                                 type="button"
-                                disabled={Boolean(actionLoading) || !canConfirm}
-                                title={canConfirm ? "Confirm this request" : "There are not enough seats available."}
-                                onClick={() => handleBookingStatus(booking.id, "confirmed")}
+                                disabled={busy || !canAccept}
+                                title={canAccept ? "Accept and hold this seat" : "There are not enough seats available."}
+                                onClick={() => void runBookingAction(
+                                  booking,
+                                  "accept",
+                                  `Seat held for ${rider?.name ?? "the rider"}. They have been asked to pay.`,
+                                  "We could not accept that request.",
+                                )}
                               >
-                                {confirming ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} Confirm
+                                {actionLoading === `${booking.id}:accept` ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} Accept
                               </button>
                               <button
                                 className="btn btn-ghost btn-small danger-text"
                                 type="button"
-                                disabled={Boolean(actionLoading)}
-                                onClick={() => handleBookingStatus(booking.id, "rejected")}
+                                disabled={busy}
+                                onClick={() => void runBookingAction(
+                                  booking,
+                                  "reject",
+                                  "Request declined and the rider has been told.",
+                                  "We could not decline that request.",
+                                )}
                               >
-                                {rejecting ? <LoaderCircle className="spin" size={14} /> : <X size={14} />} Reject
+                                {actionLoading === `${booking.id}:reject` ? <LoaderCircle className="spin" size={14} /> : <X size={14} />} Decline
                               </button>
                             </div>
                           </div>
@@ -647,23 +886,162 @@ export default function RideDetailsPage() {
                   ) : (
                     <div className="small-empty"><Users size={20} /><p>No pending requests right now.</p></div>
                   )}
-                  {confirmedBookings.length > 0 && <div className="confirmed-summary"><strong>{confirmedBookings.reduce((total, booking) => total + booking.seats, 0)} seats confirmed</strong><span>across {confirmedBookings.length} {confirmedBookings.length === 1 ? "rider" : "riders"}</span></div>}
+
+                  {payingBookings.length > 0 ? (
+                    <div className="request-list">
+                      {payingBookings.map((booking) => {
+                        const rider = users.find((user) => user.id === booking.riderId);
+                        return (
+                          <div className="request-item" key={booking.id}>
+                            <div className="request-person">
+                              <span className="request-avatar">{rider ? initials(rider.name) : "?"}</span>
+                              <div>
+                                <strong>{rider?.name ?? "Community rider"}</strong>
+                                <span>Waiting to pay {formatRupees(booking.fareAmount ?? 0)}</span>
+                              </div>
+                            </div>
+                            <div className="request-actions">
+                              <button
+                                className="btn btn-primary btn-small"
+                                type="button"
+                                disabled={Boolean(actionLoading)}
+                                onClick={() => void runBookingAction(
+                                  booking,
+                                  "paid",
+                                  "Payment recorded and the seat is confirmed.",
+                                  "We could not record that payment.",
+                                )}
+                              >
+                                {actionLoading === `${booking.id}:paid` ? <LoaderCircle className="spin" size={14} /> : <Wallet size={14} />} Mark received
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-small danger-text"
+                                type="button"
+                                disabled={Boolean(actionLoading)}
+                                onClick={() => void runBookingAction(
+                                  booking,
+                                  "unpaid",
+                                  "Marked as not received. The seat is back on offer.",
+                                  "We could not release that seat.",
+                                )}
+                              >
+                                {actionLoading === `${booking.id}:unpaid` ? <LoaderCircle className="spin" size={14} /> : <X size={14} />} Not received
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <p className="control-hint">{PAYMENT_DISCLAIMER}</p>
+                    </div>
+                  ) : null}
+
+                  {confirmedBookings.length > 0 ? (
+                    <div className="request-list">
+                      {confirmedBookings.map((booking) => {
+                        const rider = users.find((user) => user.id === booking.riderId);
+                        return (
+                          <div className="request-item" key={booking.id}>
+                            <div className="request-person">
+                              <span className="request-avatar">{rider ? initials(rider.name) : "?"}</span>
+                              <div>
+                                <strong>{rider?.name ?? "Community rider"}</strong>
+                                <span>
+                                  {booking.seats} {booking.seats === 1 ? "seat" : "seats"} confirmed
+                                  {isRunning ? " · waiting to be collected" : ""}
+                                </span>
+                              </div>
+                            </div>
+                            {isRunning ? (
+                              <div className="request-actions">
+                                <button
+                                  className="btn btn-primary btn-small"
+                                  type="button"
+                                  disabled={Boolean(actionLoading)}
+                                  onClick={() => void runBookingAction(
+                                    booking,
+                                    "pickup",
+                                    `${rider?.name ?? "The rider"} is marked as on board.`,
+                                    "We could not mark that passenger as on board.",
+                                  )}
+                                >
+                                  {actionLoading === `${booking.id}:pickup` ? <LoaderCircle className="spin" size={14} /> : <UserCheck size={14} />} On board
+                                </button>
+                                <button
+                                  className="btn btn-ghost btn-small danger-text"
+                                  type="button"
+                                  disabled={Boolean(actionLoading)}
+                                  onClick={() => void runBookingAction(
+                                    booking,
+                                    "no-show",
+                                    "Marked as a no-show and the seat is free again.",
+                                    "We could not mark that passenger as a no-show.",
+                                  )}
+                                >
+                                  {actionLoading === `${booking.id}:no-show` ? <LoaderCircle className="spin" size={14} /> : <UserX size={14} />} No-show
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  {onBoardBookings.length > 0 && (
+                    <div className="confirmed-summary">
+                      <strong>{onBoardBookings.reduce((total, booking) => total + booking.seats, 0)} seats on board</strong>
+                      <span>across {onBoardBookings.length} {onBoardBookings.length === 1 ? "rider" : "riders"}</span>
+                    </div>
+                  )}
+                  {confirmedBookings.length > 0 && (
+                    <div className="confirmed-summary">
+                      <strong>{confirmedBookings.reduce((total, booking) => total + booking.seats, 0)} seats confirmed</strong>
+                      <span>across {confirmedBookings.length} {confirmedBookings.length === 1 ? "rider" : "riders"}</span>
+                    </div>
+                  )}
                   <div className="driver-controls">
-                    {ride.status === "active" && (
-                      <>
-                         <button className="btn btn-primary btn-block" type="button" onClick={handleCompleteRide} disabled={Boolean(actionLoading) || !canComplete} title={canComplete ? "Mark this ride as completed" : undefined}>
-                           {actionLoading === "complete" ? <LoaderCircle className="spin" size={17} /> : <CheckCircle2 size={17} />}
-                           {actionLoading === "complete" ? "Completing ride…" : canComplete ? "Mark as completed" : "Resolve requests to complete"}
-                         </button>
-                         {pendingBookings.length > 0 && <p className="control-hint">Resolve every pending request before completing this ride.</p>}
-                         {pendingBookings.length === 0 && <p className="control-hint">Marking a ride complete lets participants rate the journey.</p>}
-                      </>
+                    {canStart && (
+                      <button
+                        className="btn btn-primary btn-block"
+                        type="button"
+                        onClick={() => void runRideAction(
+                          "start",
+                          "Trip started. No new passengers can join.",
+                          "We could not start this trip.",
+                        )}
+                        disabled={Boolean(actionLoading)}
+                      >
+                        {actionLoading === "start" ? <LoaderCircle className="spin" size={17} /> : <PlayCircle size={17} />}
+                        {actionLoading === "start" ? "Starting…" : "Start trip"}
+                      </button>
                     )}
-                    {ride.status === "active" && <button className="btn btn-outline btn-block danger-button" type="button" onClick={handleCancelRide} disabled={Boolean(actionLoading)}>{actionLoading === "cancel" ? <LoaderCircle className="spin" size={17} /> : <X size={17} />} Cancel ride</button>}
+                    {canComplete && (
+                      <button className="btn btn-primary btn-block" type="button" onClick={() => void runRideAction(
+                        "complete",
+                        "Trip completed. Anyone not collected has been recorded as a no-show, and participants can rate the journey.",
+                        "We could not complete this trip.",
+                        "End this trip? Passengers you did not collect will be recorded as no-shows.",
+                      )} disabled={Boolean(actionLoading)}>
+                        {actionLoading === "complete" ? <LoaderCircle className="spin" size={17} /> : <Flag size={17} />}
+                        {actionLoading === "complete" ? "Ending trip…" : "End trip"}
+                      </button>
+                    )}
+                    {ride.status === "active" && <p className="control-hint">Starting the trip closes the seats. Ending it settles who travelled.</p>}
+                    {isLiveRide(ride.status) && <button className="btn btn-outline btn-block danger-button" type="button" onClick={() => void runRideAction(
+                      "cancel",
+                      "The ride has been cancelled and everyone booked on it has been notified.",
+                      "We could not cancel this ride.",
+                      "Cancel this ride for everyone? Held seats are returned.",
+                    )} disabled={Boolean(actionLoading)}>{actionLoading === "cancel" ? <LoaderCircle className="spin" size={17} /> : <X size={17} />} Cancel ride</button>}
                   </div>
                 </>
                ) : currentBooking ? (
-                  <div className={`current-booking booking-${currentBooking.status}`} data-testid="current-booking" data-status={currentBooking.status}><div className="current-booking-icon">{currentBooking.status === "pending" ? <Clock3 size={21} /> : <CheckCircle2 size={21} />}</div><div><strong>{statusLabel[currentBooking.status]} request</strong><span>{currentBooking.seats} {currentBooking.seats === 1 ? "seat" : "seats"} · {currentBooking.status === "pending" ? "Waiting for driver confirmation" : currentBooking.status === "completed" ? "Journey complete" : "Your seat is secured"}</span></div></div>
+                 <CurrentBookingPanel
+                   booking={currentBooking}
+                   isDriver={false}
+                   actionLoading={actionLoading}
+                   onAction={(action, success, fallback) => void runBookingAction(currentBooking, action, success, fallback)}
+                 />
               ) : !activeUserId ? (
                 <p className="muted-copy">Sign in to request a seat on this ride.</p>
               ) : ride.status !== "active" ? (

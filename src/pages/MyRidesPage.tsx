@@ -6,12 +6,17 @@ import {
   CarFront,
   Check,
   CheckCircle2,
-   CircleDot,
-   Clock3,
-   Edit3,
-   History,
+  CircleDot,
+  Clock3,
+  CreditCard,
+  Edit3,
+  Flag,
+  History,
   LoaderCircle,
+  MapPin,
   MessageCircle,
+  Navigation,
+  PlayCircle,
   Plus,
   Route as RouteIcon,
   ShieldCheck,
@@ -23,12 +28,19 @@ import { EmptyState } from "../components/EmptyState";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import RideCard from "../components/RideCard";
+import { BookingStatusBadge, isLiveRide, nextStepFor } from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
-import type { Booking, Ride, User, Vehicle } from "../types";
+import type { Booking, BookingStatus, Ride, User, Vehicle } from "../types";
 
-type RideCategory = "upcoming" | "active" | "completed" | "cancelled";
-type LifecycleAction = "cancel" | "complete";
-type BookingDecision = "confirmed" | "rejected";
+/**
+ * "Departed" is a published ride whose departure time has passed but which the
+ * host has not started; "onRoad" is the in-progress trip itself. They are
+ * separate tabs because they need different controls, not because they are
+ * different database states.
+ */
+type RideCategory = "upcoming" | "departed" | "onRoad" | "completed" | "cancelled";
+type LifecycleAction = "cancel" | "start" | "complete";
+type PaymentOutcome = "success" | "failed";
 
 interface LifecycleDialog {
   rideId: string;
@@ -105,6 +117,11 @@ const myRidesStyles = `
 .rt-rides-modal-copy { display: grid; gap: 13px; color: #59675f; font-size: .86rem; line-height: 1.6; }
 .rt-rides-modal-warning { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: #8f3838; background: #fff0f0; font-size: .79rem; line-height: 1.5; }
 .rt-rides-modal-warning svg { flex: 0 0 auto; margin-top: 2px; }
+.rt-rides-modal-note { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: #3f5c4a; background: #eef7f1; font-size: .79rem; line-height: 1.5; }
+.rt-rides-modal-note svg { flex: 0 0 auto; margin-top: 2px; color: #159447; }
+.rt-rides-pill--info { color: #1d5f9e; background: #e4f0fb; }
+.rt-rides-request-button--primary { border: 0; color: #fff; background: #159447; }
+.rt-rides-request-button--secondary { border: 1px solid #dbe6de; color: #3f5c4a; background: #fff; }
 .rt-rides-modal-footer { display: flex; justify-content: flex-end; gap: 9px; width: 100%; }
 .rt-spin { animation: rt-rides-spin .8s linear infinite; }
 @keyframes rt-rides-spin { to { transform: rotate(360deg); } }
@@ -119,7 +136,29 @@ const myRidesStyles = `
 [data-theme="dark"] .rt-rides-requests-head { border-color: #2b3a30; }
 [data-theme="dark"] .rt-rides-request { background: #1a251e; border-color: #304037; }
 [data-theme="dark"] .rt-rides-pill { color: #c7d2cb; background: #243128; }
+/*
+ * Tinted pill variants need their own dark values, not just the base pill.
+ * Without these they keep their light-mode fills, so a row of status chips reads
+ * as a line of bright stickers on a near-black card - the single most common way
+ * a hand-maintained dark theme falls apart.
+ */
+[data-theme="dark"] .rt-rides-pill--info { color: #bcd8f0; background: #1d2c3a; }
+[data-theme="dark"] .rt-rides-pill--warning { color: #f0d199; background: #33290f; }
+[data-theme="dark"] .rt-rides-pill--success { color: #a9e0c1; background: #16301f; }
+[data-theme="dark"] .rt-rides-pill--danger { color: #f0b4b4; background: #341c1c; }
+[data-theme="dark"] .rt-rides-action--primary { background: #1fae55; }
+[data-theme="dark"] .rt-rides-action--danger { color: #f0b4b4; background: #2a1717; border-color: #5c3232; }
+[data-theme="dark"] .rt-rides-action-note { color: #a6b5ac; }
+[data-theme="dark"] .rt-rides-action-note svg { color: #8be0a6; }
+[data-theme="dark"] .rt-rides-modal-copy { color: #c2d0c8; }
+[data-theme="dark"] .rt-rides-modal-note { color: #bcd8c6; background: #17281d; }
+[data-theme="dark"] .rt-rides-modal-warning { color: #f0b4b4; background: #2a1717; }
+[data-theme="dark"] .rt-rides-tab:hover { background: #1d2a21; }
 [data-theme="dark"] .rt-rides-action--secondary, [data-theme="dark"] .rt-rides-request-button--reject { color: #dce7df; background: #1a251e; border-color: #3a4a40; }
+[data-theme="dark"] .rt-rides-request-button--primary { background: #1fae55; }
+[data-theme="dark"] .rt-rides-request-button--secondary { color: #dce7df; background: #1a251e; border-color: #3a4a40; }
+[data-theme="dark"] .rt-rides-alert { border-color: #5c3232; color: #f0b4b4; background: #2a1717; }
+[data-theme="dark"] .rt-rides-alert-success { border-color: #2f6b45; color: #a9e0c1; background: #16291d; }
 @media (max-width: 900px) { .rt-rides-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) {
   .rt-rides-page { padding: 18px 14px 44px; }
@@ -163,67 +202,167 @@ const formatRequestedTime = (value: string) => {
 const errorText = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
-interface RideRequestsProps {
-  requests: Array<{ booking: Booking; ride: Ride }>;
-  users: User[];
-  now: number;
-  busyKey: string;
-  onUpdate: (booking: Booking, status: BookingDecision) => void;
+const BOOKING_SUCCESS: Record<BookingStatus, string> = {
+  pending: "The request is still awaiting your decision.",
+  payment_pending: "The seat is held and the rider can now pay.",
+  confirmed: "The rider is confirmed for this trip.",
+  picked_up: "Boarding recorded.",
+  completed: "The trip is complete.",
+  rejected: "The request was rejected and the seat released.",
+  cancelled: "The booking was cancelled and the seat restored.",
+  no_show: "Marked as a no-show and the seat released.",
+};
+
+const BOOKING_ERROR: Record<BookingStatus, string> = {
+  pending: "We could not update this request.",
+  payment_pending: "We could not update this booking.",
+  confirmed: "We could not confirm this booking.",
+  picked_up: "We could not record this boarding.",
+  completed: "We could not update this booking.",
+  rejected: "We could not release this seat.",
+  cancelled: "We could not cancel this booking.",
+  no_show: "We could not mark this rider as a no-show.",
+};
+
+const LIFECYCLE_ERROR: Record<LifecycleAction, string> = {
+  cancel: "We could not cancel this ride.",
+  start: "We could not start this trip.",
+  complete: "We could not end this trip.",
+};
+
+const LIFECYCLE_TITLE: Record<LifecycleAction, string> = {
+  cancel: "Cancel this ride?",
+  start: "Start this trip?",
+  complete: "End this trip?",
+};
+
+const LIFECYCLE_CONFIRM: Record<LifecycleAction, string> = {
+  cancel: "Cancel ride",
+  start: "Start trip",
+  complete: "End trip",
+};
+
+const LIFECYCLE_COPY: Record<LifecycleAction, (ride: Ride) => string> = {
+  cancel: (ride) => `This cancels ${ride.origin.label} to ${ride.destination.label} for everyone booked on it.`,
+  start: (ride) => `This puts ${ride.origin.label} to ${ride.destination.label} on the road. Riders will see your live position from this moment.`,
+  complete: (ride) => `This ends ${ride.origin.label} to ${ride.destination.label} and opens ratings for everyone who travelled.`,
+};
+
+interface RosterAction {
+  kind: "accept" | "payment" | "pickup";
+  label: string;
+  status: BookingStatus;
+  icon: typeof Check;
+  tone: "primary" | "secondary" | "danger";
+  /** Why the control is unavailable, if it is. */
+  reason?: string;
 }
 
-function RideRequests({ requests, users, now, busyKey, onUpdate }: RideRequestsProps) {
-  const requestsLocked = Boolean(busyKey);
-  if (requests.length === 0) return null;
+/**
+ * Which controls a host may use on one booking, given the state of both the
+ * booking and its ride.
+ *
+ * Seats are already held from `payment_pending`, so a payment the rider has
+ * already opened must be resolvable on a departed ride. Pickup is only
+ * meaningful once the trip is actually running: recording a boarding on a ride
+ * that has not left yet would let a host claim a seat on a cancelled trip.
+ */
+function rosterActionsFor(booking: Booking, ride: Ride): RosterAction[] {
+  if (booking.status === "pending") {
+    if (ride.status !== "active") return [];
+    return [
+      { kind: "accept", label: "Confirm", status: "confirmed", icon: Check, tone: "primary" },
+      { kind: "accept", label: "Reject", status: "rejected", icon: X, tone: "danger" },
+    ];
+  }
+  if (booking.status === "payment_pending") {
+    if (!isLiveRide(ride.status)) return [];
+    return [
+      { kind: "payment", label: "Payment failed", status: "rejected", icon: X, tone: "danger" },
+      { kind: "payment", label: "Payment received", status: "confirmed", icon: CreditCard, tone: "primary" },
+    ];
+  }
+  if (booking.status === "confirmed") {
+    if (ride.status !== "in_progress") return [];
+    return [
+      { kind: "pickup", label: "No-show", status: "no_show", icon: Flag, tone: "danger" },
+      { kind: "pickup", label: "Picked up", status: "picked_up", icon: MapPin, tone: "primary" },
+    ];
+  }
+  return [];
+}
+
+interface RideRosterProps {
+  rows: Array<{ booking: Booking; ride: Ride }>;
+  users: User[];
+  busyKey: string;
+  onBookingStatus: (booking: Booking, status: BookingStatus) => void;
+  onPayment: (booking: Booking, outcome: PaymentOutcome) => void;
+}
+
+function RideRoster({ rows, users, busyKey, onBookingStatus, onPayment }: RideRosterProps) {
+  const locked = Boolean(busyKey);
+  if (rows.length === 0) return null;
 
   return (
-    <section className="rt-rides-requests" aria-labelledby="ride-requests-title">
+    <section className="rt-rides-requests" aria-labelledby="ride-roster-title">
       <div className="rt-rides-requests-head">
         <div className="rt-rides-requests-title">
           <span aria-hidden="true"><UserRoundCheck size={19} /></span>
           <div>
-            <h2 id="ride-requests-title">Passenger requests</h2>
-            <p>Confirm only when you have enough seats. Rejections notify the rider.</p>
+            <h2 id="ride-roster-title">Needs your attention</h2>
+            <p>Requests to confirm, payments to resolve, and riders to pick up.</p>
           </div>
         </div>
-        <span className="rt-rides-request-count" aria-label={`${requests.length} pending`}>{requests.length}</span>
+        <span className="rt-rides-request-count" aria-label={`${rows.length} to action`}>{rows.length}</span>
       </div>
       <div className="rt-rides-request-list">
-        {requests.map(({ booking, ride }) => {
+        {rows.map(({ booking, ride }) => {
           const rider = users.find((user) => user.id === booking.riderId);
           const key = `booking:${booking.id}`;
-          const hasCapacity = ride.availableSeats >= booking.seats;
           const isBusy = busyKey === key;
+          const hasCapacity = ride.availableSeats >= booking.seats;
+          const next = nextStepFor(booking.status, true);
+          const actions = rosterActionsFor(booking, ride).map((action) => (
+            action.kind === "accept" && action.status === "confirmed" && !hasCapacity
+              ? { ...action, reason: "There are not enough available seats." }
+              : action
+          ));
           return (
             <article className="rt-rides-request" key={booking.id}>
               <div className="rt-rides-request-main">
                 <div className="rt-rides-request-title">
                   <strong>{rider?.name ?? "Community rider"}</strong>
                   <span className="rt-rides-pill">{booking.seats} {booking.seats === 1 ? "seat" : "seats"}</span>
-                   {!hasCapacity ? <span className="rt-rides-pill rt-rides-pill--danger">No capacity</span> : null}
+                  <BookingStatusBadge status={booking.status} />
+                  {hasCapacity ? null : <span className="rt-rides-pill rt-rides-pill--danger">No capacity</span>}
                 </div>
                 <p>{ride.origin.label} → {ride.destination.label}</p>
-                <span className="rt-rides-request-time">Requested {formatRequestedTime(booking.createdAt)}</span>
+                <span className="rt-rides-request-time">
+                  {booking.status === "pending" ? `Requested ${formatRequestedTime(booking.createdAt)}` : next}
+                </span>
               </div>
               <div className="rt-rides-request-actions">
-                <button
-                  className="rt-rides-request-button rt-rides-request-button--reject"
-                  type="button"
-                  disabled={requestsLocked}
-                  onClick={() => onUpdate(booking, "rejected")}
-                >
-                  {isBusy ? <LoaderCircle className="rt-spin" size={15} aria-hidden="true" /> : <X size={15} aria-hidden="true" />}
-                  Reject
-                </button>
-                <button
-                  className="rt-rides-request-button rt-rides-request-button--confirm"
-                  type="button"
-                   disabled={requestsLocked || !hasCapacity}
-                   title={!hasCapacity ? "There are not enough available seats." : undefined}
-                  onClick={() => onUpdate(booking, "confirmed")}
-                >
-                  {isBusy ? <LoaderCircle className="rt-spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
-                  Confirm
-                </button>
+                {actions.map((action) => {
+                  const Icon = action.icon;
+                  const disabled = locked || Boolean(action.reason);
+                  return (
+                    <button
+                      key={`${action.kind}-${action.status}`}
+                      className={`rt-rides-request-button rt-rides-request-button--${action.tone}`}
+                      type="button"
+                      disabled={disabled}
+                      title={action.reason}
+                      onClick={() => {
+                        if (action.kind === "payment") onPayment(booking, action.status === "confirmed" ? "success" : "failed");
+                        else onBookingStatus(booking, action.status);
+                      }}
+                    >
+                      {isBusy ? <LoaderCircle className="rt-spin" size={15} aria-hidden="true" /> : <Icon size={15} aria-hidden="true" />}
+                      {action.label}
+                    </button>
+                  );
+                })}
               </div>
             </article>
           );
@@ -258,7 +397,8 @@ function RideCategorySection({
 }: RideCategorySectionProps) {
   const details = {
     upcoming: { title: "Upcoming", description: "Published rides that have not departed yet.", icon: CalendarClock },
-    active: { title: "Active", description: "Published rides that are ready to manage.", icon: CircleDot },
+    departed: { title: "Departed", description: "Your departure time has passed. Start the trip to begin the run.", icon: CircleDot },
+    onRoad: { title: "On the road", description: "Rides currently running. Pick up riders as they board, then end the trip.", icon: MapPin },
     completed: { title: "Completed", description: "Your finished ride history.", icon: CheckCircle2 },
     cancelled: { title: "Cancelled", description: "Rides that will no longer depart.", icon: History },
   }[category];
@@ -291,9 +431,16 @@ function RideCategorySection({
         <div className="rt-rides-grid">
           {rides.map((ride) => {
             const vehicle = vehicles.find((item) => item.id === ride.vehicleId);
-             const pending = pendingByRide.get(ride.id) ?? 0;
-             const hasDeparted = departureTime(ride) <= now;
-             const canComplete = ride.status === "active" && pending === 0;
+            const pending = pendingByRide.get(ride.id) ?? 0;
+            const hasDeparted = departureTime(ride) <= now;
+            const onRoad = ride.status === "in_progress";
+            /**
+             * The database is the real gate here: a ride cannot be completed
+             * from `active`, and cannot start twice. This only stops the button
+             * from inviting a request the schema will refuse.
+             */
+            const canStart = ride.status === "active";
+            const canEnd = onRoad;
             const lifecycleKey = `ride:${ride.id}`;
             const isBusy = busyKey === lifecycleKey;
             return (
@@ -316,44 +463,59 @@ function RideCategorySection({
                          <Edit3 size={16} aria-hidden="true" /> Edit ride
                        </Link>
                      ) : null}
-                     {ride.status === "active" ? (
-                      <>
-                        <button
-                          className="rt-rides-action rt-rides-action--danger"
-                          type="button"
-                          disabled={Boolean(busyKey)}
-                          onClick={() => onOpenLifecycle(ride, "cancel")}
-                        >
-                          <X size={16} aria-hidden="true" /> Cancel ride
-                        </button>
-                        <button
-                          className="rt-rides-action rt-rides-action--primary"
-                          type="button"
-                          disabled={!canComplete || Boolean(busyKey)}
-                           title={pending > 0 ? "Resolve every pending request before completing." : undefined}
-                          onClick={() => onOpenLifecycle(ride, "complete")}
-                        >
-                          {isBusy ? <LoaderCircle className="rt-spin" size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}
-                          Complete
-                        </button>
-                      </>
-                    ) : null}
+                     {canStart ? (
+                       <>
+                         <button
+                           className="rt-rides-action rt-rides-action--danger"
+                           type="button"
+                           disabled={Boolean(busyKey)}
+                           onClick={() => onOpenLifecycle(ride, "cancel")}
+                         >
+                           <X size={16} aria-hidden="true" /> Cancel ride
+                         </button>
+                         <button
+                           className="rt-rides-action rt-rides-action--primary"
+                           type="button"
+                           disabled={!canStart || Boolean(busyKey)}
+                           onClick={() => onOpenLifecycle(ride, "start")}
+                         >
+                           {isBusy ? <LoaderCircle className="rt-spin" size={16} aria-hidden="true" /> : <PlayCircle size={16} aria-hidden="true" />}
+                           Start trip
+                         </button>
+                       </>
+                     ) : null}
+                     {onRoad ? (
+                       <button
+                         className="rt-rides-action rt-rides-action--primary"
+                         type="button"
+                         disabled={!canEnd || Boolean(busyKey)}
+                         onClick={() => onOpenLifecycle(ride, "complete")}
+                       >
+                         {isBusy ? <LoaderCircle className="rt-spin" size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}
+                         End trip
+                       </button>
+                     ) : null}
                   </div>
                 )}
               >
                 <div className="rt-rides-context">
-                   {category === "active" ? <span className="rt-rides-pill rt-rides-pill--success"><CircleDot size={12} /> {hasDeparted ? "Departed" : "Active"}</span> : null}
+                   {ride.status === "active" ? <span className="rt-rides-pill rt-rides-pill--success"><CircleDot size={12} /> {hasDeparted ? "Departed" : "Active"}</span> : null}
+                   {onRoad ? <span className="rt-rides-pill rt-rides-pill--info"><MapPin size={12} /> On the road</span> : null}
                   {category === "cancelled" ? <span className="rt-rides-pill rt-rides-pill--danger"><X size={12} /> Cancelled</span> : null}
                   {category === "completed" ? <span className="rt-rides-pill rt-rides-pill--success"><ShieldCheck size={12} /> Completed</span> : null}
-                  {pending > 0 && ride.status === "active" ? <span className="rt-rides-pill rt-rides-pill--warning"><UsersRound size={12} /> {pending} pending</span> : null}
+                  {pending > 0 ? <span className="rt-rides-pill rt-rides-pill--warning"><UsersRound size={12} /> {pending} pending</span> : null}
                   {ride.status === "active" && !hasDeparted ? <span className="rt-rides-pill"><Clock3 size={12} /> Departs {formatDeparture(ride)}</span> : null}
                 </div>
-                {ride.status === "active" && !canComplete ? (
+                {ride.status === "active" && pending > 0 ? (
                   <p className="rt-rides-action-note">
                     <AlertCircle size={13} aria-hidden="true" />
-                     {pending > 0
-                       ? "Confirm or reject every pending request before completing."
-                       : "You can complete this journey when every request has been resolved."}
+                     Confirm or reject every pending request before starting this trip.
+                  </p>
+                ) : null}
+                {onRoad ? (
+                  <p className="rt-rides-action-note">
+                    <MapPin size={13} aria-hidden="true" />
+                    Your position is shared with riders in the roster above. End the trip once everyone has been dropped off.
                   </p>
                 ) : null}
               </RideCard>
@@ -374,7 +536,11 @@ export function MyRidesPage() {
     rides,
     bookings,
     updateBookingStatus,
+    markPickedUp,
+    markNoShow,
+    resolvePayment,
     cancelRide,
+    startRide,
     completeRide,
   } = useApp();
   const [selectedCategory, setSelectedCategory] = useState<RideCategory>("upcoming");
@@ -405,8 +571,11 @@ export function MyRidesPage() {
     const upcoming = driverRides
       .filter((ride) => ride.status === "active" && departureTime(ride) > now)
       .sort((first, second) => departureTime(first) - departureTime(second));
-    const active = driverRides
+    const departed = driverRides
       .filter((ride) => ride.status === "active" && departureTime(ride) <= now)
+      .sort((first, second) => departureTime(second) - departureTime(first));
+    const onRoad = driverRides
+      .filter((ride) => ride.status === "in_progress")
       .sort((first, second) => departureTime(second) - departureTime(first));
     const completed = driverRides
       .filter((ride) => ride.status === "completed")
@@ -414,40 +583,50 @@ export function MyRidesPage() {
     const cancelled = driverRides
       .filter((ride) => ride.status === "cancelled")
       .sort((first, second) => departureTime(second) - departureTime(first));
-    return { upcoming, active, completed, cancelled };
+    return { upcoming, departed, onRoad, completed, cancelled };
   }, [driverRides, now]);
 
   const pendingByRide = useMemo(() => {
     const counts = new Map<string, number>();
     driverRides.forEach((ride) => {
-      if (ride.status !== "active") return;
+      if (!isLiveRide(ride.status)) return;
       const count = bookings.filter((booking) => booking.rideId === ride.id && booking.status === "pending").length;
       if (count > 0) counts.set(ride.id, count);
     });
     return counts;
   }, [bookings, driverRides]);
 
-  const pendingRequests = useMemo(
-    () => driverRides
-      .filter((ride) => ride.status === "active")
+  /**
+   * One list of everything the host must act on, ordered by how blocking it is:
+   * riders waiting to board a trip that is already moving come first, then
+   * requests, then unpaid seats.
+   */
+  const roster = useMemo(() => {
+    const priority: Record<string, number> = { confirmed: 0, pending: 1, payment_pending: 2 };
+    return driverRides
+      .filter((ride) => isLiveRide(ride.status))
       .flatMap((ride) => bookings
-        .filter((booking) => booking.rideId === ride.id && booking.status === "pending")
+        .filter((booking) => booking.rideId === ride.id && rosterActionsFor(booking, ride).length > 0)
         .map((booking) => ({ booking, ride })))
-      .sort((first, second) => departureTime(first.ride) - departureTime(second.ride)),
-    [bookings, driverRides],
-  );
+      .sort((first, second) => (priority[first.booking.status] ?? 9) - (priority[second.booking.status] ?? 9)
+        || departureTime(first.ride) - departureTime(second.ride));
+  }, [bookings, driverRides]);
 
-  const activeRides = categories.upcoming.length + categories.active.length;
-  const confirmedPassengers = useMemo(
+  const activeRides = categories.upcoming.length + categories.departed.length + categories.onRoad.length;
+  const onBoardRiders = useMemo(
     () => bookings.filter((booking) => (
-      booking.status === "confirmed"
-      && driverRides.some((ride) => ride.id === booking.rideId && ride.status === "active")
+      booking.status === "picked_up"
+      && driverRides.some((ride) => ride.id === booking.rideId && ride.status === "in_progress")
     )).length,
     [bookings, driverRides],
   );
-  const availableSeats = categories.upcoming.concat(categories.active)
-    .reduce((total, ride) => total + Math.max(0, ride.availableSeats), 0);
-
+  const confirmedPassengers = useMemo(
+    () => bookings.filter((booking) => (
+      (booking.status === "confirmed" || booking.status === "picked_up")
+      && driverRides.some((ride) => ride.id === booking.rideId && isLiveRide(ride.status))
+    )).length,
+    [bookings, driverRides],
+  );
   const selectedRide = lifecycleDialog
     ? driverRides.find((ride) => ride.id === lifecycleDialog.rideId) ?? null
     : null;
@@ -455,20 +634,60 @@ export function MyRidesPage() {
     ? bookings.filter((booking) => booking.rideId === selectedRide.id && booking.status === "pending").length
     : 0;
   const selectedConfirmedCount = selectedRide
-    ? bookings.filter((booking) => booking.rideId === selectedRide.id && booking.status === "confirmed").length
+    ? bookings.filter((booking) => (
+      booking.rideId === selectedRide.id
+      && (booking.status === "confirmed" || booking.status === "picked_up")
+    )).length
+    : 0;
+  const selectedOnBoardCount = selectedRide
+    ? bookings.filter((booking) => booking.rideId === selectedRide.id && booking.status === "picked_up").length
     : 0;
 
-   const handleBookingUpdate = async (booking: Booking, status: BookingDecision) => {
-     const key = `booking:${booking.id}`;
-     if (busyKey) return;
-     setBusyKey(key);
+   const handleBookingStatus = async (booking: Booking, status: BookingStatus) => {
+    const key = `booking:${booking.id}`;
+    if (busyKey) return;
+    /**
+     * `rosterActionsFor` only offers states this context can actually reach.
+     * Boarding and no-show go through their own calls because each also moves
+     * seat accounting and notifies the right side; a bare status write would
+     * skip all of that. The guard makes an unreachable state a visible bug
+     * rather than a silently malformed request.
+     */
+    if (status !== "confirmed" && status !== "rejected" && status !== "picked_up" && status !== "no_show") return;
+    setBusyKey(key);
     setError("");
     setSuccess("");
     try {
-      await updateBookingStatus(booking.id, status);
-      setSuccess(status === "confirmed" ? "The passenger request was confirmed." : "The passenger request was rejected.");
+      /**
+       * Boarding and no-show are separate repository calls rather than generic
+       * status writes: each one also moves the seat accounting and notifies the
+       * right side, which a bare status update would skip.
+       */
+      if (status === "picked_up") await markPickedUp(booking.id);
+      else if (status === "no_show") await markNoShow(booking.id);
+      else await updateBookingStatus(booking.id, status);      setSuccess(BOOKING_SUCCESS[status]);
     } catch (caught) {
-      setError(errorText(caught, `We could not ${status === "confirmed" ? "confirm" : "reject"} this request.`));
+      setError(errorText(caught, BOOKING_ERROR[status]));
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const handlePayment = async (booking: Booking, outcome: PaymentOutcome) => {
+    const key = `booking:${booking.id}`;
+    if (busyKey) return;
+    setBusyKey(key);
+    setError("");
+    setSuccess("");
+    try {
+      await resolvePayment(booking.id, outcome);
+      setSuccess(outcome === "success"
+        ? "Payment recorded and the rider's seat is confirmed."
+        : "The payment was marked as not received and the seat released.");
+    } catch (caught) {
+      setError(errorText(caught, outcome === "success"
+        ? "We could not record this payment."
+        : "We could not release this seat."));
     } finally {
       setBusyKey("");
     }
@@ -489,30 +708,35 @@ export function MyRidesPage() {
 
   const confirmLifecycle = async () => {
     if (!lifecycleDialog || !selectedRide || busyKey) return;
-    if (selectedRide.status !== "active") {
-      setError("This ride is no longer active.");
+    const action = lifecycleDialog.action;
+    const required = action === "complete" ? "in_progress" : "active";
+    if (selectedRide.status !== required) {
+      setError(action === "complete"
+        ? "Only a trip that is already on the road can be ended."
+        : "This ride is no longer active.");
       return;
     }
-     if (lifecycleDialog.action === "complete") {
-       if (selectedPendingCount > 0) {
-        setError("Resolve every pending request before completing this ride.");
-        return;
-      }
+    if (action === "start" && selectedPendingCount > 0) {
+      setError("Confirm or reject every pending request before starting this ride.");
+      return;
     }
     setBusyKey(`ride:${selectedRide.id}`);
     setError("");
     setSuccess("");
     try {
-      if (lifecycleDialog.action === "cancel") {
+      if (action === "cancel") {
         await cancelRide(selectedRide.id);
         setSuccess("The ride was cancelled and its riders were notified.");
+      } else if (action === "start") {
+        await startRide(selectedRide.id);
+        setSuccess("The trip is on the road. Your position is now shared with your riders.");
       } else {
         await completeRide(selectedRide.id);
-        setSuccess("The ride is now marked as completed.");
+        setSuccess("The trip is now marked as completed and ratings are open.");
       }
       setLifecycleDialog(null);
     } catch (caught) {
-      setError(errorText(caught, lifecycleDialog.action === "cancel" ? "We could not cancel this ride." : "We could not complete this ride."));
+      setError(errorText(caught, LIFECYCLE_ERROR[action]));
     } finally {
       setBusyKey("");
     }
@@ -520,7 +744,8 @@ export function MyRidesPage() {
 
   const categoryTabs: Array<{ id: RideCategory; label: string; count: number }> = [
     { id: "upcoming", label: "Upcoming", count: categories.upcoming.length },
-    { id: "active", label: "Active", count: categories.active.length },
+    { id: "departed", label: "Departed", count: categories.departed.length },
+    { id: "onRoad", label: "On the road", count: categories.onRoad.length },
     { id: "completed", label: "Completed", count: categories.completed.length },
     { id: "cancelled", label: "Cancelled", count: categories.cancelled.length },
   ];
@@ -537,16 +762,22 @@ export function MyRidesPage() {
         />
 
         <section className="rt-rides-summary" aria-label="Ride overview">
-          <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><RouteIcon size={19} /></span><div><strong>{activeRides}</strong><span>Active & upcoming</span></div></div>
+          <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><RouteIcon size={19} /></span><div><strong>{activeRides}</strong><span>Open rides</span></div></div>
           <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><UsersRound size={19} /></span><div><strong>{confirmedPassengers}</strong><span>Confirmed riders</span></div></div>
-          <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><UserRoundCheck size={19} /></span><div><strong>{pendingRequests.length}</strong><span>Pending requests</span></div></div>
-          <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><ShieldCheck size={19} /></span><div><strong>{availableSeats}</strong><span>Seats available</span></div></div>
+          <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><UserRoundCheck size={19} /></span><div><strong>{roster.length}</strong><span>Need action</span></div></div>
+          <div className="rt-rides-stat"><span className="rt-rides-stat-icon"><MapPin size={19} /></span><div><strong>{onBoardRiders}</strong><span>On board now</span></div></div>
         </section>
 
         {error && !lifecycleDialog ? <div className="rt-rides-alert" role="alert"><AlertCircle size={17} />{error}</div> : null}
         {success && !lifecycleDialog ? <div className="rt-rides-alert rt-rides-alert-success" role="status"><CheckCircle2 size={17} />{success}</div> : null}
 
-        <RideRequests requests={pendingRequests} users={users} now={now} busyKey={busyKey} onUpdate={(booking, status) => void handleBookingUpdate(booking, status)} />
+        <RideRoster
+          rows={roster}
+          users={users}
+          busyKey={busyKey}
+          onBookingStatus={(booking, status) => void handleBookingStatus(booking, status)}
+          onPayment={(booking, outcome) => void handlePayment(booking, outcome)}
+        />
 
         <nav className="rt-rides-tabs" aria-label="Ride status">
           {categoryTabs.map((tab) => (
@@ -578,35 +809,49 @@ export function MyRidesPage() {
       <Modal
         isOpen={Boolean(lifecycleDialog && selectedRide)}
         onClose={closeLifecycle}
-        title={lifecycleDialog?.action === "cancel" ? "Cancel this ride?" : "Complete this ride?"}
+        title={lifecycleDialog ? LIFECYCLE_TITLE[lifecycleDialog.action] : ""}
         size="small"
         footer={(
           <div className="rt-rides-modal-footer">
-            <button className="rt-rides-action rt-rides-action--secondary" type="button" disabled={busyKey.startsWith("ride:")} onClick={closeLifecycle}>Keep ride</button>
+            <button className="rt-rides-action rt-rides-action--secondary" type="button" disabled={busyKey.startsWith("ride:")} onClick={closeLifecycle}>
+              {lifecycleDialog?.action === "complete" ? "Keep running" : "Go back"}
+            </button>
             <button
               className={`rt-rides-action ${lifecycleDialog?.action === "cancel" ? "rt-rides-action--danger" : "rt-rides-action--primary"}`}
               type="button"
               disabled={busyKey.startsWith("ride:")}
               onClick={() => void confirmLifecycle()}
             >
-              {busyKey.startsWith("ride:") ? <LoaderCircle className="rt-spin" size={16} /> : lifecycleDialog?.action === "cancel" ? <X size={16} /> : <CheckCircle2 size={16} />}
-              {lifecycleDialog?.action === "cancel" ? "Cancel ride" : "Mark completed"}
+              {busyKey.startsWith("ride:")
+                ? <LoaderCircle className="rt-spin" size={16} />
+                : lifecycleDialog?.action === "cancel" ? <X size={16} />
+                  : lifecycleDialog?.action === "start" ? <PlayCircle size={16} /> : <CheckCircle2 size={16} />}
+              {lifecycleDialog ? LIFECYCLE_CONFIRM[lifecycleDialog.action] : ""}
             </button>
           </div>
         )}
       >
-        {selectedRide ? (
+        {selectedRide && lifecycleDialog ? (
           <div className="rt-rides-modal-copy">
-            <p>
-              {lifecycleDialog?.action === "cancel"
-                ? `This will cancel ${selectedRide.origin.label} to ${selectedRide.destination.label} for everyone.`
-                : `This marks ${selectedRide.origin.label} to ${selectedRide.destination.label} as completed and makes it available for trip ratings.`}
-            </p>
-            {lifecycleDialog?.action === "cancel" && selectedConfirmedCount > 0 ? (
-              <div className="rt-rides-modal-warning"><AlertCircle size={17} /><span>{selectedConfirmedCount} confirmed {selectedConfirmedCount === 1 ? "rider has" : "riders have"} been booked. They will be notified that this ride was cancelled.</span></div>
+            <p>{LIFECYCLE_COPY[lifecycleDialog.action](selectedRide)}</p>
+            {lifecycleDialog.action === "cancel" && selectedConfirmedCount > 0 ? (
+              <div className="rt-rides-modal-warning"><AlertCircle size={17} /><span>{selectedConfirmedCount} booked {selectedConfirmedCount === 1 ? "rider has" : "riders have"} been notified that this ride was cancelled.</span></div>
             ) : null}
-            {lifecycleDialog?.action === "complete" ? (
-              <div className="rt-rides-modal-warning" style={{ color: "#536159", background: "#f1f6f3" }}><ShieldCheck size={17} /><span>Only complete the ride after the journey has finished. This action changes the booking and rating flow.</span></div>
+            {lifecycleDialog.action === "start" ? (
+              <>
+                {selectedPendingCount > 0 ? (
+                  <div className="rt-rides-modal-warning"><AlertCircle size={17} /><span>{selectedPendingCount} {selectedPendingCount === 1 ? "request is" : "requests are"} still unanswered. Confirm or reject them first.</span></div>
+                ) : null}
+                <div className="rt-rides-modal-note"><Navigation size={17} /><span>Your position starts sharing with riders and stops as soon as you end the trip.</span></div>
+              </>
+            ) : null}
+            {lifecycleDialog.action === "complete" ? (
+              <>
+                <div className="rt-rides-modal-note"><ShieldCheck size={17} /><span>Riders still marked confirmed are recorded as no-shows, and everyone can now rate this trip.</span></div>
+                {selectedOnBoardCount > 0 ? (
+                  <div className="rt-rides-modal-note"><UsersRound size={17} /><span>{selectedOnBoardCount} {selectedOnBoardCount === 1 ? "rider is" : "riders are"} still on board and will be marked as completed.</span></div>
+                ) : null}
+              </>
             ) : null}
             {error ? <div className="rt-rides-alert" role="alert"><AlertCircle size={16} />{error}</div> : null}
           </div>

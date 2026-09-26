@@ -12,11 +12,28 @@ import type { Coordinates } from "../types";
 export type RideMapSelectionTarget = "origin" | "destination" | "waypoint";
 export type MapCoordinate = Pick<Coordinates, "lat" | "lon">;
 
+export interface LivePosition {
+  lat: number;
+  lon: number;
+  heading?: number;
+  /** Older than the freshness window; drawn dimmer and labelled as such. */
+  stale?: boolean;
+}
+
 export interface RideMapProps {
   origin?: Coordinates;
   destination?: Coordinates;
   waypoints?: Coordinates[];
   route?: [number, number][];
+  /**
+   * The host's current position on a running ride.
+   *
+   * Rendered by its own effect rather than as another route marker, because it
+   * must not re-fit the viewport: the marker moves every few seconds, and
+   * calling `fitBounds` each time would drag the map out from under somebody
+   * reading it.
+   */
+  liveLocation?: LivePosition | null;
   className?: string;
   interactive?: boolean;
   selectionTarget?: RideMapSelectionTarget | null;
@@ -49,11 +66,31 @@ function createMarkerElement(kind: MarkerKind, index?: number): HTMLDivElement {
   return element;
 }
 
+/**
+ * The driver's car, as a dot with a heading arrow.
+ *
+ * The arrow is rotated in place when a new fix arrives rather than by recreating
+ * the marker, so a passenger watching the map sees the car turn instead of the
+ * marker blinking out and back.
+ */
+function createLiveMarkerElement(heading?: number): HTMLDivElement {
+  const element = document.createElement("div");
+  element.className = "ride-map-marker ride-map-live";
+  element.setAttribute("aria-label", "Driver's current position");
+  element.innerHTML = '<span class="ride-map-live__arrow"></span>';
+  const arrow = element.querySelector<HTMLElement>(".ride-map-live__arrow");
+  if (arrow && typeof heading === "number" && Number.isFinite(heading)) {
+    arrow.style.transform = `rotate(${heading}deg)`;
+  }
+  return element;
+}
+
 export function RideMap({
   origin,
   destination,
   waypoints = [],
   route,
+  liveLocation = null,
   className = "",
   interactive = true,
   selectionTarget = null,
@@ -63,6 +100,7 @@ export function RideMap({
   const mapRef = useRef<MapLibreMap | null>(null);
   const readyMapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<MapLibreMarker[]>([]);
+  const liveMarkerRef = useRef<MapLibreMarker | null>(null);
   const onPickLocationRef = useRef(onPickLocation);
   const [isMapReady, setIsMapReady] = useState(false);
   const waypointKey = waypoints.map((waypoint) => `${waypoint.lat},${waypoint.lon}`).join("|");
@@ -119,6 +157,8 @@ export function RideMap({
       map.off("click", handleMapClick);
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
+      liveMarkerRef.current?.remove();
+      liveMarkerRef.current = null;
       readyMapRef.current = null;
       map.remove();
       mapRef.current = null;
@@ -217,6 +257,55 @@ export function RideMap({
       map.easeTo({ center: fitPoints[0], zoom: Math.max(map.getZoom(), 12), duration: 500 });
     }
   }, [destination, isMapReady, origin, route, waypointKey]);
+
+  /**
+   * Driver position, tracked on primitives rather than on the object identity
+   * so a parent re-render with a freshly built object does not tear the marker
+   * down and put it back. Deliberately no `fitBounds` here.
+   */
+  const liveLat = liveLocation?.lat ?? null;
+  const liveLon = liveLocation?.lon ?? null;
+  const liveHeading = liveLocation?.heading ?? null;
+  const liveStale = liveLocation?.stale ?? false;
+
+  useEffect(() => {
+    const map = readyMapRef.current;
+    if (!map || !isMapReady) return;
+
+    if (
+      liveLat === null
+      || liveLon === null
+      || !Number.isFinite(liveLat)
+      || !Number.isFinite(liveLon)
+      || liveLat < -90
+      || liveLat > 90
+      || liveLon < -180
+      || liveLon > 180
+    ) {
+      liveMarkerRef.current?.remove();
+      liveMarkerRef.current = null;
+      return;
+    }
+
+    const existing = liveMarkerRef.current;
+    if (existing) {
+      existing.setLngLat([liveLon, liveLat]);
+      const element = existing.getElement();
+      element.classList.toggle("ride-map-live--stale", liveStale);
+      const arrow = element.querySelector<HTMLElement>(".ride-map-live__arrow");
+      if (arrow && liveHeading !== null && Number.isFinite(liveHeading)) {
+        arrow.style.transform = `rotate(${liveHeading}deg)`;
+      }
+      return;
+    }
+
+    liveMarkerRef.current = new maplibregl.Marker({
+      element: createLiveMarkerElement(liveHeading ?? undefined),
+      anchor: "center",
+    })
+      .setLngLat([liveLon, liveLat])
+      .addTo(map);
+  }, [isMapReady, liveHeading, liveLat, liveLon, liveStale]);
 
   return (
     <div

@@ -11,7 +11,36 @@
 
 const SW_URL = "/sw.js";
 
+/**
+ * How long a caller will wait for a worker to become active.
+ *
+ * `navigator.serviceWorker.ready` is the obvious way to get a registration, but
+ * it does not reject: if the worker never installs - a 404 on `sw.js`, a wrong
+ * MIME type, a blocked script, an insecure origin - the promise simply never
+ * settles. Anything awaiting it (which used to be the whole push opt-in flow)
+ * waits forever with no error and no way for the member to recover. Every wait
+ * on `ready` therefore races this deadline.
+ */
+const WORKER_READY_TIMEOUT_MS = 10_000;
+
 let registrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
+
+/** Resolves `promise`, or `fallback` once `ms` have passed. Never rejects. */
+const settleWithin = async <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+};
 
 export const isServiceWorkerSupported = (): boolean =>
   typeof navigator !== "undefined" && "serviceWorker" in navigator;
@@ -33,6 +62,14 @@ export const registerServiceWorker = async (): Promise<ServiceWorkerRegistration
 
       const registration = await navigator.serviceWorker.register(SW_URL, {
         scope: "/",
+        // Without this the browser is allowed to satisfy the worker-script request
+        // from its own HTTP cache, and a CDN or host that serves `sw.js` with a
+        // long `max-age` will keep an old worker alive indefinitely. That is how an
+        // installed PWA ends up running a worker that has no working `push`
+        // handler while the deployed file clearly has one. `"none"` makes the
+        // update check always go to the network, so `skipWaiting()` below can
+        // actually install a new worker.
+        updateViaCache: "none",
       });
 
       if (import.meta.env.DEV) {
@@ -70,6 +107,66 @@ export const getServiceWorkerRegistration = async (): Promise<ServiceWorkerRegis
   } catch {
     return null;
   }
+};
+
+/** True when this page is actually controlled by an active service worker. */
+export const isPageControlled = (): boolean =>
+  isServiceWorkerSupported() && navigator.serviceWorker.controller !== null;
+
+/**
+ * A registration whose worker is active, without ever blocking forever.
+ *
+ * `ready` resolves only once a worker is active, and a page that is merely
+ * *registered* is not enough: `PushManager` lives on the active worker, so a
+ * registration still installing cannot deliver anything. Returns `null` rather
+ * than hanging, so callers can report a real failure.
+ */
+export const getActiveServiceWorkerRegistration = async (): Promise<ServiceWorkerRegistration | null> => {
+  if (!isServiceWorkerSupported()) return null;
+
+  const ready = await settleWithin<ServiceWorkerRegistration | null>(
+    navigator.serviceWorker.ready,
+    WORKER_READY_TIMEOUT_MS,
+    null,
+  );
+  if (ready) return ready;
+
+  // `ready` timed out, so nothing is active. A registration may still be
+  // installing or waiting; report nothing rather than a half-usable worker.
+  const existing = await settleWithin<ServiceWorkerRegistration | null>(
+    navigator.serviceWorker
+      .getRegistration("/")
+      .then((found) => found ?? null)
+      .catch(() => null),
+    2_000,
+    null,
+  );
+  return existing?.active ? existing : null;
+};
+
+/**
+ * Registers the worker if it is not registered yet, then waits - with a
+ * deadline - for one to become active.
+ *
+ * This is the path a member takes when they press "Enable notifications", so it
+ * must both repair a missing worker and give up loudly rather than spin.
+ */
+export const ensureActiveServiceWorker = async (): Promise<ServiceWorkerRegistration | null> => {
+  if (!isServiceWorkerSupported()) return null;
+
+  const existing = await getActiveServiceWorkerRegistration();
+  if (existing) return existing;
+
+  // Boot may never have run (the app was already open when the worker was
+  // broken, or the member landed straight here), so register explicitly. This
+  // reuses the module-level promise, so a worker is never installed twice.
+  await registerServiceWorker();
+
+  return settleWithin<ServiceWorkerRegistration | null>(
+    navigator.serviceWorker.ready,
+    WORKER_READY_TIMEOUT_MS,
+    null,
+  );
 };
 
 /* ---------------------------------------------------------------------------

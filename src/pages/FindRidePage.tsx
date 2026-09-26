@@ -7,6 +7,7 @@ import {
   Clock3,
   Crosshair,
   LoaderCircle,
+  MapPin,
   MapPinned,
   Navigation,
   Route as RouteIcon,
@@ -17,10 +18,26 @@ import LocationSearch from "../components/LocationSearch";
 import RideCard from "../components/RideCard";
 import RideMap, { type MapCoordinate, type RideMapSelectionTarget } from "../components/RideMap";
 import { DraftBanner } from "../components/DraftBanner";
+import { BOOKING_STATUS_META } from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
 import { useDraft } from "../services/drafts";
 import { reverseGeocodeLocation } from "../services/geocoding";
-import { getRoute, haversineDistanceKm } from "../services/routing";
+import { getRoute } from "../services/routing";
+import {
+  applyDetourResults,
+  MATCH_DEFAULTS,
+  measureDetours,
+  minutesBetween,
+  rankRideMatches,
+  type LocalMatch,
+} from "../services/matching";
+import {
+  buildPickupProposal,
+  verifyPickupPairing,
+  type PickupCandidate,
+  type PickupProposal,
+} from "../services/pickup";
+import { ACTIVE_BOOKING_STATUSES } from "../types";
 import type { Coordinates, Ride, RouteResult } from "../types";
 
 /** Unfinished "find a ride" search, persisted per user. */
@@ -34,16 +51,12 @@ interface FindDraft {
   searched: boolean;
 }
 
-const ENDPOINT_PROXIMITY_KM = 50;
-const ROUTE_PROXIMITY_KM = 75;
-const ROUTE_DIRECTION_EPSILON = 0.03;
-const TIME_TOLERANCE_MINUTES = 180;
-const MAX_CANDIDATE_RIDES = 8;
-
-interface SearchMatch {
-  ride: Ride;
-  route: RouteResult;
-}
+/**
+ * Only a handful of rides are re-routed for detour measurement, because that is
+ * the one part of matching that costs a network round trip each. The rest of the
+ * screen is answered from stored geometry.
+ */
+const MAX_DETOUR_MATCHES = 6;
 
 const localDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -52,75 +65,8 @@ const localDateKey = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
-const timeToMinutes = (value: string) => {
-  const [hours, minutes] = value.split(":").map(Number);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    return Number.NaN;
-  }
-  return hours * 60 + minutes;
-};
-
 const rideDepartureTimestamp = (ride: Ride) =>
   new Date(ride.departureDate.includes("T") ? ride.departureDate : `${ride.departureDate}T${ride.departureTime || "00:00"}`).getTime();
-
-interface RouteProjection {
-  distanceKm: number;
-  progress: number;
-}
-
-const projectPointToRoute = (
-  point: Coordinates,
-  geometry: [number, number][],
-): RouteProjection => {
-  if (geometry.length === 0) {
-    return { distanceKm: Number.POSITIVE_INFINITY, progress: 0 };
-  }
-  if (geometry.length === 1) {
-    return {
-      distanceKm: haversineDistanceKm(point, { lat: geometry[0][1], lon: geometry[0][0], label: "" }),
-      progress: 0,
-    };
-  }
-
-  const referenceLatitude = (point.lat * Math.PI) / 180;
-  const longitudeScale = Math.cos(referenceLatitude);
-  const pointX = point.lon * longitudeScale;
-  const pointY = point.lat;
-  let shortest = Number.POSITIVE_INFINITY;
-  let shortestProgress = 0;
-
-  for (let index = 1; index < geometry.length; index += 1) {
-    const start = geometry[index - 1];
-    const end = geometry[index];
-    const startX = start[0] * longitudeScale;
-    const endX = end[0] * longitudeScale;
-    const startY = start[1];
-    const endY = end[1];
-    const deltaX = endX - startX;
-    const deltaY = endY - startY;
-    const lengthSquared = deltaX * deltaX + deltaY * deltaY;
-    const projection = lengthSquared === 0
-      ? 0
-      : Math.max(0, Math.min(1, ((pointX - startX) * deltaX + (pointY - startY) * deltaY) / lengthSquared));
-    const closestX = startX + projection * deltaX;
-    const closestY = startY + projection * deltaY;
-    const distance = Math.sqrt((pointX - closestX) ** 2 + (pointY - closestY) ** 2) * 111.32;
-    if (distance < shortest) {
-      shortest = distance;
-      shortestProgress = (index - 1 + projection) / (geometry.length - 1);
-    }
-  }
-
-  return { distanceKm: shortest, progress: shortestProgress };
-};
-
-const distanceToRouteKm = (point: Coordinates, geometry: [number, number][]) =>
-  projectPointToRoute(point, geometry).distanceKm;
-
-const circularTimeDifference = (first: number, second: number) => {
-  const difference = Math.abs(first - second);
-  return Math.min(difference, 24 * 60 - difference);
-};
 
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
@@ -221,9 +167,39 @@ const findStyles = `
 .rt-find-page .results-section h2 { margin: 6px 0 0; color: #1d3b27; font-size: 1.35rem; letter-spacing: -.03em; }
 .rt-find-page .results-caption { color: #7b897f; font-size: .75rem; }
 .rt-find-page .results-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.rt-find-page .result-card-wrap { min-width: 0; }
-.rt-find-page .result-card-wrap .ride-card { height: calc(100% - 67px); }
-.rt-find-page .result-booking-bar { display: flex; align-items: center; gap: 7px; min-height: 67px; padding: 10px; border: 1px solid #dbe8de; border-top: 0; border-radius: 0 0 16px 16px; background: #fff; box-shadow: 0 10px 24px rgba(32,75,45,.05); }
+.rt-find-page .result-card-wrap { display: flex; flex-direction: column; min-width: 0; }
+.rt-find-page .result-card-wrap .ride-card { flex: 1 1 auto; }
+.rt-find-page .match-card { margin-bottom: 12px; padding: 13px 14px; border: 1px solid #dbe8de; border-top: 0; border-radius: 0 0 16px 16px; background: #f6fbf8; box-shadow: 0 10px 24px rgba(32,75,45,.05); }
+.rt-find-page .match-score { display: flex; align-items: center; gap: 10px; }
+.rt-find-page .match-score-value { display: inline-flex; align-items: baseline; gap: 3px; padding: 5px 9px; border-radius: 9px; color: #12633a; background: #ddf2e5; font-size: .95rem; font-weight: 800; letter-spacing: -.02em; }
+.rt-find-page .match-score-value small { font-size: .58rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; opacity: .72; }
+.rt-find-page .match-score-note { color: #64766b; font-size: .67rem; line-height: 1.35; }
+.rt-find-page .match-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin: 11px 0 0; padding: 0; list-style: none; }
+.rt-find-page .match-facts li { display: flex; align-items: flex-start; gap: 6px; color: #4d6356; font-size: .68rem; line-height: 1.35; }
+.rt-find-page .match-facts svg { flex: 0 0 auto; margin-top: 1px; color: #159447; }
+.rt-find-page .match-facts strong { color: #2a4634; font-weight: 800; }
+.rt-find-page .match-weak { color: #8a6a1f; }
+.rt-find-page .match-unmeasured { color: #7b611e; }
+.rt-find-page .pickup-toggle { display: inline-flex; align-items: center; gap: 5px; margin-top: 11px; padding: 0; border: 0; color: #116b39; background: transparent; font: inherit; font-size: .71rem; font-weight: 780; cursor: pointer; }
+.rt-find-page .pickup-toggle:hover { color: #0b5228; text-decoration: underline; text-underline-offset: 3px; }
+.rt-find-page .pickup-panel { margin-top: 11px; padding: 12px; border: 1px solid #d5e7da; border-radius: 13px; background: #fff; }
+.rt-find-page .pickup-panel h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; color: #2b4634; font-size: .78rem; }
+.rt-find-page .pickup-panel h4 svg { color: #159447; }
+.rt-find-page .pickup-panel > p { margin: 0 0 10px; color: #6d7c72; font-size: .68rem; line-height: 1.45; }
+.rt-find-page .pickup-group + .pickup-group { margin-top: 12px; }
+.rt-find-page .pickup-group > span { display: block; margin-bottom: 6px; color: #405448; font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.rt-find-page .pickup-option { display: flex; align-items: flex-start; gap: 8px; width: 100%; margin-top: 6px; padding: 8px 9px; border: 1px solid #e0eae2; border-radius: 10px; color: #3c5445; background: #fff; font: inherit; font-size: .69rem; line-height: 1.4; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.rt-find-page .pickup-option:hover { border-color: #9fd3b1; background: #f4fbf6; }
+.rt-find-page .pickup-option.is-selected { border-color: #159447; background: #eff9f2; box-shadow: inset 0 0 0 1px rgba(21,148,71,.28); }
+.rt-find-page .pickup-option-radio { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 1px; border: 1.5px solid #b6c9bc; border-radius: 50%; }
+.rt-find-page .pickup-option.is-selected .pickup-option-radio { border-color: #159447; background: radial-gradient(circle, #159447 0 45%, transparent 48%); }
+.rt-find-page .pickup-option-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rt-find-page .pickup-option-label { color: #2c4a37; font-weight: 750; }
+.rt-find-page .pickup-option-walk { color: #718077; }
+.rt-find-page .pickup-notice { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 9px 10px; border-radius: 10px; color: #7b611e; background: #fff8e5; font-size: .68rem; line-height: 1.45; }
+.rt-find-page .pickup-notice svg { flex: 0 0 auto; margin-top: 1px; }
+.rt-find-page .pickup-verified { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #e6efe8; color: #12633a; font-size: .67rem; font-weight: 750; }
+.rt-find-page .result-booking-bar { display: flex; align-items: center; gap: 7px; min-height: 67px; margin-top: auto; padding: 10px; border: 1px solid #dbe8de; border-top: 0; border-radius: 0 0 16px 16px; background: #fff; box-shadow: 0 10px 24px rgba(32,75,45,.05); }
 .rt-find-page .result-booking-bar label { margin-right: auto; color: #67776d; font-size: .69rem; font-weight: 700; }
 .rt-find-page .result-booking-bar select { width: 48px; min-height: 36px; padding: 5px 7px; }
 .rt-find-page .result-booking-bar .btn { min-height: 36px; padding: 0 10px; font-size: .72rem; }
@@ -253,6 +229,7 @@ const findStyles = `
   .rt-find-page .route-summary { justify-content: flex-start; margin-top: 10px; }
   .rt-find-page .map-wrap, .rt-find-page .ride-map { min-height: 310px; }
   .rt-find-page .results-section { margin-top: 36px; }
+  .rt-find-page .match-facts { grid-template-columns: 1fr; }
   .rt-find-page .result-booking-bar { flex-wrap: wrap; }
   .rt-find-page .result-booking-bar label { width: 100%; }
   .rt-find-page .result-booking-bar select { flex: 1; }
@@ -296,7 +273,11 @@ export default function FindRidePage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [searchNotice, setSearchNotice] = useState("");
-  const [results, setResults] = useState<SearchMatch[]>([]);
+  const [results, setResults] = useState<LocalMatch[]>([]);
+  /** Ride id whose meeting-point panel is open. Only one at a time, on purpose. */
+  const [pickupOpenRideId, setPickupOpenRideId] = useState<string | null>(null);
+  const [pickupChoice, setPickupChoice] = useState<Record<string, { pickupId: string; dropoffId: string }>>({});
+  const [verifyingRideId, setVerifyingRideId] = useState<string | null>(null);
    const [bookingRideId, setBookingRideId] = useState("");
    const [bookingSeatsByRide, setBookingSeatsByRide] = useState<Record<string, number>>({});
   const [bookingError, setBookingError] = useState("");
@@ -408,22 +389,34 @@ export default function FindRidePage() {
     setSearchNotice("");
     setBookingError("");
     setBookingSuccess("");
+    setPickupOpenRideId(null);
+    setPickupChoice({});
   };
 
    useEffect(() => {
-     searchRequest.current += 1;
-     searchController.current?.abort();
-     searchController.current = null;
-     setSearchLoading(false);
+      searchRequest.current += 1;
+      searchController.current?.abort();
+      searchController.current = null;
+      setSearchLoading(false);
     setResults([]);
     setSearchError("");
     setSearchNotice("");
     setBookingError("");
     setBookingSuccess("");
+    setPickupOpenRideId(null);
+    setPickupChoice({});
   }, [activeUserId]);
 
+  /**
+   * Live revalidation.
+   *
+   * A published ride can be edited, filled up or cancelled by somebody else while
+   * this page is open, and a seat count that came back over the realtime channel
+   * has to take a result off the screen immediately. The pickup and drop-off a
+   * rider had already chosen are kept, because they are still valid for the same
+   * route.
+   */
   useEffect(() => {
-    const selectedTime = timeToMinutes(time);
     setResults((current) =>
       current.flatMap((match) => {
         const currentRide = rides.find((item) => item.id === match.ride.id);
@@ -431,8 +424,10 @@ export default function FindRidePage() {
         if (currentRide.departureDate !== date || currentRide.availableSeats < seats) return [];
         const departure = rideDepartureTimestamp(currentRide);
         if (!Number.isFinite(departure) || departure <= Date.now()) return [];
-        const rideTime = timeToMinutes(currentRide.departureTime);
-        if (Number.isFinite(selectedTime) && Number.isFinite(rideTime) && circularTimeDifference(selectedTime, rideTime) > TIME_TOLERANCE_MINUTES) return [];
+        const timeDifference = minutesBetween(currentRide.departureTime, time);
+        if (timeDifference !== null && Math.abs(timeDifference) > MATCH_DEFAULTS.maxTimeWindowMinutes) {
+          return [];
+        }
         return [{ ...match, ride: currentRide }];
       }),
     );
@@ -564,106 +559,130 @@ export default function FindRidePage() {
      setSearchLoading(true);
     setSearchError("");
     setSearchNotice("");
-    const selectedTime = timeToMinutes(time);
     // Remember that this exact search was run, so restoring the draft re-runs it.
     setFormValue((current) => ({ ...current, searched: true }));
 
     try {
       // The date, seat and self-exclusion filters run in Postgres so only
-      // relevant candidates cross the network. Time tolerance, endpoint
-      // proximity and route compatibility stay client-side because they need
-      // the caller's exact origin and destination.
+      // relevant candidates cross the network. Everything after that needs the
+      // rider's exact origin and destination, and runs here.
       const serverCandidates = await searchRides({ origin, destination, date, time, seats });
       if (searchRequest.current !== requestId) return;
 
-      const matchingCandidates = serverCandidates.filter((ride) => {
+      const candidates = serverCandidates.filter((ride) => {
         if (ride.status !== "active" || ride.driverId === activeUserId) return false;
         if (ride.availableSeats < seats) return false;
+        if (ride.departureDate !== date) return false;
         const departure = rideDepartureTimestamp(ride);
-        if (!Number.isFinite(departure) || departure <= Date.now()) return false;
-        const rideTime = timeToMinutes(ride.departureTime);
-        if (
-          Number.isFinite(selectedTime)
-          && Number.isFinite(rideTime)
-          && circularTimeDifference(selectedTime, rideTime) > TIME_TOLERANCE_MINUTES
-        ) {
-          return false;
-        }
-        return (
-          haversineDistanceKm(origin, ride.origin) <= ENDPOINT_PROXIMITY_KM
-          && haversineDistanceKm(destination, ride.destination) <= ENDPOINT_PROXIMITY_KM
-        );
+        return Number.isFinite(departure) && departure > Date.now();
       });
-      const candidates = matchingCandidates
-        .sort((first, second) =>
-          haversineDistanceKm(origin, first.origin) + haversineDistanceKm(destination, first.destination)
-          - haversineDistanceKm(origin, second.origin) - haversineDistanceKm(destination, second.destination),
-        )
-        .slice(0, MAX_CANDIDATE_RIDES);
 
-      const routeErrors: string[] = [];
-      const checked = await Promise.all(
-        candidates.map(async (ride) => {
-          try {
-            const route = await getRoute(ride.origin, ride.destination, ride.waypoints, { signal: controller.signal });
-            const originProjection = projectPointToRoute(origin, route.geometry);
-            const destinationProjection = projectPointToRoute(destination, route.geometry);
-            const directionCompatible =
-              destinationProjection.progress - originProjection.progress
-              >= ROUTE_DIRECTION_EPSILON;
-            return originProjection.distanceKm <= ROUTE_PROXIMITY_KM
-              && destinationProjection.distanceKm <= ROUTE_PROXIMITY_KM
-              && directionCompatible
-              ? { ride, route }
-              : null;
-          } catch (error: unknown) {
-            if (isAbortError(error)) throw error;
-            routeErrors.push(errorMessage(error, "The route service could not check this ride."));
-            return null;
-          }
-        }),
-      );
+      if (candidates.length === 0) {
+        setResults([]);
+        setSearchNotice("");
+        setSearchError("No published rides are open for that date and seat count.");
+        return;
+      }
+
+      // Stage 1, entirely local: project the rider's trip onto each stored road
+      // corridor. A ride whose road does not pass near both ends, or that does
+      // not go the right way, never reaches the network stage.
+      const localMatches = rankRideMatches(candidates, { origin, destination, time });
+      const offCorridor = candidates.length - localMatches.length;
+
+      if (localMatches.length === 0) {
+        setResults([]);
+        setSearchError(
+          "No ride on that date follows a road through both your pickup and your drop-off. "
+          + "Try a nearby starting point, or look at another date.",
+        );
+        return;
+      }
+
+      // Stage 2, network: re-route the best few with the passenger inserted, so
+      // the cost to the driver is measured rather than guessed.
+      const detourTargets = localMatches.slice(0, MAX_DETOUR_MATCHES);
+      const detours = await measureDetours(detourTargets, { signal: controller.signal });
       if (searchRequest.current !== requestId) return;
 
-        const matched = checked.filter((match): match is SearchMatch => match !== null);
-        const checkedRoutes = candidates.length - matched.length - routeErrors.length;
-        const omittedRoutes = matchingCandidates.length - candidates.length;
-        const notices: string[] = [];
-        if (omittedRoutes > 0) {
-          notices.push(`Showing the ${candidates.length} nearest of ${matchingCandidates.length} matching rides.`);
-        }
-        if (checkedRoutes > 0) {
-          notices.push(`${checkedRoutes} nearby ${checkedRoutes === 1 ? "ride was" : "rides were"} excluded after route compatibility checks.`);
-        }
-        if (notices.length > 0) setSearchNotice(notices.join(" "));
-        if (routeErrors.length > 0) {
-          setSearchError(
-            `${routeErrors.length} nearby ${routeErrors.length === 1 ? "ride could" : "rides could"} not be checked because the route service failed. ${routeErrors[0]}`,
-          );
-        }
-        setResults(matched.sort((first, second) => {
-         const firstDistance = haversineDistanceKm(origin, first.ride.origin) + haversineDistanceKm(destination, first.ride.destination);
-         const secondDistance = haversineDistanceKm(origin, second.ride.origin) + haversineDistanceKm(destination, second.ride.destination);
-         return firstDistance - secondDistance;
-       }));
-        if (matched.length === 0 && routeErrors.length === 0) {
-         setSearchError("No compatible rides matched those details. Try a nearby time or fewer seats.");
-       }
-      } catch (error: unknown) {
-       if (searchRequest.current === requestId && !isAbortError(error)) {
-         setSearchError(errorMessage(error, "We could not check those rides right now."));
-       }
-      } finally {
-        if (searchController.current === controller) searchController.current = null;
-        if (searchRequest.current === requestId) {
-          setSearchLoading(false);
-        }
+      const measured = applyDetourResults(detourTargets, detours);
+      // Rides past the measurement budget keep their local score rather than
+      // being dropped, but they are shown after the measured ones and say so.
+      const unmeasured = localMatches
+        .slice(MAX_DETOUR_MATCHES)
+        .map((match) => ({ ...match, unmeasured: true as const }));
+      const finalMatches = [...measured, ...unmeasured];
+
+      const notices: string[] = [];
+      if (offCorridor > 0) {
+        notices.push(
+          `${offCorridor} of ${candidates.length} ${offCorridor === 1 ? "ride does" : "rides do"} not travel along a road through both your pickup and your drop-off.`,
+        );
       }
+      const overDetour = localMatches.length - measured.length - unmeasured.length;
+      if (overDetour > 0) {
+        notices.push(
+          `${overDetour} ${overDetour === 1 ? "ride adds" : "rides add"} more than ${MATCH_DEFAULTS.maxDetourKm} km of extra driving to your journey.`,
+        );
+      }
+      if (unmeasured.length > 0) {
+        notices.push(
+          `${unmeasured.length} further ${unmeasured.length === 1 ? "ride is" : "rides are"} shown with the detour not yet measured.`,
+        );
+      }
+      setSearchNotice(notices.join(" "));
+      setSearchError("");
+      setResults(finalMatches);
+     } catch (error: unknown) {
+      if (searchRequest.current === requestId && !isAbortError(error)) {
+        setSearchError(errorMessage(error, "We could not check those rides right now."));
+      }
+    } finally {
+      if (searchController.current === controller) searchController.current = null;
+      if (searchRequest.current === requestId) {
+        setSearchLoading(false);
+      }
+    }
   };
 
   runSearchRef.current = handleSearch;
 
+  /**
+   * Where the driver can actually meet this rider, and where they will be set
+   * down. Both are points on the driver's own road, not in the middle of the
+   * locality the rider typed.
+   */
+  const proposals = useMemo(() => {
+    const built = new Map<string, PickupProposal>();
+    if (!origin || !destination) return built;
+    for (const match of results) {
+      built.set(match.ride.id, buildPickupProposal(match.ride, origin, destination));
+    }
+    return built;
+  }, [origin, destination, results]);
 
+  const selectedPairing = (
+    match: LocalMatch,
+  ): { pickup: PickupCandidate; dropoff: PickupCandidate } | null => {
+    const proposal = proposals.get(match.ride.id);
+    if (!proposal?.recommended) return null;
+    const choice = pickupChoice[match.ride.id];
+    if (!choice) return proposal.recommended;
+    const pickup = proposal.pickups.find((candidate) => candidate.id === choice.pickupId);
+    const dropoff = proposal.dropoffs.find((candidate) => candidate.id === choice.dropoffId);
+    return pickup && dropoff ? { pickup, dropoff } : proposal.recommended;
+  };
+
+
+    /**
+     * Sends the seat request.
+     *
+     * When a meeting point was proposed, the pairing is confirmed with the
+     * routing service first, so the detour stored on the booking is one the
+     * driver will actually drive. If that check fails the request is not sent:
+     * an unmeasured detour is not something to write into a booking that another
+     * person will act on.
+     */
    const handleBooking = async (rideId: string, availableSeats: number) => {
      const selectedSeats = bookingSeatsByRide[rideId] ?? 1;
      const seatsToRequest = Math.min(selectedSeats, availableSeats);
@@ -671,14 +690,42 @@ export default function FindRidePage() {
       setBookingError("Choose at least one seat.");
       return;
     }
+    const match = results.find((item) => item.ride.id === rideId);
+    if (!match) {
+      setBookingError("This ride is no longer in your results. Search again.");
+      return;
+    }
     setBookingRideId(rideId);
     setBookingError("");
     setBookingSuccess("");
     try {
-      await requestBooking(rideId, seatsToRequest);
-       setBookingSuccess(`Your request for ${seatsToRequest} ${seatsToRequest === 1 ? "seat" : "seats"} was sent to the driver.`);
+      const pairing = selectedPairing(match);
+      if (pairing) {
+        setVerifyingRideId(rideId);
+        const verified = await verifyPickupPairing(
+          match.ride,
+          pairing.pickup,
+          pairing.dropoff,
+        );
+        setVerifyingRideId(null);
+        await requestBooking(rideId, seatsToRequest, {
+          pickup: verified.pickup,
+          dropoff: verified.dropoff,
+          match: match.score,
+        });
+      } else {
+        await requestBooking(rideId, seatsToRequest, { match: match.score });
+      }
+       const meetingNote = pairing
+         ? ` Meeting point: ${pairing.pickup.point.label}, ${pairing.pickup.walkKm} km walk.`
+         : "";
+       setBookingSuccess(
+         `Your request for ${seatsToRequest} ${seatsToRequest === 1 ? "seat" : "seats"} was sent to the driver.${meetingNote}`,
+       );
        setBookingSeatsByRide((current) => ({ ...current, [rideId]: 1 }));
+       setPickupOpenRideId(null);
     } catch (error: unknown) {
+      setVerifyingRideId(null);
       setBookingError(errorMessage(error, "We could not send your booking request."));
     } finally {
       setBookingRideId("");
@@ -828,7 +875,7 @@ export default function FindRidePage() {
               <span className="section-kicker">Real matches</span>
               <h2>{results.length > 0 ? `${results.length} compatible ${results.length === 1 ? "ride" : "rides"}` : "Available rides"}</h2>
             </div>
-            {results.length > 0 && searchRoute && <span className="results-caption">Sorted by pickup closeness</span>}
+            {results.length > 0 && searchRoute && <span className="results-caption">Ranked by how well the route fits your trip</span>}
           </div>
           {searchNotice && <p className="form-message notice-message"><AlertCircle size={16} />{searchNotice}</p>}
           {bookingSuccess && <p className="form-message success-message" role="status" data-testid="find-booking-success"><Check size={16} />{bookingSuccess}</p>}
@@ -838,18 +885,171 @@ export default function FindRidePage() {
             <div className="ride-grid"><div className="card ride-card-skeleton" /><div className="card ride-card-skeleton" /><div className="card ride-card-skeleton" /></div>
           ) : results.length > 0 ? (
             <div className="ride-grid results-grid" data-testid="find-results">
-              {results.map(({ ride }) => {
+              {results.map((match) => {
+                const ride = match.ride;
                 const driver = users.find((user) => user.id === ride.driverId);
                 const vehicle = vehicles.find((item) => item.id === ride.vehicleId);
                 const existingBooking = bookings.find(
                   (booking) =>
-                    booking.rideId === ride.id &&
-                    booking.riderId === activeUserId &&
-                    (booking.status === "pending" || booking.status === "confirmed"),
+                    booking.rideId === ride.id
+                    && booking.riderId === activeUserId
+                    && ACTIVE_BOOKING_STATUSES.includes(booking.status),
                 );
+                const proposal = proposals.get(ride.id);
+                const pairing = selectedPairing(match);
+                const panelOpen = pickupOpenRideId === ride.id;
+                const busy = bookingRideId === ride.id;
+                const unmatched = "unmeasured" in match;
                 return (
                   <div className="result-card-wrap" key={ride.id}>
                     <RideCard ride={ride} driver={driver} vehicle={vehicle} currentUserId={activeUserId} />
+                    <div className="match-card">
+                      <div className="match-score">
+                        <span className="match-score-value">
+                          {match.score.score}<small>fit</small>
+                        </span>
+                        <span className="match-score-note">
+                          {unmatched
+                            ? "From the driver's stored road, before the extra driving was measured."
+                            : "Built from the measurements below, not a prediction."}
+                        </span>
+                      </div>
+                      <ul className="match-facts">
+                        <li>
+                          <RouteIcon size={13} aria-hidden="true" />
+                          <span>
+                            <strong>{Math.round(match.score.overlap * 100)}%</strong> of your trip follows this road
+                          </span>
+                        </li>
+                        <li>
+                          <MapPin size={13} aria-hidden="true" />
+                          <span>
+                            <strong>{match.score.walkDistanceKm} km</strong> average walk to the meeting point
+                          </span>
+                        </li>
+                        <li className={unmatched ? "match-unmeasured" : undefined}>
+                          <ArrowRight size={13} aria-hidden="true" />
+                          {unmatched ? (
+                            <span>Extra driving not measured</span>
+                          ) : (
+                            <span>
+                              Adds <strong>{match.score.totalDetourKm} km</strong>
+                              {match.score.totalDetourMinutes > 0 ? ` / ${match.score.totalDetourMinutes} min` : ""} to the driver
+                            </span>
+                          )}
+                        </li>
+                        <li>
+                          <Clock3 size={13} aria-hidden="true" />
+                          {match.score.timeDifferenceMinutes === 0 ? (
+                            <span>Departs at your time</span>
+                          ) : (
+                            <span>
+                              Departs <strong>{Math.abs(match.score.timeDifferenceMinutes)} min</strong>
+                              {match.score.timeDifferenceMinutes > 0 ? " later" : " earlier"}
+                            </span>
+                          )}
+                        </li>
+                      </ul>
+                      {proposal?.recommended ? (
+                        <>
+                          <button
+                            className="pickup-toggle"
+                            type="button"
+                            aria-expanded={panelOpen}
+                            onClick={() => setPickupOpenRideId((current) => (current === ride.id ? null : ride.id))}
+                          >
+                            <MapPinned size={13} />
+                            {panelOpen ? "Hide meeting points" : "Choose a different meeting point"}
+                          </button>
+                          {panelOpen ? (
+                            <div className="pickup-panel">
+                              <h4><MapPin size={14} />Where this driver can meet you</h4>
+                              <p>
+                                Every option is a real point on the road this driver is already using, and the
+                                walk is the measured distance from where you asked to be collected.
+                              </p>
+                              <div className="pickup-group">
+                                <span>Pickup</span>
+                                {proposal.pickups.map((candidate) => {
+                                  const selected = pairing?.pickup.id === candidate.id;
+                                  return (
+                                    <button
+                                      className={`pickup-option${selected ? " is-selected" : ""}`}
+                                      type="button"
+                                      key={candidate.id}
+                                      onClick={() => {
+                                        const dropoffId = pickupChoice[ride.id]?.dropoffId
+                                          ?? proposal.recommended?.dropoff.id
+                                          ?? "";
+                                        setPickupChoice((current) => ({ ...current, [ride.id]: { pickupId: candidate.id, dropoffId } }));
+                                      }}
+                                    >
+                                      <span className="pickup-option-radio" aria-hidden="true" />
+                                      <span className="pickup-option-body">
+                                        <span className="pickup-option-label">{candidate.description}</span>
+                                        <span className="pickup-option-walk">
+                                          {candidate.walkKm < 0.15
+                                            ? "Right where you asked"
+                                            : `${candidate.walkKm} km walk from ${origin?.label ?? "your pickup"}`}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div className="pickup-group">
+                                <span>Drop-off</span>
+                                {proposal.dropoffs.map((candidate) => {
+                                  const selected = pairing?.dropoff.id === candidate.id;
+                                  const afterPickup = !pairing || candidate.fraction > pairing.pickup.fraction;
+                                  return (
+                                    <button
+                                      className={`pickup-option${selected ? " is-selected" : ""}`}
+                                      type="button"
+                                      key={candidate.id}
+                                      disabled={!afterPickup}
+                                      onClick={() => {
+                                        const pickupId = pickupChoice[ride.id]?.pickupId
+                                          ?? proposal.recommended?.pickup.id
+                                          ?? "";
+                                        setPickupChoice((current) => ({ ...current, [ride.id]: { pickupId, dropoffId: candidate.id } }));
+                                      }}
+                                    >
+                                      <span className="pickup-option-radio" aria-hidden="true" />
+                                      <span className="pickup-option-body">
+                                        <span className="pickup-option-label">{candidate.description}</span>
+                                        <span className="pickup-option-walk">
+                                          {afterPickup
+                                            ? `${candidate.walkKm} km walk from ${destination?.label ?? "your destination"}`
+                                            : "Before your pickup, so the driver would have to turn back"}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {busy ? (
+                                <p className="pickup-verified">
+                                  <LoaderCircle className="spin" size={13} />
+                                  Checking this meeting point with the route service…
+                                </p>
+                              ) : (
+                                <p className="pickup-verified">
+                                  <Check size={13} />
+                                  The driver can confirm a different point before your seat is held.
+                                </p>
+                              )}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="pickup-notice">
+                          <AlertCircle size={13} />
+                          {proposal?.notice
+                            ?? "This ride was published without a stored road, so the driver will agree a meeting point with you directly."}
+                        </p>
+                      )}
+                    </div>
                     <div className="result-booking-bar">
                       <label htmlFor={`booking-seats-${ride.id}`}>Seats to request</label>
                       <select
@@ -869,8 +1069,16 @@ export default function FindRidePage() {
                         disabled={ride.availableSeats < 1 || Boolean(bookingRideId) || Boolean(existingBooking)}
                         onClick={() => handleBooking(ride.id, ride.availableSeats)}
                       >
-                        {bookingRideId === ride.id ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}
-                        {existingBooking ? (existingBooking.status === "pending" ? "Request pending" : "Seat confirmed") : "Request seat"}
+                        {busy
+                          ? <LoaderCircle className="spin" size={16} />
+                          : verifyingRideId === ride.id
+                            ? <RouteIcon size={16} />
+                            : <ArrowRight size={16} />}
+                        {existingBooking
+                          ? BOOKING_STATUS_META[existingBooking.status].label
+                          : busy && verifyingRideId === ride.id
+                            ? "Checking route…"
+                            : "Request seat"}
                       </button>
                     </div>
                   </div>

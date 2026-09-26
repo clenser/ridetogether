@@ -8,7 +8,7 @@
  * another member's rides on a shared device.
  */
 
-const VERSION = "ride-together-v1";
+const VERSION = "ride-together-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const TILE_CACHE = `${VERSION}-tiles`;
 const SHELL_URL = "/index.html";
@@ -154,34 +154,64 @@ const safeNotificationPath = (value) =>
 self.addEventListener("push", (event) => {
   // A push with no payload is still worth surfacing so a member learns that
   // something happened while the app was closed.
-  let payload = { title: "RideTogether", body: "You have a new update." };
+  const payload = {
+    title: "RideTogether",
+    body: "You have a new update.",
+    url: "/",
+    tag: "ride-together",
+  };
+
+  // Read the body as text first, then decide what it is. Calling `json()`
+  // consumes the stream, so a payload that turns out not to be JSON cannot then
+  // be re-read - and a non-JSON payload is still a message worth showing, not a
+  // reason to fall back to a generic "you have a new update".
+  let text = "";
   if (event.data) {
     try {
-      const parsed = event.data.json();
-      if (parsed && typeof parsed.title === "string") {
-        payload = {
-          title: parsed.title.slice(0, 80),
-          body: typeof parsed.body === "string" ? parsed.body.slice(0, 240) : "",
-          url: safeNotificationPath(parsed.url),
-          tag: typeof parsed.tag === "string" ? parsed.tag.slice(0, 64) : "ride-together",
-        };
-      }
+      text = event.data.text();
     } catch {
-      // Keep the default copy rather than dropping the notification.
+      text = "";
+    }
+  }
+
+  if (text) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { body: text };
+    }
+    if (parsed && typeof parsed === "object") {
+      payload.title = typeof parsed.title === "string" && parsed.title.trim()
+        ? parsed.title.slice(0, 80)
+        : payload.title;
+      payload.body = typeof parsed.body === "string" ? parsed.body.slice(0, 240) : payload.body;
+      payload.url = safeNotificationPath(parsed.url);
+      payload.tag = typeof parsed.tag === "string" && parsed.tag
+        ? parsed.tag.slice(0, 64)
+        : payload.tag;
     }
   }
 
   event.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body,
-      icon: "/icons/icon-192.png",
-      badge: "/icons/icon-192.png",
-      // Tagging per member replaces that member's previous notification instead
-      // of stacking a column of near-identical ones.
-      tag: payload.tag ?? "ride-together",
-      renotify: true,
-      data: { url: payload.url ?? "/" },
-    }),
+    self.registration
+      .showNotification(payload.title, {
+        body: payload.body,
+        // Both files ship in `public/icons`, so these resolve on a cold install
+        // with no network - a missing icon is a notification Android drops.
+        icon: "/icons/icon-192.png",
+        badge: "/icons/icon-192.png",
+        // Tagging per notification replaces that member's previous notification
+        // instead of stacking a column of near-identical ones. `renotify` makes
+        // the replacement alert rather than land silently.
+        tag: payload.tag,
+        renotify: true,
+        data: { url: payload.url },
+      })
+      // A rejected showNotification - permission revoked between the push
+      // arriving and being displayed - must not surface as an unhandled
+      // rejection; there is nothing further this event can do about it.
+      .catch((error) => console.error("push notification failed", error)),
   );
 });
 
@@ -194,11 +224,18 @@ self.addEventListener("notificationclick", (event) => {
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      // Focus an existing tab rather than stacking duplicates.
+      // An open tab already on the destination is the best outcome: focus it and
+      // do nothing else, so a member reading that page is not yanked away from
+      // whatever they were doing to be navigated.
       for (const client of clients) {
         if (typeof client.focus !== "function") continue;
-        // Compared as a parsed origin rather than with `includes`, which would
-        // also match a foreign URL that merely mentions ours in its query string.
+        if (new URL(client.url).origin !== origin) continue;
+        if (new URL(client.url).pathname === target) return client.focus();
+      }
+      // Otherwise navigate the first client we own rather than stacking
+      // duplicates, and only open a window if there is nothing to reuse.
+      for (const client of clients) {
+        if (typeof client.focus !== "function") continue;
         if (new URL(client.url).origin !== origin) continue;
         return client.navigate(target).then(() => client.focus());
       }

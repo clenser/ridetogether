@@ -3,7 +3,11 @@ export const authStyles = `
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 30px 18px 44px;
+  /* The sign-in screens render outside the app shell, so they get no top bar to
+     push them down. The insets are added here instead, or the brand header hides
+     behind the status bar and the submit button hides behind the gesture bar. */
+  padding: calc(30px + var(--rt-safe-top, env(safe-area-inset-top, 0px))) 18px
+    calc(44px + var(--rt-safe-bottom, env(safe-area-inset-bottom, 0px)));
   color: var(--rt-text, #17231c);
   background:
     radial-gradient(circle at 16% 6%, rgba(185, 235, 202, .55), transparent 30%),

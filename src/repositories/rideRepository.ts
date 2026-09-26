@@ -16,7 +16,9 @@ const RIDE_TABLE = "rides";
 const STOP_TABLE = "ride_stops";
 const RIDE_COLUMNS =
   "id, driver_id, vehicle_id, origin_label, origin_lat, origin_lon, destination_label, destination_lat, destination_lon,"
-  + " departure_at, total_seats, seats_available, distance_km, duration_minutes, base_fare, contribution, status, created_at, updated_at";
+  + " departure_at, total_seats, seats_available, distance_km, duration_minutes, base_fare, contribution, status,"
+  + " route_geometry, series_id, occurrence_index, started_at, ended_at, reminder_sent_at,"
+  + " created_at, updated_at";
 const STOP_COLUMNS = "id, ride_id, stop_order, label, lat, lon";
 
 export interface RideRow {
@@ -37,6 +39,12 @@ export interface RideRow {
   base_fare: number;
   contribution: number;
   status: string;
+  route_geometry: unknown;
+  series_id: string | null;
+  occurrence_index: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  reminder_sent_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -59,19 +67,45 @@ export interface RideWithRelations {
 
 // --- data mapping (snake_case -> camelCase happens only here) ----------------
 
-/** Postgres `ride_status` includes 'upcoming'; the app treats it as active. */
+/**
+ * Postgres uses `upcoming` for a published ride and `in_progress` once the host
+ * has started driving. The app calls both of the first state `active`, which is
+ * the name every screen already uses for "open", and exposes `in_progress`
+ * unchanged so START RIDE is visible as a distinct state.
+ */
 const rowToRideStatus = (value: unknown): RideStatus => {
-  const status = toText(value, "active");
-  if (status === "cancelled" || status === "completed") return status;
+  const status = toText(value, "upcoming");
+  if (status === "cancelled" || status === "completed" || status === "in_progress") return status;
   return "active";
 };
 
 /**
- * Statuses that mean "this ride can still be booked". The app writes `active`
- * but the database default is `upcoming`, so both are treated as open to avoid
- * a ride being invisible just because of how its row was created.
+ * Statuses that mean "this ride can still be booked". Both the `upcoming`
+ * default and the legacy `active` value are treated as open so a ride never
+ * becomes invisible because of how its row was created. `in_progress` is
+ * deliberately absent: once the host is driving, no new riders are accepted.
  */
-const OPEN_STATUSES = ["active", "upcoming"];
+const OPEN_STATUSES = ["upcoming", "active"];
+
+/**
+ * `route_geometry` is the host's road corridor as stored by `createRide`. It
+ * arrives from PostgREST as a plain array of `[lon, lat]` pairs, but a column
+ * that was never written comes back as `null`, so anything that is not a
+ * non-empty array of coordinate pairs is treated as absent rather than trusted.
+ */
+const toRouteGeometry = (value: unknown): [number, number][] | undefined => {
+  if (!Array.isArray(value) || value.length < 2) return undefined;
+  const pairs: [number, number][] = [];
+  for (const entry of value) {
+    if (!Array.isArray(entry) || entry.length < 2) return undefined;
+    const lon = toNumber(entry[0], Number.NaN);
+    const lat = toNumber(entry[1], Number.NaN);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return undefined;
+    pairs.push([lon, lat]);
+  }
+  return pairs;
+};
 
 /**
  * `departure_at` is a single timestamptz while the app models a date and a
@@ -133,7 +167,13 @@ export const rowToRide = (row: RideRow, stops: RideStopRow[] = []): Ride => {
     status: rowToRideStatus(row.status),
     distanceKm,
     durationMinutes: toNumber(row.duration_minutes, 0),
-    createdAt: toText(row.created_at),
+    routeGeometry: toRouteGeometry(row.route_geometry),
+    seriesId: row.series_id ? toText(row.series_id) : undefined,
+    occurrenceIndex: row.occurrence_index == null ? undefined : toNumber(row.occurrence_index, 0),
+      startedAt: row.started_at ? toText(row.started_at) : undefined,
+      endedAt: row.ended_at ? toText(row.ended_at) : undefined,
+      reminderSentAt: row.reminder_sent_at ? toText(row.reminder_sent_at) : undefined,
+      createdAt: toText(row.created_at),
   };
 };
 
@@ -445,7 +485,15 @@ export const createRide = async (input: RideInput): Promise<Ride> => {
       duration_minutes: Math.max(1, Math.round(input.durationMinutes as number)),
       base_fare: baseFare,
       contribution,
-      status: "active",
+      // `upcoming` is the published state. The app calls it `active` on screen;
+      // writing the database's own name keeps the two honest about which state
+      // the host still has to start.
+      status: "upcoming",
+      // The road corridor Valhalla produced, stored so Find Ride can match
+      // passengers against the route actually driven instead of a straight line.
+      route_geometry: input.routeGeometry?.length ? input.routeGeometry : null,
+      series_id: input.seriesId || null,
+      occurrence_index: input.occurrenceIndex ?? null,
     })
     .select(RIDE_COLUMNS)
     .single<RideRow>();
@@ -504,6 +552,7 @@ export const updateRide = async (rideId: string, input: RideInput): Promise<Ride
       duration_minutes: Math.max(1, Math.round(input.durationMinutes as number)),
       base_fare: baseFare,
       contribution,
+      route_geometry: input.routeGeometry?.length ? input.routeGeometry : null,
     })
     .eq("id", rideId)
     .select(RIDE_COLUMNS)
@@ -543,9 +592,15 @@ export const updateRide = async (rideId: string, input: RideInput): Promise<Ride
   return rowToRide(data, await listStops(rideId));
 };
 
+/**
+ * Moves a ride through its lifecycle. The database owns the state machine -
+ * `rides_enforce_status_transition` rejects anything out of order and stamps
+ * `started_at`/`ended_at` - so this only sends the target state and translates
+ * the guard's messages into something the host can act on.
+ */
 export const setRideStatus = async (
   rideId: string,
-  status: Extract<RideStatus, "cancelled" | "completed">,
+  status: Extract<RideStatus, "in_progress" | "cancelled" | "completed">,
 ): Promise<Ride> => {
   await getAuthenticatedUserId();
   const client = getSupabaseClient();
@@ -558,14 +613,43 @@ export const setRideStatus = async (
     .returns<RideRow>()
     .maybeSingle();
 
-  if (error) throw toDataError(error, status === "cancelled" ? "cancel" : "complete");
+  if (error) {
+    const detail = `${error.message ?? ""} ${error.details ?? ""}`;
+    if (/only be reached from in_progress|only be completed from in_progress/i.test(detail)) {
+      throw new DataError(
+        "Start the ride before ending it. Open the ride and choose Start Ride, then End Ride when you arrive.",
+        "invalid",
+        error,
+      );
+    }
+    if (/already finished or been cancelled/i.test(detail)) {
+      throw new DataError("This ride has already been finished or cancelled.", "cancelled-ride", error);
+    }
+    if (error.code === "42501") {
+      throw new DataError("Only the driver can change this ride.", "forbidden", error);
+    }
+    throw toDataError(error, status === "cancelled" ? "cancel" : "complete");
+  }
   if (!data) {
     throw new DataError("We could not find that ride. It may have been removed.", "not-found");
   }
   return rowToRide(data, await listStops(rideId));
 };
 
-export const cancelRide = (rideId: string): Promise<Ride> => setRideStatus(rideId, "cancelled");
+/** Publish → driving. Only valid while the ride is still open. */
+export const startRide = (rideId: string): Promise<Ride> => setRideStatus(rideId, "in_progress");
+
+/** Driving → finished. Runs `rides_finalize_completion`, which closes bookings. */
 export const completeRide = (rideId: string): Promise<Ride> => setRideStatus(rideId, "completed");
 
-export { RIDE_COLUMNS, RIDE_TABLE, STOP_COLUMNS, STOP_TABLE, rowToRideStatus, splitDeparture };
+export const cancelRide = (rideId: string): Promise<Ride> => setRideStatus(rideId, "cancelled");
+
+export {
+  OPEN_STATUSES,
+  RIDE_COLUMNS,
+  RIDE_TABLE,
+  STOP_COLUMNS,
+  STOP_TABLE,
+  rowToRideStatus,
+  splitDeparture,
+};

@@ -290,36 +290,6 @@ export const getRoute = async (
   return result;
 };
 
-const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
-
-export const haversineDistanceKm = (
-  first: Coordinates,
-  second: Coordinates,
-): number => {
-  const earthRadiusKm = 6371;
-  const latitudeDelta = toRadians(second.lat - first.lat);
-  const longitudeDelta = toRadians(second.lon - first.lon);
-  const firstLatitude = toRadians(first.lat);
-  const secondLatitude = toRadians(second.lat);
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(firstLatitude) *
-      Math.cos(secondLatitude) *
-      Math.sin(longitudeDelta / 2) ** 2;
-  return 2 * earthRadiusKm * Math.asin(Math.sqrt(Math.min(1, haversine)));
-};
-
-export const routeCompatibility = (
-  firstOrigin: Coordinates,
-  firstDestination: Coordinates,
-  secondOrigin: Coordinates,
-  secondDestination: Coordinates,
-): number => {
-  const maximumAcceptedDetourKm = 40;
-  const endpointDistance =
-    haversineDistanceKm(firstOrigin, secondOrigin) +
-    haversineDistanceKm(firstDestination, secondDestination);
-  return Math.max(0, 1 - endpointDistance / maximumAcceptedDetourKm);
-};
+export { haversineDistanceKm, projectOntoPolyline, polylineLengthKm } from "./geometry";
 
 export default getRoute;

@@ -24,3 +24,14 @@ supabase/.temp/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Android Studio / IntelliJ project state. These are per-machine settings and
+# per-developer run configurations, not project configuration, so they are kept
+# local rather than published to the shared repository.
+android/.idea/
+.gradle/
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+*.iml

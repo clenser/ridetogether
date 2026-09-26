@@ -394,7 +394,14 @@ Deno.serve(async (request) => {
     title,
     body: message,
     url: path,
-    tag: `ride-together-${userId.slice(0, 8)}`,
+    // One tag per notification, not per member. A shared tag makes the browser
+    // *replace* the previous notification, so a booking request and the message
+    // that follows it could never both sit in the shade - the second silently
+    // took the first one's slot, which reads on the phone as "nothing arrived".
+    // The notification id keeps a replayed send collapsing onto the same entry.
+    tag: notificationId
+      ? `ride-together-${userId.slice(0, 8)}-${notificationId}`
+      : `ride-together-${userId.slice(0, 8)}`,
   });
 
   const vapid = {

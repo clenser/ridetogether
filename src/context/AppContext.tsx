@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -13,8 +14,12 @@ import {
   uploadAvatar as supabaseUploadAvatar,
 } from "../repositories/avatarRepository";
 import {
+  acceptBooking as supabaseAcceptBooking,
   cancelBooking as supabaseCancelBooking,
   listAllVisibleBookings,
+  markNoShow as supabaseMarkNoShow,
+  markPickedUp as supabaseMarkPickedUp,
+  rejectBooking as supabaseRejectBooking,
   requestBooking as supabaseRequestBooking,
   updateBookingStatus as supabaseUpdateBookingStatus,
 } from "../repositories/bookingRepository";
@@ -46,9 +51,25 @@ import {
   createRide as supabaseCreateRide,
   listRides as supabaseListRides,
   searchRides as supabaseSearchRides,
+  startRide as supabaseStartRide,
   updateRide as supabaseUpdateRide,
   type RideWithRelations,
 } from "../repositories/rideRepository";
+import {
+  createSeries as supabaseCreateSeries,
+  type SeriesInput,
+} from "../repositories/rideSeriesRepository";
+import {
+  listMyPayments,
+  openPayment as supabaseOpenPayment,
+  resolvePayment as supabaseResolvePayment,
+} from "../repositories/paymentRepository";
+import {
+  clearMyUpiId as supabaseClearMyUpiId,
+  getMyPaymentProfile,
+  saveMyUpiId as supabaseSaveMyUpiId,
+} from "../repositories/paymentProfileRepository";
+import { reportRideLocation as supabaseReportRideLocation } from "../repositories/liveLocationRepository";
 import {
   createVehicle as supabaseCreateVehicle,
   deleteVehicle as supabaseDeleteVehicle,
@@ -63,15 +84,21 @@ import type { User as AuthUser } from "@supabase/supabase-js";
 import type {
   AppNotification,
   Booking,
+  MatchScore,
   Message,
+  Payment,
+  PaymentStatus,
+  PickupPoint,
   Rating,
   Ride,
   RideInput,
+  RideLocation,
   SafetyContact,
   SearchCriteria,
   User,
   Vehicle,
 } from "../types";
+import { isActiveBooking } from "../types";
 
 /**
  * The shape the Vehicles form submits.
@@ -101,16 +128,76 @@ export interface AppContextValue {
   notifications: AppNotification[];
   ratings: Rating[];
   safetyContacts: SafetyContact[];
+  /** Placeholder payments the member owes, or is owed. Never a money movement. */
+  payments: Payment[];
   refresh: () => Promise<void>;
   createRide: (input: RideInput) => Promise<Ride>;
+  /**
+   * Publishes a recurring schedule. Every date in the range becomes its own ride,
+   * so seats, bookings and live location stay per-occurrence.
+   */
+  createSeries: (input: SeriesInput) => Promise<{ seriesId: string; rideCount: number }>;
   updateRide: (rideId: string, input: RideInput) => Promise<Ride>;
-  requestBooking: (rideId: string, seats: number) => Promise<Booking>;
+  requestBooking: (
+    rideId: string,
+    seats: number,
+    options?: { pickup?: PickupPoint; dropoff?: PickupPoint; match?: MatchScore },
+  ) => Promise<Booking>;
   updateBookingStatus: (
     bookingId: string,
     status: "confirmed" | "rejected" | "cancelled",
   ) => Promise<void>;
+  /**
+   * The host accepts a request. The seat is held from this moment, not from
+   * confirmation, so an accepted request cannot be lost to a later booking.
+   * `pickup`/`dropoff` let the host move the agreed meeting points to somewhere
+   * they can actually stop.
+   */
+  acceptBooking: (
+    bookingId: string,
+    options?: { pickup?: PickupPoint; dropoff?: PickupPoint },
+  ) => Promise<void>;
+  rejectBooking: (bookingId: string) => Promise<void>;
+  markPickedUp: (bookingId: string) => Promise<void>;
+  markNoShow: (bookingId: string) => Promise<void>;
+  cancelBooking: (bookingId: string) => Promise<void>;
   cancelRide: (rideId: string) => Promise<void>;
+  startRide: (rideId: string) => Promise<void>;
   completeRide: (rideId: string) => Promise<void>;
+  /** Opens the placeholder payment for an accepted seat. */
+  payBooking: (bookingId: string) => Promise<void>;
+  /** The host records that the money arrived, or that it did not. */
+  resolvePayment: (
+    bookingId: string,
+    outcome: Extract<PaymentStatus, "success" | "failed">,
+    reason?: string,
+  ) => Promise<void>;
+  /**
+   * Publishes the host's position for a running ride. Deliberately does not
+   * trigger a snapshot refresh: this fires every few seconds while driving, and
+   * a full refetch per fix would swamp the channel the passengers are watching.
+   */
+  reportRideLocation: (input: {
+    rideId: string;
+    lat: number;
+    lon: number;
+    heading?: number;
+    speedKph?: number;
+    accuracyMeters?: number;
+  }) => Promise<RideLocation>;
+  /** Saves or clears the member's own, private UPI handle. */
+  saveUpiId: (value: string) => Promise<void>;
+  clearUpiId: () => Promise<void>;
+  /**
+   * The member's own UPI handle, or undefined when none is stored.
+   *
+   * Read from the private profile table rather than from the public user row, so
+   * it is only ever visible to its owner. Optional: a member without one is a
+   * normal state, not an error, and the caller should render an empty field.
+   */
+  readMyUpiId: () => Promise<string | undefined>;
+  /** Bookings the member is involved in that are still live. */
+  liveBookings: Booking[];
   sendMessage: (rideId: string, text: string) => Promise<void>;
   markNotificationRead: (id: string) => Promise<void>;
   markAllNotificationsRead: () => Promise<void>;
@@ -193,9 +280,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [ratings, setRatings] = useState<Rating[]>([]);
   const [safetyContacts, setSafetyContacts] = useState<SafetyContact[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [activeUserId, setActiveUserId] = useState("");
   const activeUserIdRef = useRef("");
   const activeUser = users.find((user) => user.id === activeUserId) ?? loadingUser;
+
+  /**
+   * The bookings that still matter to the member: a request awaiting a decision, a
+   * seat awaiting payment, a confirmed seat, or a passenger in the car. Derived
+   * rather than fetched, so it can never drift from the authoritative list.
+   */
+  const liveBookings = useMemo(
+    () => bookings.filter((booking) => isActiveBooking(booking.status)),
+    [bookings],
+  );
 
   /**
    * Loads the Supabase-backed data. Supabase is the single source of truth for
@@ -220,6 +318,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setNotifications([]);
       setRatings([]);
       setSafetyContacts([]);
+      setPayments([]);
       setActiveUserId("");
       return "";
     }
@@ -238,7 +337,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }
     };
 
-    const [ridesResult, vehiclesResult, bookingsResult, profilesResult, messagesResult, notificationsResult, ratingsResult, contactsResult] =
+    const [ridesResult, vehiclesResult, bookingsResult, profilesResult, messagesResult, notificationsResult, ratingsResult, contactsResult, paymentsResult] =
       await Promise.all([
         settle<RideWithRelations[]>(() => supabaseListRides(), "rides"),
         settle<Vehicle[]>(() => supabaseListVehicles(), "vehicles"),
@@ -248,6 +347,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         settle<AppNotification[]>(() => supabaseListNotifications(), "notifications"),
         settle<Rating[]>(() => listRatingsByReviewer(), "ratings"),
         settle<SafetyContact[]>(() => supabaseListSafetyContacts(), "safety contacts"),
+        settle<Payment[]>(() => listMyPayments(), "payments"),
       ]);
 
     const failed = [
@@ -259,6 +359,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       ["notifications", notificationsResult],
       ["ratings", ratingsResult],
       ["safety contacts", contactsResult],
+      ["payments", paymentsResult],
     ].filter(([, result]) => !(result as { ok: boolean }).ok).map(([name]) => name);
 
     if (failed.length > 0) {
@@ -307,6 +408,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (notificationsResult.ok) setNotifications(cloudNotifications);
     if (ratingsResult.ok) setRatings(cloudRatings);
     if (contactsResult.ok) setSafetyContacts(cloudContacts);
+    if (paymentsResult.ok) setPayments(paymentsResult.value ?? []);
     if (profilesResult.ok) setUsers([...directory.values()]);
     else setUsers((current) => {
       // Keep the known directory but make sure the signed-in member is present.
@@ -383,7 +485,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicles" }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "ratings" }, schedule)
-      .on("postgres_changes", { event: "*", schema: "public", table: "safety_contacts" }, schedule);
+      .on("postgres_changes", { event: "*", schema: "public", table: "safety_contacts" }, schedule)
+      // A payment resolving is what confirms or cancels the booking behind it, so
+      // the member on the other device has to hear about it.
+      .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, schedule);
 
     channel.subscribe((status) => {
       if (import.meta.env.DEV) console.info(`[realtime] ${status}`);
@@ -412,6 +517,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setNotifications([]);
       setRatings([]);
       setSafetyContacts([]);
+      setPayments([]);
       setActiveUserId("");
       setLoadError(null);
       activeUserIdRef.current = "";
@@ -484,8 +590,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const requestBooking = useCallback(
-    (rideId: string, seats: number): Promise<Booking> =>
-      mutateCloud(() => supabaseRequestBooking(rideId, seats), "book"),
+    (
+      rideId: string,
+      seats: number,
+      options: { pickup?: PickupPoint; dropoff?: PickupPoint; match?: MatchScore } = {},
+    ): Promise<Booking> =>
+      mutateCloud(() => supabaseRequestBooking(rideId, seats, options), "book"),
     [mutateCloud],
   );
 
@@ -501,11 +611,70 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     [mutateCloud],
   );
 
+  /**
+   * Each of these is one database transition followed by a re-read. They are kept
+   * separate rather than folded into a single `setBookingStatus` so that a page
+   * cannot offer the host an action the workflow does not have - the ride's
+   * acceptance path, the pickup path and the cancellation path are genuinely
+   * different things to a host.
+   */
+  const acceptBooking = useCallback(
+    (bookingId: string, options: { pickup?: PickupPoint; dropoff?: PickupPoint } = {}): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseAcceptBooking(bookingId, options);
+      }, "confirm"),
+    [mutateCloud],
+  );
+
+  const rejectBooking = useCallback(
+    (bookingId: string): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseRejectBooking(bookingId);
+      }, "update"),
+    [mutateCloud],
+  );
+
+  const markPickedUp = useCallback(
+    (bookingId: string): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseMarkPickedUp(bookingId);
+      }, "update"),
+    [mutateCloud],
+  );
+
+  const markNoShow = useCallback(
+    (bookingId: string): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseMarkNoShow(bookingId);
+      }, "update"),
+    [mutateCloud],
+  );
+
+  const cancelBooking = useCallback(
+    (bookingId: string): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseCancelBooking(bookingId);
+      }, "cancel"),
+    [mutateCloud],
+  );
+
   const cancelRide = useCallback(
     (rideId: string): Promise<void> =>
       mutateCloud(async () => {
         await supabaseCancelRide(rideId);
       }, "cancel"),
+    [mutateCloud],
+  );
+
+  /**
+   * Publish → driving. Once the host is on the road the ride stops taking new
+   * passengers and starts streaming a position.
+   */
+  const startRide = useCallback(
+    (rideId: string): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseStartRide(rideId);
+      }, "update"),
     [mutateCloud],
   );
 
@@ -524,6 +693,115 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     },
     [],
   );
+
+  /**
+   * Publishes a recurring schedule. The repository returns the individual rides it
+   * created, but the context only reports how many: a page that publishes a
+   * twelve-week commute does not need every occurrence in hand, and the snapshot
+   * refresh that follows has already loaded them.
+   */
+  const createSeries = useCallback(
+    async (input: SeriesInput): Promise<{ seriesId: string; rideCount: number }> =>
+      mutateCloud(async () => {
+        const created = await supabaseCreateSeries(input);
+        return { seriesId: created.series.id, rideCount: created.rides.length };
+      }, "create"),
+    [mutateCloud],
+  );
+
+  /**
+   * Opens the placeholder payment. Nothing here charges anybody: the insert is
+   * priced by the database and the "gateway" only supplies a reference.
+   */
+  const payBooking = useCallback(
+    (bookingId: string): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseOpenPayment(bookingId);
+      }, "create"),
+    [mutateCloud],
+  );
+
+  /**
+   * The host records the outcome. `success` confirms the booking and `failed`
+   * releases the seat, both inside the same transaction as the payment write.
+   */
+  const resolvePayment = useCallback(
+    (
+      bookingId: string,
+      outcome: Extract<PaymentStatus, "success" | "failed">,
+      reason?: string,
+    ): Promise<void> =>
+      mutateCloud(async () => {
+        await supabaseResolvePayment(bookingId, outcome, { reason });
+      }, "update"),
+    [mutateCloud],
+  );
+
+  /**
+   * Shares the host's position.
+   *
+   * Intentionally outside `mutateCloud`: this runs on a timer while driving, and
+   * each call would otherwise trigger a nine-query snapshot refresh. Passengers
+   * watching the ride have their own subscription to `ride_locations`, so the
+   * position still reaches them, and the ride row itself is not changing here.
+   */
+  const reportRideLocation = useCallback(
+    async (input: {
+      rideId: string;
+      lat: number;
+      lon: number;
+      heading?: number;
+      speedKph?: number;
+      accuracyMeters?: number;
+    }): Promise<RideLocation> => {
+      if (!activeUserIdRef.current) throw new Error("You need to be signed in to do that.");
+      try {
+        return await supabaseReportRideLocation(input);
+      } catch (error) {
+        throw new Error(describeDataFailure(error, "update"));
+      }
+    },
+    [],
+  );
+
+  /**
+   * The member's own UPI handle. Read and written only for the signed-in account,
+   * and never merged into the profile directory, so it cannot be picked up by a
+   * page that renders somebody else.
+   */
+  const saveUpiId = useCallback(
+    async (value: string): Promise<void> => {
+      if (!activeUserIdRef.current) throw new Error("You need to be signed in to do that.");
+      try {
+        await supabaseSaveMyUpiId(value);
+      } catch (error) {
+        throw new Error(describeDataFailure(error, "update"));
+      }
+    },
+    [],
+  );
+
+  const clearUpiId = useCallback(
+    async (): Promise<void> => {
+      if (!activeUserIdRef.current) throw new Error("You need to be signed in to do that.");
+      try {
+        await supabaseClearMyUpiId();
+      } catch (error) {
+        throw new Error(describeDataFailure(error, "update"));
+      }
+    },
+    [],
+  );
+
+  const readMyUpiId = useCallback(async (): Promise<string | undefined> => {
+    if (!activeUserIdRef.current) return undefined;
+    try {
+      const profile = await getMyPaymentProfile();
+      return profile.upiId;
+    } catch (error) {
+      throw new Error(describeDataFailure(error, "load"));
+    }
+  }, []);
 
   /**
    * Chat and notification writes go straight to Supabase. `mutateCloud`
@@ -710,13 +988,28 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         notifications,
         ratings,
         safetyContacts,
+        payments,
+        liveBookings,
         refresh,
         createRide,
+        createSeries,
         updateRide,
         requestBooking,
         updateBookingStatus,
+        acceptBooking,
+        rejectBooking,
+        markPickedUp,
+        markNoShow,
+        cancelBooking,
         cancelRide,
+        startRide,
         completeRide,
+        payBooking,
+        resolvePayment,
+        reportRideLocation,
+    saveUpiId,
+    clearUpiId,
+    readMyUpiId,
         sendMessage,
         markNotificationRead,
         markAllNotificationsRead,

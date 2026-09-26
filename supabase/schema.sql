@@ -624,6 +624,11 @@ begin
 end;
 $$;
 -- A completed ride asks both sides to rate each other.
+--
+-- Only people who were actually in the car are asked. `finalize_ride_completion`
+-- runs before this trigger (Postgres fires same-timing triggers in name order,
+-- and `rides_finalize_completion` sorts first), so anyone who was picked up has
+-- already become `completed` and anyone who never got in is a `no_show` by now.
 create or replace function public.notify_ride_completion()
 returns trigger
 language plpgsql
@@ -633,7 +638,7 @@ as $$
 declare
   partner record;
 begin
-  if tg_op = 'UPDATE' and (new.status <> 'completed' or old.status = 'completed') then
+  if tg_op = 'UPDATE' and (new.status::text <> 'completed' or old.status::text = 'completed') then
     return new;
   end if;
 
@@ -641,7 +646,7 @@ begin
     select b.rider_id as participant
       from public.bookings b
      where b.ride_id = new.id
-       and b.status in ('confirmed', 'completed')
+       and b.status::text in ('picked_up', 'completed')
   union
     select new.driver_id as participant
   loop
@@ -1637,6 +1642,1601 @@ exception
     -- The publication does not exist on this project (not a Supabase host).
     -- Realtime must then be enabled per table in the dashboard.
     raise notice 'supabase_realtime publication not found; enable Realtime manually for messages, notifications, bookings, rides, vehicles, profiles, ratings, safety_contacts';
+end
+$$;
+
+-- =============================================================================
+-- 9. Carpool workflow lifecycle
+--
+-- Everything in this section is additive and re-runnable. It extends the state
+-- machines that already exist in section 1 rather than replacing them:
+--
+--   ride_status      upcoming -> in_progress -> completed   (+ cancelled)
+--                    `upcoming` is what the database already defaulted to and
+--                    what section 4 already treats as "open to booking". The
+--                    legacy `active` label is kept so pre-existing rows keep
+--                    loading; the app writes `upcoming` from now on.
+--
+--   booking_status   pending -> payment_pending -> confirmed -> picked_up
+--                                                          -> completed
+--                    (+ rejected, cancelled, no_show)
+--
+-- Seats are HELD from `payment_pending` onwards, not from `confirmed`. Once a
+-- host has accepted a request the seat is gone: leaving it free until payment
+-- would let a second rider take it and strand the first. That is what makes
+-- "host accepts a request after another request consumed the last seat" a
+-- database-level refusal rather than a UI race.
+--
+-- A note on `::text`: PostgreSQL refuses to use a value added by
+-- `ALTER TYPE ... ADD VALUE` until the surrounding transaction commits, so an
+-- index predicate or trigger body that names a brand new enum label fails with
+-- "unsafe use of new value" when this file is applied in one transaction.
+-- Casting the enum to text is immutable and compares against plain literals,
+-- which keeps this script applicable in a single pass.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 9a. Enum values
+-- -----------------------------------------------------------------------------
+
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_type t
+      join pg_namespace n on n.oid = t.typnamespace
+      join pg_enum e on e.enumtypid = t.oid
+     where t.typname = 'ride_status'
+       and n.nspname = 'public'
+       and e.enumlabel = 'in_progress'
+  ) then
+    alter type public.ride_status add value 'in_progress';
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_type t
+      join pg_namespace n on n.oid = t.typnamespace
+      join pg_enum e on e.enumtypid = t.oid
+     where t.typname = 'booking_status'
+       and n.nspname = 'public'
+       and e.enumlabel = 'payment_pending'
+  ) then
+    alter type public.booking_status add value 'payment_pending';
+  end if;
+
+  if not exists (
+    select 1
+      from pg_type t
+      join pg_namespace n on n.oid = t.typnamespace
+      join pg_enum e on e.enumtypid = t.oid
+     where t.typname = 'booking_status'
+       and n.nspname = 'public'
+       and e.enumlabel = 'picked_up'
+  ) then
+    alter type public.booking_status add value 'picked_up';
+  end if;
+
+  if not exists (
+    select 1
+      from pg_type t
+      join pg_namespace n on n.oid = t.typnamespace
+      join pg_enum e on e.enumtypid = t.oid
+     where t.typname = 'booking_status'
+       and n.nspname = 'public'
+       and e.enumlabel = 'no_show'
+  ) then
+    alter type public.booking_status add value 'no_show';
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_type t
+      join pg_namespace n on n.oid = t.typnamespace
+     where t.typname = 'payment_status'
+       and n.nspname = 'public'
+  ) then
+    create type public.payment_status as enum (
+      'pending',
+      'success',
+      'failed',
+      'refunded'
+    );
+  end if;
+
+  if not exists (
+    select 1
+      from pg_type t
+      join pg_namespace n on n.oid = t.typnamespace
+     where t.typname = 'settlement_status'
+       and n.nspname = 'public'
+  ) then
+    create type public.settlement_status as enum (
+      'not_due',
+      'pending',
+      'complete'
+    );
+  end if;
+end
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9b. New columns
+-- -----------------------------------------------------------------------------
+
+-- The host's calculated road route. Find Ride treats this polyline - not the
+-- straight line between origin and destination - as the corridor a passenger's
+-- journey has to join, so it has to survive the browser that calculated it.
+alter table public.rides add column if not exists route_geometry jsonb;
+alter table public.rides add column if not exists series_id uuid;
+alter table public.rides add column if not exists occurrence_index integer;
+alter table public.rides add column if not exists started_at timestamptz;
+alter table public.rides add column if not exists ended_at timestamptz;
+-- Set once by `claim_departure_reminders`. The timestamp is the whole
+-- deduplication mechanism: the sweep can run every few minutes forever and each
+-- ride is still reminded about exactly one time.
+alter table public.rides add column if not exists reminder_sent_at timestamptz;
+
+-- Recurring schedules. A series is a template; each date is its own row in
+-- `rides` pointing back at it, so cancelling one occurrence touches one ride
+-- and leaves the rest of the schedule intact.
+-- `cardinality(x) = count(distinct ...)` cannot be written inline: PostgreSQL
+-- forbids subqueries in CHECK constraints. This immutable helper is the
+-- supported way to express "no repeated weekdays", and because it is a plain
+-- SQL function with no privileges it needs no grants and no SECURITY DEFINER.
+create or replace function public.array_has_no_duplicates(values smallint[])
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select count(distinct value) = cardinality($1)
+    from unnest($1) as value;
+$$;
+
+comment on function public.array_has_no_duplicates(smallint[]) is
+  'True when the array has no repeated elements. Used by the ride_series weekday CHECK.';
+
+create table if not exists public.ride_series (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references public.profiles (id) on delete cascade,
+  vehicle_id uuid references public.vehicles (id) on delete set null,
+  origin_label text not null,
+  origin_lat double precision not null,
+  origin_lon double precision not null,
+  destination_label text not null,
+  destination_lat double precision not null,
+  destination_lon double precision not null,
+  departure_time text not null,
+  days_of_week smallint[] not null,
+  valid_from date not null,
+  valid_until date,
+  total_seats integer not null,
+  base_fare integer not null,
+  contribution integer not null,
+  distance_km double precision not null,
+  duration_minutes integer not null,
+  route_geometry jsonb,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint ride_series_origin_label_not_blank check (char_length(btrim(origin_label)) > 0),
+  constraint ride_series_destination_label_not_blank check (char_length(btrim(destination_label)) > 0),
+  constraint ride_series_departure_time_format check (departure_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
+  constraint ride_series_days_not_empty check (cardinality(days_of_week) between 1 and 7),
+  constraint ride_series_days_in_range check (
+    days_of_week <@ array[0, 1, 2, 3, 4, 5, 6]::smallint[]
+  ),
+  constraint ride_series_days_unique check (public.array_has_no_duplicates(days_of_week)),
+  constraint ride_series_valid_range check (valid_until is null or valid_until >= valid_from),
+  constraint ride_series_seats_range check (total_seats between 1 and 12),
+  constraint ride_series_fare_non_negative check (base_fare >= 0 and contribution >= 0),
+  constraint ride_series_distance_positive check (distance_km > 0),
+  constraint ride_series_duration_positive check (duration_minutes > 0)
+);
+
+create index if not exists ride_series_driver_idx
+  on public.ride_series (driver_id, created_at desc);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'rides_series_fkey'
+  ) then
+    alter table public.rides
+      add constraint rides_series_fkey
+      foreign key (series_id) references public.ride_series (id) on delete set null;
+  end if;
+end
+$$;
+
+create index if not exists rides_series_idx
+  on public.rides (series_id) where series_id is not null;
+
+-- Pickup and dropoff live on the booking, not on `ride_stops`: `ride_stops` is
+-- readable by every signed-in member, and a passenger's pickup point is not
+-- everyone's business. `bookings_select_involved` already limits these columns
+-- to the rider and the driver.
+alter table public.bookings add column if not exists pickup_label text;
+alter table public.bookings add column if not exists pickup_lat double precision;
+alter table public.bookings add column if not exists pickup_lon double precision;
+alter table public.bookings add column if not exists dropoff_label text;
+alter table public.bookings add column if not exists dropoff_lat double precision;
+alter table public.bookings add column if not exists dropoff_lon double precision;
+alter table public.bookings add column if not exists walk_distance_km double precision;
+alter table public.bookings add column if not exists pickup_detour_km double precision;
+alter table public.bookings add column if not exists pickup_detour_minutes integer;
+alter table public.bookings add column if not exists dropoff_detour_km double precision;
+alter table public.bookings add column if not exists dropoff_detour_minutes integer;
+alter table public.bookings add column if not exists fare_amount integer;
+alter table public.bookings add column if not exists match_score numeric(6, 2);
+alter table public.bookings add column if not exists picked_up_at timestamptz;
+alter table public.bookings add column if not exists no_show_at timestamptz;
+-- Set exactly once, by the database, the first time the driver comes within the
+-- approach threshold. A plain timestamp is the whole deduplication mechanism:
+-- the notification can fire on every location update and still be delivered once.
+alter table public.bookings add column if not exists driver_approaching_notified_at timestamptz;
+
+-- `drop ... if exists` before every `add` so the script stays re-runnable, the
+-- same way section 3 does it. These constraints are all new names, so dropping
+-- one that was never created is a no-op.
+alter table public.bookings drop constraint if exists bookings_fare_non_negative;
+alter table public.bookings add constraint bookings_fare_non_negative
+  check (fare_amount is null or fare_amount >= 0);
+alter table public.bookings drop constraint if exists bookings_pickup_pair;
+alter table public.bookings add constraint bookings_pickup_pair check (
+  (pickup_lat is null) = (pickup_lon is null)
+);
+alter table public.bookings drop constraint if exists bookings_dropoff_pair;
+alter table public.bookings add constraint bookings_dropoff_pair check (
+  (dropoff_lat is null) = (dropoff_lon is null)
+);
+alter table public.bookings drop constraint if exists bookings_lat_range;
+alter table public.bookings add constraint bookings_lat_range check (
+  (pickup_lat is null or pickup_lat between -90 and 90)
+  and (dropoff_lat is null or dropoff_lat between -90 and 90)
+);
+alter table public.bookings drop constraint if exists bookings_lon_range;
+alter table public.bookings add constraint bookings_lon_range check (
+  (pickup_lon is null or pickup_lon between -180 and 180)
+  and (dropoff_lon is null or dropoff_lon between -180 and 180)
+);
+-- A pickup that is only half-specified would silently be read as "no pickup
+-- agreed", so the labels travel with the coordinates.
+alter table public.bookings drop constraint if exists bookings_pickup_label;
+alter table public.bookings add constraint bookings_pickup_label check (
+  pickup_label is null or btrim(pickup_label) <> ''
+);
+alter table public.bookings drop constraint if exists bookings_dropoff_label;
+alter table public.bookings add constraint bookings_dropoff_label check (
+  dropoff_label is null or btrim(dropoff_label) <> ''
+);
+alter table public.bookings drop constraint if exists bookings_detour_non_negative;
+alter table public.bookings add constraint bookings_detour_non_negative check (
+  (pickup_detour_km is null or pickup_detour_km >= 0)
+  and (dropoff_detour_km is null or dropoff_detour_km >= 0)
+  and (walk_distance_km is null or walk_distance_km >= 0)
+);
+alter table public.bookings drop constraint if exists bookings_match_score_range;
+alter table public.bookings add constraint bookings_match_score_range check (
+  match_score is null or (match_score between 0 and 100)
+);
+
+-- A rider may hold at most one live booking per ride. The old index is replaced
+-- because `create unique index if not exists` would keep the narrower predicate
+-- and let a rider request a second seat while a payment was still pending.
+drop index if exists public.bookings_one_active_per_rider;
+create unique index if not exists bookings_one_active_per_rider
+  on public.bookings (ride_id, rider_id)
+  where status::text in ('pending', 'payment_pending', 'confirmed', 'picked_up', 'completed');
+
+-- Live location, one row per ride. The host writes it; confirmed passengers of
+-- that same ride read it. There is no policy that lets anyone else select it, so
+-- the host's position is never broadcast.
+create table if not exists public.ride_locations (
+  ride_id uuid primary key references public.rides (id) on delete cascade,
+  driver_id uuid not null references public.profiles (id) on delete cascade,
+  lat double precision not null,
+  lon double precision not null,
+  heading double precision,
+  speed_kph double precision,
+  accuracy_meters double precision,
+  recorded_at timestamptz not null default now(),
+  constraint ride_locations_lat_range check (lat between -90 and 90),
+  constraint ride_locations_lon_range check (lon between -180 and 180),
+  constraint ride_locations_heading_range check (heading is null or heading between 0 and 360),
+  constraint ride_locations_accuracy_non_negative check (accuracy_meters is null or accuracy_meters >= 0)
+);
+
+create index if not exists ride_locations_recorded_idx
+  on public.ride_locations (recorded_at desc);
+
+-- Payment placeholder. One row per booking. No real money moves through this
+-- table: it records the lifecycle so a gateway can be dropped in later without
+-- the booking logic having to change. `provider` and `provider_ref` exist so the
+-- real integration has somewhere to put its identifiers.
+create table if not exists public.payments (
+  id uuid primary key default gen_random_uuid(),
+  booking_id uuid not null references public.bookings (id) on delete cascade,
+  ride_id uuid not null references public.rides (id) on delete cascade,
+  rider_id uuid not null references public.profiles (id) on delete cascade,
+  amount integer not null,
+  currency text not null default 'INR',
+  status public.payment_status not null default 'pending',
+  settlement public.settlement_status not null default 'not_due',
+  provider text not null default 'placeholder',
+  provider_ref text,
+  failure_reason text,
+  settled_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint payments_amount_non_negative check (amount >= 0),
+  constraint payments_currency_not_blank check (char_length(btrim(currency)) > 0),
+  constraint payments_booking_key unique (booking_id)
+);
+
+create index if not exists payments_ride_idx on public.payments (ride_id);
+create index if not exists payments_settlement_idx
+  on public.payments (settlement) where settlement <> 'not_due';
+
+-- Optional UPI ID, in its own table on purpose. `profiles` is readable by every
+-- signed-in member (see `profiles_select_authenticated`), so a UPI handle added
+-- as a column there would be readable by everyone, which is the opposite of
+-- "never expose it publicly by default". A dedicated table with owner-only
+-- policies satisfies that without touching the existing profile policies.
+create table if not exists public.profile_payment_details (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  upi_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint profile_payment_details_upi_format check (
+    upi_id is null
+    or (
+      btrim(upi_id) ~ '^[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z][a-zA-Z0-9]{0,31}$'
+    )
+  )
+);
+
+-- -----------------------------------------------------------------------------
+-- 9c. Seat accounting now starts at acceptance
+-- -----------------------------------------------------------------------------
+
+-- The states that hold a seat. Kept in one place because three different places
+-- need to agree on it: this trigger, `sync_ride_total_seats`, and the
+-- participation helpers.
+create or replace function public.booking_holds_seat(target_status text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select target_status in ('payment_pending', 'confirmed', 'picked_up', 'completed');
+$$;
+
+create or replace function public.apply_booking_seat_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_ride_id uuid;
+  previously_taken integer := 0;
+  newly_taken integer := 0;
+  ride_total integer;
+  ride_available integer;
+begin
+  target_ride_id := case
+    when tg_op = 'DELETE' then old.ride_id
+    else new.ride_id
+  end;
+
+  if tg_op in ('UPDATE', 'DELETE') then
+    if public.booking_holds_seat(old.status::text) then
+      previously_taken := old.seats;
+    end if;
+  end if;
+
+  if tg_op in ('INSERT', 'UPDATE') then
+    if public.booking_holds_seat(new.status::text) then
+      newly_taken := new.seats;
+    end if;
+  end if;
+
+  if newly_taken <> previously_taken then
+    -- `for update` is the whole reason two hosts confirming at the same instant
+    -- cannot both take the last seat: the second statement blocks here until the
+    -- first commits, then reads the already-decremented `seats_available`.
+    select r.total_seats, r.seats_available
+      into ride_total, ride_available
+      from public.rides r
+     where r.id = target_ride_id
+       for update;
+
+    if found then
+      if newly_taken > previously_taken then
+        if ride_available < (newly_taken - previously_taken) then
+          raise exception
+            'Not enough seats left on this ride to confirm % seat(s)',
+            newly_taken - previously_taken
+            using errcode = 'check_violation';
+        end if;
+
+        update public.rides
+           set seats_available = seats_available - (newly_taken - previously_taken)
+         where id = target_ride_id;
+      else
+        update public.rides
+           set seats_available = least(
+             ride_total,
+             ride_available + (previously_taken - newly_taken)
+           )
+         where id = target_ride_id;
+      end if;
+    end if;
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.sync_ride_total_seats()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  booked integer;
+begin
+  select coalesce(sum(b.seats), 0)
+    into booked
+    from public.bookings b
+   where b.ride_id = new.id
+     and public.booking_holds_seat(b.status::text);
+
+  if new.total_seats < booked then
+    raise exception
+      'Cannot reduce total seats to % because % seat(s) are already booked',
+      new.total_seats, booked
+      using errcode = 'check_violation';
+  end if;
+
+  new.seats_available := new.total_seats - booked;
+  return new;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9d. State transition guards
+--     These are the reason the UI cannot put a ride or a booking into a state
+--     the workflow does not allow, whatever it sends.
+-- -----------------------------------------------------------------------------
+
+create or replace function public.enforce_ride_status_transition()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  from_status text;
+  to_status text;
+begin
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+
+  from_status := old.status::text;
+  to_status := new.status::text;
+
+  if from_status = to_status then
+    return new;
+  end if;
+
+  -- Only the host may move their own ride. `auth.uid()` is null for the
+  -- SECURITY DEFINER service paths, which are the only other writer.
+  if auth.uid() is not null and auth.uid() <> old.driver_id then
+    raise exception 'Only the host can change this ride''s status'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if from_status in ('completed', 'cancelled') then
+    raise exception 'A % ride cannot change status', from_status
+      using errcode = 'check_violation';
+  end if;
+
+  if to_status not in ('upcoming', 'in_progress', 'completed', 'cancelled') then
+    raise exception '% is not a valid ride status', to_status
+      using errcode = 'check_violation';
+  end if;
+
+  -- A finished or cancelled ride may not be started, and a ride that already
+  -- ran may not be reopened.
+  if to_status = 'in_progress' and from_status not in ('upcoming', 'active') then
+    raise exception 'Only a published ride can be started'
+      using errcode = 'check_violation';
+  end if;
+
+  if to_status = 'completed' and from_status <> 'in_progress' then
+    raise exception 'Only a ride that is in progress can be completed'
+      using errcode = 'check_violation';
+  end if;
+
+  if to_status = 'upcoming' and from_status = 'in_progress' then
+    raise exception 'A ride that is in progress cannot go back to published'
+      using errcode = 'check_violation';
+  end if;
+
+  if to_status = 'in_progress' then
+    new.started_at := coalesce(new.started_at, now());
+  end if;
+
+  if to_status = 'completed' then
+    new.ended_at := coalesce(new.ended_at, now());
+  end if;
+
+  if to_status = 'cancelled' then
+    new.ended_at := coalesce(new.ended_at, now());
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.enforce_booking_status_transition()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  from_status text;
+  to_status text;
+  is_driver boolean;
+begin
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+
+  from_status := old.status::text;
+  to_status := new.status::text;
+
+  if from_status = to_status then
+    return new;
+  end if;
+
+  select exists (
+    select 1 from public.rides r
+     where r.id = old.ride_id and r.driver_id = auth.uid()
+  ) into is_driver;
+
+  -- The payment trigger and the ride-cancellation cascade run as SECURITY
+  -- DEFINER with no signed-in user, so `auth.uid()` is null for them and the
+  -- authority check is skipped for exactly those paths.
+  if auth.uid() is not null and not is_driver and auth.uid() <> old.rider_id then
+    raise exception 'You cannot change this booking'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if from_status in ('rejected', 'cancelled', 'completed', 'no_show') then
+    raise exception 'A % booking cannot change status', from_status
+      using errcode = 'check_violation';
+  end if;
+
+  if to_status not in (
+    'pending', 'payment_pending', 'confirmed', 'picked_up',
+    'completed', 'rejected', 'cancelled', 'no_show'
+  ) then
+    raise exception '% is not a valid booking status', to_status
+      using errcode = 'check_violation';
+  end if;
+
+  if from_status = 'pending' and to_status not in ('payment_pending', 'rejected', 'cancelled') then
+    raise exception 'A requested seat must be accepted before it can be %', to_status
+      using errcode = 'check_violation';
+  end if;
+
+  if from_status = 'payment_pending' and to_status not in ('confirmed', 'cancelled') then
+    raise exception 'A seat awaiting payment can only be confirmed or cancelled'
+      using errcode = 'check_violation';
+  end if;
+
+  if from_status = 'confirmed' and to_status not in ('picked_up', 'cancelled', 'no_show') then
+    raise exception 'A confirmed seat can only be picked up, cancelled or marked as a no-show'
+      using errcode = 'check_violation';
+  end if;
+
+  if from_status = 'picked_up' and to_status not in ('completed', 'no_show', 'cancelled') then
+    raise exception 'A passenger who is in the vehicle can only complete the trip, be marked as a no-show, or have the ride cancelled'
+      using errcode = 'check_violation';
+  end if;
+
+  -- Authority per transition. A rider may withdraw; only the host may accept,
+  -- confirm, collect, or write off a seat. Without this the permissive
+  -- `bookings_update_involved` policy would let a rider confirm their own seat.
+  if auth.uid() is not null and to_status <> 'cancelled' and not is_driver then
+    raise exception 'Only the host can accept, confirm or update this seat'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if to_status = 'payment_pending' and new.seats < 1 then
+    raise exception 'A booking must hold at least one seat'
+      using errcode = 'check_violation';
+  end if;
+
+  -- The amount the rider owes is computed here, from the host's own contribution
+  -- for the seats being held, and overwrites whatever the client sent. Acceptance
+  -- is the moment the price becomes binding, so this is where it is fixed: a
+  -- client cannot name its own price, and the host cannot quietly change a price
+  -- that was already agreed for a seat that is already being paid.
+  if to_status = 'payment_pending' then
+    new.fare_amount := (
+      select r.contribution * new.seats
+        from public.rides r
+       where r.id = new.ride_id
+    );
+
+    if new.fare_amount is null then
+      raise exception 'That ride no longer exists'
+        using errcode = 'foreign_key_violation';
+    end if;
+  end if;
+
+  if to_status = 'picked_up' then
+    new.picked_up_at := coalesce(new.picked_up_at, now());
+  end if;
+
+  if to_status = 'no_show' then
+    new.no_show_at := coalesce(new.no_show_at, now());
+  end if;
+
+  -- A seat is only collectable from someone who actually has one.
+  if to_status in ('picked_up', 'completed') and new.picked_up_at is null then
+    raise exception 'A passenger must be picked up before the trip is completed'
+      using errcode = 'check_violation';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Cancelling a ride has to take its bookings with it, otherwise confirmed
+-- passengers keep a seat on a ride that is not running and the host's seats stay
+-- consumed forever.
+create or replace function public.cascade_ride_cancellation()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  affected record;
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  if new.status::text <> 'cancelled' or old.status::text = 'cancelled' then
+    return new;
+  end if;
+
+  for affected in
+    select b.id, b.rider_id
+      from public.bookings b
+     where b.ride_id = new.id
+       and b.status::text in ('pending', 'payment_pending', 'confirmed', 'picked_up')
+     for update
+  loop
+    update public.bookings
+       set status = 'cancelled'
+     where id = affected.id;
+  end loop;
+
+  -- A cancelled ride has no live position to share.
+  delete from public.ride_locations where ride_id = new.id;
+
+  return new;
+end;
+$$;
+
+-- Ending a ride retires the location stream and settles each confirmed
+-- passenger's placeholder payout. No money moves; the row only records that the
+-- obligation exists and is complete, so a real gateway has somewhere to write.
+create or replace function public.finalize_ride_completion()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  affected record;
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  if new.status::text <> 'completed' or old.status::text = 'completed' then
+    return new;
+  end if;
+
+  delete from public.ride_locations where ride_id = new.id;
+
+  -- Anyone still waiting at the kerb when the trip ends did not get picked up.
+  for affected in
+    select b.id
+      from public.bookings b
+     where b.ride_id = new.id
+       and b.status::text = 'confirmed'
+     for update
+  loop
+    update public.bookings
+       set status = 'no_show'
+     where id = affected.id;
+  end loop;
+
+  for affected in
+    select b.id
+      from public.bookings b
+     where b.ride_id = new.id
+       and b.status::text = 'picked_up'
+     for update
+  loop
+    update public.bookings
+       set status = 'completed'
+     where id = affected.id;
+  end loop;
+
+  update public.payments
+     set settlement = 'pending',
+         settled_at = null
+   where ride_id = new.id
+     and status = 'success'
+     and settlement = 'not_due';
+
+  return new;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9e. Payment placeholder lifecycle
+-- -----------------------------------------------------------------------------
+
+-- Opening a placeholder payment is allowed only from `payment_pending`, which is
+-- the state the host's acceptance put the booking in.
+create or replace function public.guard_payment_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  booking_status text;
+  rider uuid;
+  seats integer;
+begin
+  select b.status::text, b.rider_id, b.seats
+    into booking_status, rider, seats
+    from public.bookings b
+   where b.id = new.booking_id;
+
+  if booking_status is null then
+    raise exception 'That booking no longer exists'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  if auth.uid() is not null and auth.uid() <> rider then
+    raise exception 'You can only pay for your own booking'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if booking_status <> 'payment_pending' then
+    raise exception 'This seat is not awaiting payment'
+      using errcode = 'check_violation';
+  end if;
+
+  new.ride_id := (select b.ride_id from public.bookings b where b.id = new.booking_id);
+  new.rider_id := rider;
+  -- The amount is the host's contribution for the seats held, never a
+  -- client-supplied number.
+  new.amount := (select r.contribution * seats from public.rides r where r.id = new.ride_id);
+
+  return new;
+end;
+$$;
+
+-- The placeholder is a two-state machine the **host** drives:
+-- `pending` -> `success` or `failed`. The rider opens it; the driver is the one
+-- who has the money in hand and marks it received. Letting the payer resolve
+-- their own payment would make "confirmed" a self-issued fact, so the rider is
+-- refused here. A real gateway replaces this with a service-role call, which
+-- the `auth.uid() is null` branch already allows.
+create or replace function public.guard_payment_transition()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.status::text = old.status::text then
+    return new;
+  end if;
+
+  if auth.uid() is not null and not public.is_ride_driver(new.ride_id) then
+    raise exception 'Only the driver can mark this payment as received'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  if old.status::text <> 'pending' then
+    raise exception 'This payment has already been resolved'
+      using errcode = 'check_violation';
+  end if;
+
+  if new.status::text not in ('success', 'failed') then
+    raise exception 'A pending payment can only succeed or fail'
+      using errcode = 'check_violation';
+  end if;
+
+  if new.status::text = 'failed' and new.failure_reason is null then
+    new.failure_reason := 'The driver recorded this payment as not received.';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Turns the payment outcome into the booking transition. Success confirms the
+-- seat; failure releases it rather than leaving a seat held by a booking that
+-- can never be paid for.
+create or replace function public.apply_payment_outcome()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.status::text = old.status::text then
+    return new;
+  end if;
+
+  if new.status::text = 'success' then
+    update public.bookings
+       set status = 'confirmed'
+     where id = new.booking_id
+       and status::text = 'payment_pending';
+  elsif new.status::text = 'failed' then
+    update public.bookings
+       set status = 'cancelled'
+     where id = new.booking_id
+       and status::text = 'payment_pending';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9f. Live location and the approaching notification
+-- -----------------------------------------------------------------------------
+
+-- The approach threshold lives here and nowhere else. Changing it changes the
+-- behaviour of the single trigger below.
+create or replace function public.approach_threshold_meters()
+returns double precision
+language sql
+immutable
+set search_path = ''
+as $$
+  select 400.0::double precision;
+$$;
+
+comment on function public.approach_threshold_meters() is
+  'Single source of truth for how close the host must be to a pickup point '
+  'before the passenger is told the driver is approaching. Battery- and '
+  'spam-conscious: one notification per booking, enforced by '
+  'bookings.driver_approaching_notified_at.';
+
+-- A ride only streams location while it is actually running.
+create or replace function public.guard_ride_location()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  ride_status text;
+  driver uuid;
+begin
+  select r.status::text, r.driver_id
+    into ride_status, driver
+    from public.rides r
+   where r.id = new.ride_id;
+
+  if ride_status is null then
+    raise exception 'That ride no longer exists'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  if ride_status <> 'in_progress' then
+    raise exception 'Location is only shared while a ride is in progress'
+      using errcode = 'check_violation';
+  end if;
+
+  if auth.uid() is not null and auth.uid() <> driver then
+    raise exception 'Only the host can share their location for this ride'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  new.driver_id := driver;
+  return new;
+end;
+$$;
+
+create or replace function public.notify_driver_approaching()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  waiting record;
+  threshold double precision := public.approach_threshold_meters();
+  distance_meters double precision;
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  -- Not a fresh fix, so nothing to re-evaluate.
+  if new.recorded_at is not distinct from old.recorded_at then
+    return new;
+  end if;
+
+  for waiting in
+    select b.id, b.rider_id, b.pickup_lat, b.pickup_lon
+      from public.bookings b
+     where b.ride_id = new.ride_id
+       and b.status::text = 'confirmed'
+       and b.pickup_lat is not null
+       -- The deduplication guard. Once this is set the rider is never told
+       -- again about this booking, no matter how often the driver moves.
+       and b.driver_approaching_notified_at is null
+  loop
+    distance_meters := 6371000.0 * 2.0 * asin(
+      least(1.0, sqrt(
+        power(sin(radians(waiting.pickup_lat - new.lat) / 2.0), 2)
+        + cos(radians(waiting.pickup_lat)) * cos(radians(new.lat))
+        * power(sin(radians(waiting.pickup_lon - new.lon) / 2.0), 2)
+      ))
+    );
+
+    if distance_meters <= threshold then
+      update public.bookings
+         set driver_approaching_notified_at = now()
+       where id = waiting.id;
+
+      perform public.push_notification(
+        waiting.rider_id,
+        'driver-approaching',
+        'Your driver is approaching',
+        'Your driver is close to your pickup point. Please be ready.',
+        new.ride_id
+      );
+    end if;
+  end loop;
+
+  return new;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9g. Participation helpers now include the new live states
+-- -----------------------------------------------------------------------------
+
+create or replace function public.has_ride_booking(target_ride_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.bookings b
+     where b.ride_id = target_ride_id
+       and b.rider_id = auth.uid()
+       and b.status::text in ('pending', 'payment_pending', 'confirmed', 'picked_up', 'completed')
+  );
+$$;
+
+-- Riders on board right now. This is the set allowed to read live location, and
+-- it is deliberately narrower than `has_ride_booking`.
+create or replace function public.is_ride_passenger(target_ride_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.bookings b
+     where b.ride_id = target_ride_id
+       and b.rider_id = auth.uid()
+       and b.status::text in ('confirmed', 'picked_up', 'completed')
+  );
+$$;
+
+create or replace function public.is_completed_ride_participant(target_ride_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.rides r
+     where r.id = target_ride_id
+       and r.status::text = 'completed'
+       and (
+         r.driver_id = auth.uid()
+         or exists (
+           select 1
+             from public.bookings b
+            where b.ride_id = r.id
+              and b.rider_id = auth.uid()
+              and b.status::text in ('confirmed', 'picked_up', 'completed')
+         )
+       )
+  );
+$$;
+
+create or replace function public.ride_has_participant(
+  target_ride_id uuid,
+  target_user_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.rides r
+     where r.id = target_ride_id
+       and (
+         r.driver_id = target_user_id
+         or exists (
+           select 1
+             from public.bookings b
+            where b.ride_id = r.id
+              and b.rider_id = target_user_id
+              and b.status::text in ('confirmed', 'picked_up', 'completed')
+         )
+       )
+  );
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9h. Notification fan-out for the new events
+-- -----------------------------------------------------------------------------
+
+create or replace function public.notify_ride_lifecycle()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  recipient record;
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  if new.status::text = old.status::text then
+    return new;
+  end if;
+
+  if new.status::text = 'in_progress' then
+    for recipient in
+      select b.rider_id as participant
+        from public.bookings b
+       where b.ride_id = new.id
+         and b.status::text in ('confirmed', 'picked_up')
+    loop
+      perform public.push_notification(
+        recipient.participant, 'ride-started',
+        'Your ride has started',
+        format('Your driver has started the trip from %s to %s.',
+          new.origin_label, new.destination_label),
+        new.id
+      );
+    end loop;
+  elsif new.status::text = 'cancelled' then
+    for recipient in
+      select b.rider_id as participant
+        from public.bookings b
+       where b.ride_id = new.id
+         and b.status::text in ('pending', 'payment_pending', 'confirmed', 'picked_up')
+    loop
+      perform public.push_notification(
+        recipient.participant, 'ride-cancelled',
+        'Ride cancelled',
+        format('The ride from %s to %s was cancelled by the host.',
+          new.origin_label, new.destination_label),
+        new.id
+      );
+    end loop;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.notify_booking_journey()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  driver uuid;
+  rider uuid;
+  origin_label text;
+  destination_label text;
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  if new.status::text = old.status::text then
+    return new;
+  end if;
+
+  select r.driver_id, r.origin_label, r.destination_label
+    into driver, origin_label, destination_label
+    from public.rides r
+   where r.id = new.ride_id;
+
+  if driver is null then
+    return new;
+  end if;
+  rider := new.rider_id;
+
+  if new.status::text = 'payment_pending' then
+    perform public.push_notification(
+      rider, 'booking-accepted',
+      'Request accepted',
+      format('Your seat on %s to %s was accepted. Complete payment to confirm it.',
+        origin_label, destination_label),
+      new.ride_id
+    );
+  elsif new.status::text = 'no_show' then
+    -- Only the host needs telling here: the host is the one who marked it, and
+    -- the rider is told by the cancellation that follows a host cancellation or
+    -- by the booking state itself.
+    perform public.push_notification(
+      driver, 'booking-no-show',
+      'Passenger did not show up',
+      format('A passenger on %s to %s was marked as a no-show and their seat is free again.',
+        origin_label, destination_label),
+      new.ride_id
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 9i. Trigger wiring
+-- -----------------------------------------------------------------------------
+
+drop trigger if exists rides_enforce_status on public.rides;
+create trigger rides_enforce_status
+  before update of status on public.rides
+  for each row execute function public.enforce_ride_status_transition();
+
+drop trigger if exists rides_cascade_cancellation on public.rides;
+create trigger rides_cascade_cancellation
+  after update of status on public.rides
+  for each row execute function public.cascade_ride_cancellation();
+
+drop trigger if exists rides_finalize_completion on public.rides;
+create trigger rides_finalize_completion
+  after update of status on public.rides
+  for each row execute function public.finalize_ride_completion();
+
+drop trigger if exists rides_notify_lifecycle on public.rides;
+create trigger rides_notify_lifecycle
+  after update of status on public.rides
+  for each row execute function public.notify_ride_lifecycle();
+
+drop trigger if exists bookings_enforce_status on public.bookings;
+create trigger bookings_enforce_status
+  before update of status on public.bookings
+  for each row execute function public.enforce_booking_status_transition();
+
+drop trigger if exists bookings_notify_journey on public.bookings;
+create trigger bookings_notify_journey
+  after update of status on public.bookings
+  for each row execute function public.notify_booking_journey();
+
+drop trigger if exists payments_guard_insert on public.payments;
+create trigger payments_guard_insert
+  before insert on public.payments
+  for each row execute function public.guard_payment_insert();
+
+drop trigger if exists payments_guard_transition on public.payments;
+create trigger payments_guard_transition
+  before update on public.payments
+  for each row execute function public.guard_payment_transition();
+
+drop trigger if exists payments_apply_outcome on public.payments;
+create trigger payments_apply_outcome
+  after update on public.payments
+  for each row execute function public.apply_payment_outcome();
+
+drop trigger if exists payments_set_updated_at on public.payments;
+create trigger payments_set_updated_at
+  before update on public.payments
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists ride_series_set_updated_at on public.ride_series;
+create trigger ride_series_set_updated_at
+  before update on public.ride_series
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists profile_payment_details_set_updated_at
+  on public.profile_payment_details;
+create trigger profile_payment_details_set_updated_at
+  before update on public.profile_payment_details
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists ride_locations_guard on public.ride_locations;
+create trigger ride_locations_guard
+  before insert or update on public.ride_locations
+  for each row execute function public.guard_ride_location();
+
+drop trigger if exists ride_locations_notify_approaching on public.ride_locations;
+create trigger ride_locations_notify_approaching
+  after update on public.ride_locations
+  for each row execute function public.notify_driver_approaching();
+
+-- -----------------------------------------------------------------------------
+-- 9k. Departure reminders
+-- -----------------------------------------------------------------------------
+
+-- Writes one reminder per ride that is about to leave, then stamps the ride so
+-- it is never reminded about twice.
+--
+-- Idempotency is the `update ... where reminder_sent_at is null` claim, not a
+-- separate lock: whoever wins the row update owns the notification fan-out, so
+-- two overlapping calls send the reminder once between them rather than once
+-- each. Returns the number of rides claimed, which is what a scheduler logs.
+--
+-- Only rides with somebody actually travelling are claimed. A driver with an
+-- empty car has nothing to be reminded about, and claiming such a ride would
+-- burn its one reminder on a notification saying "your passengers are waiting"
+-- when there are none.
+--
+-- The message deliberately carries no clock time. `departure_at` is stored in
+-- UTC and every member reads it in their own zone, so a time formatted here
+-- would be right for exactly one of them and wrong for the rest. The app shows
+-- the local time; the notification just says the trip is imminent.
+create or replace function public.claim_departure_reminders(
+  lead_minutes integer default 60,
+  max_claims integer default 200
+)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  claimed record;
+  reminded integer := 0;
+begin
+  if lead_minutes is null or lead_minutes < 0 then
+    raise exception 'lead_minutes must not be negative'
+      using errcode = 'invalid_parameter_value';
+  end if;
+
+  for claimed in
+    update public.rides r
+       set reminder_sent_at = now()
+     where r.reminder_sent_at is null
+       and r.status::text in ('upcoming', 'active')
+       and r.departure_at > now()
+       and r.departure_at <= now() + make_interval(mins => lead_minutes)
+       and exists (
+         select 1 from public.bookings b
+          where b.ride_id = r.id
+            and b.status::text in ('payment_pending', 'confirmed', 'picked_up')
+       )
+       and r.id in (
+         select id from public.rides
+          where reminder_sent_at is null
+            and status::text in ('upcoming', 'active')
+            and departure_at > now()
+            and departure_at <= now() + make_interval(mins => lead_minutes)
+            and exists (
+              select 1 from public.bookings b
+               where b.ride_id = rides.id
+                 and b.status::text in ('payment_pending', 'confirmed', 'picked_up')
+            )
+          order by departure_at
+          limit greatest(1, least(max_claims, 1000))
+       )
+    returning r.id, r.driver_id, r.origin_label, r.destination_label,
+              (select array_agg(b.rider_id)
+                 from public.bookings b
+                where b.ride_id = r.id
+                  and b.status::text in ('payment_pending', 'confirmed', 'picked_up')) as riders
+  loop
+    -- Guaranteed non-empty by the `exists` above; asserted because a null array
+    -- would silently turn this loop into a no-op and the driver into a recipient
+    -- of a message about nobody.
+    if claimed.riders is null then
+      continue;
+    end if;
+
+    for reminder in
+      select unnest(claimed.riders) as participant
+    loop
+      perform public.push_notification(
+        reminder.participant,
+        'ride-reminder',
+        'Your ride leaves soon',
+        format('%s to %s departs shortly. Open RideTogether for your pickup details.',
+          claimed.origin_label, claimed.destination_label),
+        claimed.id
+      );
+    end loop;
+
+    perform public.push_notification(
+      claimed.driver_id,
+      'ride-reminder',
+      'Your ride leaves soon',
+      format('%s to %s departs shortly. Your passengers are waiting.',
+        claimed.origin_label, claimed.destination_label),
+      claimed.id
+    );
+
+    reminded := reminded + 1;
+  end loop;
+
+  return reminded;
+end;
+$$;
+
+comment on function public.claim_departure_reminders(integer, integer) is
+  'Sends one departure reminder per soon-to-depart ride that has passengers, and returns how many rides were claimed. Safe to call repeatedly and concurrently.';
+
+revoke all on function public.claim_departure_reminders(integer, integer) from public, anon, authenticated;
+
+-- The sweep needs a clock. `pg_cron` is the one that is available, so the
+-- schedule is created when the extension is and the function is left callable
+-- by hand when it is not. Either way the reminder logic itself is in the
+-- database and is not duplicated anywhere in the app.
+do $outer$
+begin
+  if not exists (select 1 from pg_extension where extname = 'pg_cron') then
+    raise notice 'pg_cron is not enabled; call claim_departure_reminders() from your own scheduler for departure reminders';
+    return;
+  end if;
+
+  if exists (select 1 from cron.job where jobname = 'ride-departure-reminders') then
+    perform cron.unschedule('ride-departure-reminders');
+  end if;
+
+  perform cron.schedule(
+    'ride-departure-reminders',
+    '*/10 * * * *',
+    $cron$select public.claim_departure_reminders(60, 200)$cron$
+  );
+exception
+  when insufficient_privilege then
+    raise notice 'Not permitted to manage cron jobs; call claim_departure_reminders() from your own scheduler for departure reminders';
+end
+$outer$;
+
+-- -----------------------------------------------------------------------------
+-- 9j. RLS for the new tables
+--     Nothing here widens an existing policy. The only change to an old policy
+--     is `bookings`, whose update policy gains the host-only transition guard's
+--     counterpart in the database rather than in the browser.
+-- -----------------------------------------------------------------------------
+
+alter table public.ride_series enable row level security;
+alter table public.ride_locations enable row level security;
+alter table public.payments enable row level security;
+alter table public.profile_payment_details enable row level security;
+
+-- ride_series ------------------------------------------------------------------
+
+drop policy if exists ride_series_select_authenticated on public.ride_series;
+create policy ride_series_select_authenticated
+  on public.ride_series for select to authenticated using (true);
+
+drop policy if exists ride_series_insert_own on public.ride_series;
+create policy ride_series_insert_own
+  on public.ride_series for insert to authenticated with check (driver_id = auth.uid());
+
+drop policy if exists ride_series_update_own on public.ride_series;
+create policy ride_series_update_own
+  on public.ride_series for update to authenticated
+  using (driver_id = auth.uid()) with check (driver_id = auth.uid());
+
+drop policy if exists ride_series_delete_own on public.ride_series;
+create policy ride_series_delete_own
+  on public.ride_series for delete to authenticated using (driver_id = auth.uid());
+
+-- ride_locations ---------------------------------------------------------------
+-- Read is limited to the host and to passengers actually on this ride. There is
+-- no policy for anyone else, so a location row is invisible outside the ride.
+
+drop policy if exists ride_locations_select_participants on public.ride_locations;
+create policy ride_locations_select_participants
+  on public.ride_locations for select to authenticated
+  using (driver_id = auth.uid() or public.is_ride_passenger(ride_id));
+
+drop policy if exists ride_locations_insert_driver on public.ride_locations;
+create policy ride_locations_insert_driver
+  on public.ride_locations for insert to authenticated
+  with check (driver_id = auth.uid() and public.is_ride_driver(ride_id));
+
+drop policy if exists ride_locations_update_driver on public.ride_locations;
+create policy ride_locations_update_driver
+  on public.ride_locations for update to authenticated
+  using (driver_id = auth.uid() and public.is_ride_driver(ride_id))
+  with check (driver_id = auth.uid() and public.is_ride_driver(ride_id));
+
+-- payments ---------------------------------------------------------------------
+-- A payment is readable by the rider who owes it and the host who is owed. The
+-- rider opens it, the host resolves it, and `guard_payment_transition` is what
+-- keeps those two apart - the policies below only decide which rows a caller can
+-- touch at all, not which transitions they may make.
+
+drop policy if exists payments_select_involved on public.payments;
+create policy payments_select_involved
+  on public.payments for select to authenticated
+  using (rider_id = auth.uid() or public.is_ride_driver(ride_id));
+
+drop policy if exists payments_insert_own on public.payments;
+create policy payments_insert_own
+  on public.payments for insert to authenticated
+  with check (rider_id = auth.uid());
+
+-- The rider and the host can both see the row and attempt the write; which of
+-- them may actually resolve it is decided in the guard trigger, which is
+-- SECURITY DEFINER and therefore re-checks the real driver of the ride rather
+-- than trusting what the browser sent.
+drop policy if exists payments_update_involved on public.payments;
+create policy payments_update_involved
+  on public.payments for update to authenticated
+  using (rider_id = auth.uid() or public.is_ride_driver(ride_id))
+  with check (rider_id = auth.uid() or public.is_ride_driver(ride_id));
+
+-- profile_payment_details ------------------------------------------------------
+-- Owner only, in both directions. Nothing here is readable by another member,
+-- which is the reason this is a separate table rather than a `profiles` column.
+
+drop policy if exists profile_payment_details_select_own
+  on public.profile_payment_details;
+create policy profile_payment_details_select_own
+  on public.profile_payment_details for select to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists profile_payment_details_insert_own
+  on public.profile_payment_details;
+create policy profile_payment_details_insert_own
+  on public.profile_payment_details for insert to authenticated
+  with check (user_id = auth.uid());
+
+drop policy if exists profile_payment_details_update_own
+  on public.profile_payment_details;
+create policy profile_payment_details_update_own
+  on public.profile_payment_details for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists profile_payment_details_delete_own
+  on public.profile_payment_details;
+create policy profile_payment_details_delete_own
+  on public.profile_payment_details for delete to authenticated
+  using (user_id = auth.uid());
+
+-- -----------------------------------------------------------------------------
+-- 9k. Grants and realtime for the new objects
+-- -----------------------------------------------------------------------------
+
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to authenticated;
+revoke all on all tables in schema public from anon;
+
+-- `is_ride_passenger` is a boolean-presence helper, exactly like the ones already
+-- granted above, and is needed by the location policy.
+do $$
+declare
+  fn text;
+begin
+  foreach fn in array array[
+    'public.is_ride_passenger(uuid)',
+    'public.booking_holds_seat(text)',
+    'public.approach_threshold_meters()'
+  ]
+  loop
+    execute format('revoke execute on function %s from public', fn);
+    execute format('revoke execute on function %s from anon', fn);
+    execute format('grant execute on function %s to authenticated', fn);
+  end loop;
+end
+$$;
+
+-- Trigger-only: the guards and the fan-out. A SECURITY DEFINER function the
+-- browser can call directly is an escalation path, so these are never granted.
+do $$
+declare
+  fn text;
+begin
+  foreach fn in array array[
+    'public.enforce_ride_status_transition()',
+    'public.enforce_booking_status_transition()',
+    'public.cascade_ride_cancellation()',
+    'public.finalize_ride_completion()',
+    'public.guard_payment_insert()',
+    'public.guard_payment_transition()',
+    'public.apply_payment_outcome()',
+    'public.guard_ride_location()',
+    'public.notify_driver_approaching()',
+    'public.notify_ride_lifecycle()',
+    'public.notify_booking_journey()'
+  ]
+  loop
+    execute format('revoke execute on function %s from public', fn);
+    execute format('revoke execute on function %s from anon', fn);
+    execute format('revoke execute on function %s from authenticated', fn);
+  end loop;
+end
+$$;
+
+do $$
+declare
+  tbl text;
+begin
+  foreach tbl in array array[
+    'ride_series',
+    'ride_locations',
+    'payments',
+    'profile_payment_details'
+  ]
+  loop
+    if exists (select 1 from pg_publication_tables
+                where pubname = 'supabase_realtime'
+                  and schemaname = 'public'
+                  and tablename = tbl) then
+      continue;
+    end if;
+    execute format('alter publication supabase_realtime add table public.%I', tbl);
+  end loop;
+exception
+  when undefined_object then
+    raise notice 'supabase_realtime publication not found; enable Realtime manually for ride_series, ride_locations, payments, profile_payment_details';
 end
 $$;
 

@@ -8,19 +8,31 @@ import {
   History,
   LoaderCircle,
   LockKeyhole,
+  MapPin,
   MessageCircle,
   Route as RouteIcon,
   Search,
   TicketCheck,
   UsersRound,
+  Wallet,
   XCircle,
 } from "lucide-react";
 import { EmptyState } from "../components/EmptyState";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import RideCard from "../components/RideCard";
+import { BookingStatusBadge, isLiveRide, nextStepFor } from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
-import type { Booking, BookingStatus, Ride, User, Vehicle } from "../types";
+import { PAYMENT_DISCLAIMER } from "../services/payment";
+import { formatRupees } from "../services/fare";
+import {
+  ACTIVE_BOOKING_STATUSES,
+  type Booking,
+  type BookingStatus,
+  type Ride,
+  type User,
+  type Vehicle,
+} from "../types";
 
 interface BookingEntry {
   booking: Booking;
@@ -77,6 +89,10 @@ const myBookingsStyles = `
 .rt-bookings-action--danger:hover { background: #feecec; }
 .rt-bookings-action:disabled { opacity: .48; cursor: not-allowed; }
 .rt-bookings-lock-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: #7a877f; font-size: .69rem; line-height: 1.4; }
+.rt-bookings-lock-note svg { flex: 0 0 auto; margin-top: 1px; }
+.rt-bookings-pickup { display: flex; align-items: flex-start; gap: 6px; margin: 9px 0 0; color: #4f6457; font-size: .71rem; line-height: 1.45; }
+.rt-bookings-pickup svg { flex: 0 0 auto; margin-top: 2px; color: #159447; }
+.rt-bookings-next { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; color: #40564a; background: #f2f8f4; font-size: .71rem; line-height: 1.45; }
 .rt-bookings-empty { min-height: 220px; display: grid; place-items: center; border: 1px dashed #cad8cf; border-radius: 20px; background: rgba(255,255,255,.55); }
 .rt-bookings-missing { height: 100%; display: grid; align-content: center; justify-items: center; min-height: 270px; padding: 26px; border: 1px solid #e1e8e3; border-radius: 20px; background: var(--rt-card, #fff); text-align: center; }
 .rt-bookings-missing-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 17px; color: #7a877f; background: #edf2ef; }
@@ -95,6 +111,25 @@ const myBookingsStyles = `
 [data-theme="dark"] .rt-bookings-action--secondary { color: #dce7df; background: #1a251e; border-color: #3a4a40; }
 [data-theme="dark"] .rt-bookings-missing { background: #17211a; border-color: #2b3a30; }
 [data-theme="dark"] .rt-bookings-missing p { color: #a6b5ac; }
+/*
+ * Per-status dark values, declared after the base status-chip rule.
+ *
+ * The base rule and the status variants have identical specificity, so the dark
+ * override on the base class was winning over all of them and every status chip
+ * rendered as the same neutral grey - which is the one thing a status colour is
+ * not allowed to do. Declaring each variant here restores the distinction, and
+ * the label text still carries the meaning, so colour is reinforcement here
+ * rather than the only signal.
+ */
+[data-theme="dark"] .rt-bookings-status--confirmed, [data-theme="dark"] .rt-bookings-status--completed { color: #a9e0c1; background: #16301f; }
+[data-theme="dark"] .rt-bookings-status--pending { color: #f0d199; background: #33290f; }
+[data-theme="dark"] .rt-bookings-status--rejected { color: #f0b4b4; background: #341c1c; }
+[data-theme="dark"] .rt-bookings-status--cancelled { color: #c5d0c9; background: #263229; }
+[data-theme="dark"] .rt-bookings-window--departed { color: #bcd8f0; background: #1d2c3a; }
+[data-theme="dark"] .rt-bookings-action--primary { background: #1fae55; }
+[data-theme="dark"] .rt-bookings-action--primary:hover { background: #32b965; }
+[data-theme="dark"] .rt-bookings-action--danger { color: #f0b4b4; background: #2a1717; border-color: #5c3232; }
+[data-theme="dark"] .rt-bookings-action--danger:hover { background: #351d1d; }
 @media (max-width: 900px) { .rt-bookings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) {
   .rt-bookings-page { padding: 18px 14px 44px; }
@@ -118,24 +153,21 @@ const getDeparture = (ride: Ride): Date | null => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const statusText: Record<BookingStatus, string> = {
-  pending: "Awaiting driver",
-  confirmed: "Seat confirmed",
-  rejected: "Request declined",
-  cancelled: "Booking cancelled",
-  completed: "Journey completed",
-};
-
-const statusIcon: Record<BookingStatus, typeof Clock3> = {
-  pending: Clock3,
-  confirmed: CheckCircle2,
-  rejected: XCircle,
-  cancelled: History,
-  completed: CheckCircle2,
-};
-
 const errorText = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
+
+/**
+ * A rider may withdraw while the trip has not started. `payment_pending` is
+ * included because the seat is already held at that point, so the driver is
+ * relying on it - but the rider still has to be able to give it back before the
+ * car leaves. `picked_up` is not: once somebody is in the vehicle the booking is
+ * part of a trip that is under way.
+ */
+const CANCELLABLE_BOOKING_STATUSES: readonly BookingStatus[] = [
+  "pending",
+  "payment_pending",
+  "confirmed",
+];
 
 interface BookingSectionProps {
   title: string;
@@ -148,7 +180,9 @@ interface BookingSectionProps {
   activeUserId: string;
   now: number;
   cancelling: boolean;
+  paying: string | null;
   onCancel: (booking: Booking) => void;
+  onPay: (booking: Booking) => void;
   history?: boolean;
 }
 
@@ -163,7 +197,9 @@ function BookingSection({
   activeUserId,
   now,
   cancelling,
+  paying,
   onCancel,
+  onPay,
   history = false,
 }: BookingSectionProps) {
   return (
@@ -187,34 +223,32 @@ function BookingSection({
       ) : (
         <div className="rt-bookings-grid">
           {entries.map(({ booking, ride, driver, timestamp }) => {
-            const StatusIcon = statusIcon[booking.status];
             const vehicle = ride ? vehicles.find((item) => item.id === ride.vehicleId) : undefined;
             const departure = ride ? getDeparture(ride) : null;
             const departed = Boolean(departure && departure.getTime() <= now);
-            const canCancel = Boolean(
-              ride
-              && departure
-              && ride.status === "active"
-              && departure.getTime() > now
-              && (booking.status === "pending" || booking.status === "confirmed"),
-            );
-             const canChat = Boolean(
-               ride
-               && (booking.status === "pending" || booking.status === "confirmed" || booking.status === "completed"),
-             );
-            const cancellationLocked = Boolean(
-              ride
-              && ride.status === "active"
-              && departed
-              && (booking.status === "pending" || booking.status === "confirmed"),
-            );
+            /**
+             * "Started" covers both ends of the journey rather than just the
+             * database state: a ride that is no longer live has already finished
+             * or been cancelled, and an `in_progress` one is under way even if
+             * its departure time has not technically passed. Cancelling is
+             * gated on `!started` rather than on `isLiveRide`, because the latter
+             * still returns true mid-trip and would offer a button the schema
+             * then rejects.
+             */
+            const started = ride ? !isLiveRide(ride.status) || ride.status === "in_progress" : false;
+            const cancellableStatus = CANCELLABLE_BOOKING_STATUSES.includes(booking.status);
+            const canCancel = Boolean(ride && !departed && !started && cancellableStatus);
+            const canPay = ride?.status === "active" && booking.status === "payment_pending";
+            const canChat = ACTIVE_BOOKING_STATUSES.includes(booking.status) || booking.status === "completed";
+            const cancellationLocked = Boolean(ride && (departed || started) && cancellableStatus);
+            const nextStep = nextStepFor(booking.status, false);
 
             if (!ride) {
               return (
                 <article className="rt-bookings-missing" key={booking.id}>
                   <span className="rt-bookings-missing-icon"><RouteIcon size={25} /></span>
                   <h3>Ride details unavailable</h3>
-                  <p>This saved booking points to a ride that is no longer available. Its status remains {statusText[booking.status].toLowerCase()}.</p>
+                  <p>This saved booking points to a ride that is no longer available. Its status is still shown below.</p>
                 </article>
               );
             }
@@ -236,6 +270,21 @@ function BookingSection({
                         <MessageCircle size={15} aria-hidden="true" /> Chat
                       </Link>
                     ) : null}
+                    {canPay ? (
+                      <button
+                        className="rt-bookings-action rt-bookings-action--primary"
+                        type="button"
+                        disabled={paying === booking.id}
+                        onClick={() => onPay(booking)}
+                      >
+                        {paying === booking.id
+                          ? <LoaderCircle className="rt-bookings-spin" size={15} aria-hidden="true" />
+                          : <Wallet size={15} aria-hidden="true" />}
+                        {paying === booking.id
+                          ? "Opening…"
+                          : `Pay ${formatRupees(booking.fareAmount ?? ride.contribution * booking.seats)}`}
+                      </button>
+                    ) : null}
                     {canCancel ? (
                       <button className="rt-bookings-action rt-bookings-action--danger" type="button" disabled={cancelling} onClick={() => onCancel(booking)}>
                         <XCircle size={15} aria-hidden="true" /> Cancel
@@ -245,14 +294,29 @@ function BookingSection({
                 )}
               >
                 <div className="rt-bookings-status-line">
-                  <span className={`rt-bookings-status rt-bookings-status--${booking.status}`}><StatusIcon size={12} aria-hidden="true" /> {statusText[booking.status]}</span>
-                  {booking.status === "pending" || booking.status === "confirmed" ? (
+                  <BookingStatusBadge status={booking.status} />
+                  {ACTIVE_BOOKING_STATUSES.includes(booking.status) ? (
                     <span className={`rt-bookings-window${departed ? " rt-bookings-window--departed" : ""}`}>
                       <Clock3 size={12} /> {!departure ? "Departure unavailable" : departed ? "Journey started" : `Departs in ${formatRelativeDeparture(timestamp, now)}`}
                     </span>
                   ) : null}
                 </div>
-                {cancellationLocked ? <p className="rt-bookings-lock-note"><LockKeyhole size={13} /> Cancellation closes when the scheduled departure begins. Contact the driver if plans change.</p> : null}
+                {booking.pickup ? (
+                  <p className="rt-bookings-pickup">
+                    <MapPin size={13} aria-hidden="true" />
+                    <span>
+                      Pickup: {booking.pickup.label}
+                      {typeof booking.pickup.walkDistanceKm === "number" && booking.pickup.walkDistanceKm > 0
+                        ? ` (${booking.pickup.walkDistanceKm.toFixed(1)} km walk)`
+                        : ""}
+                    </span>
+                  </p>
+                ) : null}
+                {nextStep ? <p className="rt-bookings-next">{nextStep}</p> : null}
+                {booking.status === "payment_pending" ? (
+                  <p className="rt-bookings-lock-note"><Wallet size={13} /> {PAYMENT_DISCLAIMER}</p>
+                ) : null}
+                {cancellationLocked ? <p className="rt-bookings-lock-note"><LockKeyhole size={13} /> Cancellation closes when the trip starts. Contact the driver if plans change.</p> : null}
               </RideCard>
             );
           })}
@@ -278,10 +342,12 @@ export function MyBookingsPage() {
     vehicles,
     rides,
     bookings,
-    updateBookingStatus,
+    payBooking,
+    cancelBooking: withdrawBooking,
   } = useApp();
   const [cancellationDialog, setCancellationDialog] = useState<CancellationDialog | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [paying, setPaying] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -312,26 +378,30 @@ export function MyBookingsPage() {
       };
     }), [activeUserId, bookings, rides, users]);
 
+  /**
+   * "Current" means the trip has not finished: a request, a seat being paid for,
+   * a confirmed seat, or a passenger already in the car. Trips that already
+   * started sort first because those are the ones that need attention now.
+   */
   const currentEntries = useMemo(() => entries
-    .filter(({ booking, ride, timestamp }) => (
-      ride?.status === "active"
-      && (booking.status === "pending" || booking.status === "confirmed")
+    .filter(({ booking, ride }) => (
+      ride
+      && ACTIVE_BOOKING_STATUSES.includes(booking.status)
+      && (ride.status === "active" || ride.status === "in_progress")
     ))
     .sort((first, second) => {
-      const firstDeparted = first.timestamp <= now;
-      const secondDeparted = second.timestamp <= now;
-      if (firstDeparted !== secondDeparted) return firstDeparted ? -1 : 1;
-      return firstDeparted ? second.timestamp - first.timestamp : first.timestamp - second.timestamp;
+      const firstStarted = first.timestamp <= now;
+      const secondStarted = second.timestamp <= now;
+      if (firstStarted !== secondStarted) return firstStarted ? -1 : 1;
+      return firstStarted ? second.timestamp - first.timestamp : first.timestamp - second.timestamp;
     }), [entries, now]);
 
   const historyEntries = useMemo(() => entries
     .filter(({ booking, ride }) => (
       !ride
-      || ride.status !== "active"
-       || booking.status === "rejected"
-       || booking.status === "cancelled"
-       || booking.status === "completed"
-     ))
+      || !ACTIVE_BOOKING_STATUSES.includes(booking.status)
+      || (ride.status !== "active" && ride.status !== "in_progress")
+    ))
     .sort((first, second) => second.timestamp - first.timestamp), [entries]);
 
   const selectedBooking = cancellationDialog
@@ -356,20 +426,20 @@ export function MyBookingsPage() {
 
   const confirmCancellation = async () => {
     if (!selectedBooking || !selectedRide || cancelling) return;
-    if (!["pending", "confirmed"].includes(selectedBooking.status) || selectedRide.status !== "active") {
+    if (!CANCELLABLE_BOOKING_STATUSES.includes(selectedBooking.status) || !isLiveRide(selectedRide.status)) {
       setError("This booking is no longer eligible for cancellation.");
       return;
     }
     const selectedDeparture = getDeparture(selectedRide);
     if (!selectedDeparture || selectedDeparture.getTime() <= Date.now()) {
-      setError("Cancellation closes when the scheduled departure begins.");
+      setError("Cancellation closes when the trip starts.");
       return;
     }
     setCancelling(true);
     setError("");
     setSuccess("");
     try {
-      await updateBookingStatus(selectedBooking.id, "cancelled");
+      await withdrawBooking(selectedBooking.id);
       setSuccess("Your booking was cancelled. The driver has been notified.");
       setCancellationDialog(null);
     } catch (caught) {
@@ -379,12 +449,36 @@ export function MyBookingsPage() {
     }
   };
 
-   const confirmedSeats = entries
-     .filter(({ booking }) => booking.status === "confirmed" || booking.status === "completed")
-     .reduce((total, { booking }) => total + booking.seats, 0);
+  /**
+   * Opens the placeholder payment. There is no gateway, so this records intent and
+   * hands the seat over to the driver to mark received - the success message says
+   * exactly that rather than claiming money moved.
+   */
+  const handlePay = async (booking: Booking) => {
+    if (paying) return;
+    setPaying(booking.id);
+    setError("");
+    setSuccess("");
+    try {
+      await payBooking(booking.id);
+      setSuccess(
+        `Payment opened for ${formatRupees(booking.fareAmount ?? 0)}. `
+        + "The driver now marks it received to confirm your seat.",
+      );
+    } catch (caught) {
+      setError(errorText(caught, "We could not open the payment for this seat."));
+    } finally {
+      setPaying(null);
+    }
+  };
+
+  const heldSeats = entries
+    .filter(({ booking }) => booking.status === "payment_pending" || booking.status === "confirmed" || booking.status === "picked_up" || booking.status === "completed")
+    .reduce((total, { booking }) => total + booking.seats, 0);
   const upcomingSeats = currentEntries
     .filter(({ timestamp }) => timestamp > now)
     .reduce((total, { booking }) => total + booking.seats, 0);
+  const awaitingPayment = entries.filter(({ booking }) => booking.status === "payment_pending").length;
 
   return (
     <div className="rt-bookings-page">
@@ -392,23 +486,32 @@ export function MyBookingsPage() {
       <div className="rt-bookings-shell">
         <PageHeader
           title="My bookings"
-          description="Follow your requested seats, message drivers, and manage upcoming journeys."
+          description="Follow your requested seats, pay for accepted requests, and manage upcoming journeys."
           eyebrow={<span className="rt-bookings-heading"><TicketCheck size={15} /> Rider dashboard</span>}
           actions={<Link className="rt-bookings-find" to="/find"><Search size={17} /> Find a ride</Link>}
         />
 
         <section className="rt-bookings-summary" aria-label="Booking overview">
           <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><CalendarDays size={19} /></span><div><strong>{currentEntries.length}</strong><span>Current bookings</span></div></div>
-          <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><CheckCircle2 size={19} /></span><div><strong>{confirmedSeats}</strong><span>Confirmed seats</span></div></div>
+          <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><CheckCircle2 size={19} /></span><div><strong>{heldSeats}</strong><span>Seats held</span></div></div>
           <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><UsersRound size={19} /></span><div><strong>{upcomingSeats}</strong><span>Upcoming seats</span></div></div>
         </section>
+
+        {awaitingPayment > 0 ? (
+          <div className="rt-bookings-alert" role="status">
+            <Wallet size={17} />
+            {awaitingPayment === 1
+              ? "One accepted request is waiting on your payment. Your seat is already held."
+              : `${awaitingPayment} accepted requests are waiting on your payment. Those seats are already held.`}
+          </div>
+        ) : null}
 
         {error && !cancellationDialog ? <div className="rt-bookings-alert" role="alert"><AlertCircle size={17} />{error}</div> : null}
         {success ? <div className="rt-bookings-alert rt-bookings-alert-success" role="status"><CheckCircle2 size={17} />{success}</div> : null}
 
         <BookingSection
           title="Current & upcoming"
-          description="Pending and confirmed journeys that have not been cancelled."
+          description="Requested, paying, confirmed and on-board seats."
           entries={currentEntries}
           icon={CalendarDays}
           emptyTitle="No current bookings"
@@ -417,7 +520,9 @@ export function MyBookingsPage() {
           activeUserId={activeUserId}
           now={now}
           cancelling={cancelling}
+          paying={paying}
           onCancel={openCancellation}
+          onPay={handlePay}
         />
         <BookingSection
           title="Booking history"
@@ -430,7 +535,9 @@ export function MyBookingsPage() {
           activeUserId={activeUserId}
           now={now}
           cancelling={cancelling}
+          paying={paying}
           onCancel={openCancellation}
+          onPay={handlePay}
           history
         />
       </div>
@@ -456,8 +563,10 @@ export function MyBookingsPage() {
             <div className="rt-bookings-modal-warning">
               <AlertCircle size={17} />
               <span>{selectedIsConfirmed
-                ? "This seat will be returned to the driver immediately and the driver will be notified."
-                : "The pending request will be withdrawn and the driver will no longer be able to confirm it."}</span>
+                ? "This seat is already held for you. Cancelling returns it to the driver immediately and they will be notified."
+                : selectedBooking.status === "payment_pending"
+                  ? "Your seat is already held. Cancelling releases it back to the driver before you pay."
+                  : "The pending request will be withdrawn and the driver will no longer be able to accept it."}</span>
             </div>
             {error ? <div className="rt-bookings-alert" role="alert"><AlertCircle size={16} />{error}</div> : null}
           </div>

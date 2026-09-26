@@ -27,12 +27,21 @@ interface NavigationItem {
   to: string;
   icon: LucideIcon;
   end?: boolean;
+  /**
+   * Rendered as the raised, filled action in the mobile bottom bar.
+   *
+   * Offering a ride is the one thing a member came here to do that does not
+   * start from a search, so it gets the same weight in the navigation that it
+   * gets on the home page. Only honoured on mobile - the desktop sidebar is a
+   * flat list and would read as an error there.
+   */
+  emphasis?: boolean;
 }
 
 const navigationItems: NavigationItem[] = [
   { label: "Home", to: "/", icon: Home, end: true },
   { label: "Find a ride", to: "/find", icon: Search },
-  { label: "Offer a ride", to: "/offer", icon: PlusCircle },
+  { label: "Offer a ride", to: "/offer", icon: PlusCircle, emphasis: true },
   { label: "My rides", to: "/rides", icon: Route },
   { label: "My bookings", to: "/bookings", icon: TicketCheck },
   { label: "Notifications", to: "/notifications", icon: Bell },
@@ -154,7 +163,10 @@ export function Layout() {
           </div>
         </header>
 
-        <main className="app-main" id="main-content">
+        {/* `tabIndex={-1}` makes the skip link actually skip: without a focusable
+            target, activating it only scrolls the page and leaves keyboard focus
+            up in the navigation, which is the thing it exists to avoid. */}
+        <main className="app-main" id="main-content" tabIndex={-1}>
           {loadError ? (
             // A refresh failed but the last known data is still on screen, so this
             // is a dismissible warning rather than a blocking error.
@@ -172,12 +184,12 @@ export function Layout() {
 
       <div className="app-mobile-navigation">
         <nav className="app-bottom-nav" aria-label="Mobile navigation">
-          {primaryMobileItems.map(({ label, to, icon: Icon, end }) => (
+          {primaryMobileItems.map(({ label, to, icon: Icon, end, emphasis }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
-              className={({ isActive }) => `app-bottom-nav__link${isActive ? " is-active" : ""}`}
+              className={({ isActive }) => `app-bottom-nav__link${isActive ? " is-active" : ""}${emphasis ? " app-bottom-nav__link--emphasis" : ""}`}
             >
               <Icon size={21} aria-hidden="true" />
               <span>{label.replace(" a ride", "")}</span>

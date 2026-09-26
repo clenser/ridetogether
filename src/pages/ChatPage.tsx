@@ -120,8 +120,11 @@ const chatStyles = `
    * only scroller.
    */
   .rt-chat-page {
-    height: calc(100vh - var(--rt-topbar-height, 72px) - var(--rt-mobile-nav-inset, 0px));
-    height: calc(100dvh - var(--rt-topbar-height, 72px) - var(--rt-mobile-nav-inset, 0px));
+    /* --rt-topbar-total, not --rt-topbar-height: in the native shell the top bar
+       also covers the status bar, so subtracting the bare height would push the
+       composer under it. */
+    height: calc(100vh - var(--rt-topbar-total, 72px) - var(--rt-mobile-nav-inset, 0px));
+    height: calc(100dvh - var(--rt-topbar-total, 72px) - var(--rt-mobile-nav-inset, 0px));
   }
   .rt-chat-shell { flex: 1 1 auto; min-height: 0; }
   .rt-chat-panel { flex: 1 1 auto; height: auto; min-height: 0; }
