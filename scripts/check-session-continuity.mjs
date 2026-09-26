@@ -274,6 +274,65 @@ check(
   !/supabase\.co[\s\S]{0,200}cache\.put/.test(serviceWorker),
 );
 
+// 10. A post-sign-in redirect can never leave the app. `navigate` reads "//host"
+//     and "/\host" as absolute, so the value that reaches it is constrained to a
+//     single leading slash. Exercised against the real module, not a copy.
+const { safeInternalPath } = await import("../src/services/internalPath.ts");
+
+for (const hostile of [
+  "//evil.com",
+  "///evil.com",
+  "/\\evil.com",
+  "/\\/evil.com",
+  "https://evil.com",
+  "http://evil.com",
+  "javascript:alert(1)",
+  "evil.com",
+  "",
+  "  /find",
+]) {
+  check(
+    `a redirect target of ${JSON.stringify(hostile)} is rejected`,
+    safeInternalPath(hostile) === "/",
+  );
+}
+
+for (const [input, expected] of [
+  ["/", "/"],
+  ["/find", "/find"],
+  ["/rides/abc-123", "/rides/abc-123"],
+  ["/profile?tab=vehicles", "/profile?tab=vehicles"],
+]) {
+  check(
+    `a redirect target of ${JSON.stringify(input)} is preserved`,
+    safeInternalPath(input) === expected,
+  );
+}
+
+check("a non-string redirect target falls back to the app root", safeInternalPath(undefined) === "/");
+check(
+  "a missing redirect target falls back to the app root",
+  safeInternalPath(null, "/") === "/",
+);
+
+const loginPage = read("src/pages/auth/LoginPage.tsx");
+check(
+  "the sign-in redirect is filtered before it is used",
+  /safeInternalPath\(\s*state\?\.from\s*\)/.test(loginPage),
+);
+check(
+  "the sign-in page never navigates to a raw state value",
+  !/navigate\(\s*state\?\.from/.test(loginPage),
+);
+check(
+  "the auth guard filters the path it hands to the sign-in screen",
+  /state=\{\{\s*from:\s*safeInternalPath\(location\.pathname\)\s*\}\}/.test(authGuards),
+);
+check(
+  "no raw location.pathname is passed into a Navigate state",
+  !/from:\s*location\.pathname\s*\}\s*\/>/.test(authGuards),
+);
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} session-continuity check(s) failed:`);
   for (const failure of failures) console.error(`  - ${failure}`);

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { safeInternalPath } from "../services/internalPath";
 import { AppLoadingScreen } from "./LoadingScreen";
 
 /**
@@ -151,7 +152,7 @@ export function RequireAuth() {
   // `isAuthenticated` true, so the current route stays mounted.
   if (isLoading) return <AuthLoadingScreen />;
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return <Navigate to="/login" replace state={{ from: safeInternalPath(location.pathname) }} />;
   }
   return <Outlet />;
 }

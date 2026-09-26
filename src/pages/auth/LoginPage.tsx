@@ -3,6 +3,7 @@ import { AlertCircle, Info, LoaderCircle, LogIn } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { validateEmail, validatePassword } from "../../services/auth";
+import { safeInternalPath } from "../../services/internalPath";
 import { AuthShell } from "./AuthShell";
 import { GoogleSignInButton } from "./GoogleSignInButton";
 
@@ -30,7 +31,7 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const state = location.state as LocationState | null;
-  const redirectTo = state?.from ?? "/";
+  const redirectTo = safeInternalPath(state?.from);
 
   /**
    * A notice handed over by a redirect is copied into state on arrival, then
