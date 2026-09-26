@@ -1164,8 +1164,27 @@ begin
     -- inside one statement, so a member could be sent a booking request and
     -- silently never hear about the cancellation that followed it in the same
     -- transaction.
+    --
+    -- The target path is built from the row rather than read from a column. The
+    -- previous version selected `url` from `inserted`, and public.notifications has
+    -- no `url` column: the query raised `42703 column "url" does not exist`, which
+    -- is not one of the missing-feature conditions handled below, so the error left
+    -- the function and aborted the trigger. That rolled back the notification
+    -- insert - and with it the booking or chat message that produced it - so push
+    -- delivered nothing at all while the write that should have carried it failed.
+    -- Only the notification's own columns can be used here, so the in-app route is
+    -- derived from them: a chat alert opens its conversation, anything else opens
+    -- the notification list.
     for v_target in
-      select id, user_id::text, title, body, url
+      select id,
+             user_id::text,
+             title,
+             body,
+             case
+               when type = 'message' and ride_id is not null
+                 then '/chat/' || ride_id::text
+               else '/notifications'
+             end as path
         from inserted
        order by user_id, created_at
     loop
@@ -1185,7 +1204,7 @@ begin
             'user_id', v_target.user_id,
             'title', coalesce(v_target.title, 'RideTogether'),
             'body', coalesce(v_target.body, ''),
-            'url', coalesce(v_target.url, '/notifications')
+            'url', v_target.path
           ),
           timeout_milliseconds := 5000
         );
@@ -1211,12 +1230,19 @@ begin
 
     return null;
   exception
-    when undefined_function or undefined_table or invalid_schema_name then
+    when undefined_function or undefined_table or invalid_schema_name or undefined_column then
       -- The push feature is not installed on this project: no vault schema, no
-      -- pg_net, or neither. That is a deployment gap, and it must not take the
-      -- rider's seat request down with it. The notification row is already
-      -- written by the time we get here, and the warning names the actual cause
-      -- instead of letting a raw 42P01 reach a member.
+      -- pg_net, no matching column, or a mix of those. That is a deployment gap,
+      -- and it must not take the rider's seat request down with it. The
+      -- notification row is already written by the time we get here, and the
+      -- warning names the actual cause instead of letting a raw 42P01/42703 reach
+      -- a member.
+      --
+      -- `undefined_column` is here for the same reason as the other three: the
+      -- dispatch query reads the `inserted` transition table, so any column it
+      -- names that the table does not have raised out of the trigger and rolled
+      -- back the notification with the write behind it. A push feature that cannot
+      -- find its own data is still only a push feature.
       raise warning 'Web Push is not configured on this database (%); delivery skipped', sqlerrm;
       perform public.record_push_dispatch_failure(
         null, 'push integration unavailable: ' || left(sqlerrm, 180));

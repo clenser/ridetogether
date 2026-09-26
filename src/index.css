@@ -27,6 +27,11 @@
   --rt-sidebar-width: 264px;
   --rt-topbar-height: 72px;
   --rt-mobile-nav-height: 72px;
+  /* Vertical space the fixed bottom nav occupies at the foot of the page. Zero on
+     desktop, where the nav is not rendered. A page that fills the viewport - the
+     chat panel - subtracts this so it ends above the nav instead of behind it,
+     rather than guessing the nav's height a second time. */
+  --rt-mobile-nav-inset: 0px;
   --rt-radius-sm: 10px;
   --rt-radius-md: 14px;
   --rt-radius-lg: 20px;
@@ -2830,9 +2835,13 @@ tbody tr:hover {
   :root {
     --rt-topbar-height: 68px;
     --rt-mobile-nav-height: 70px;
+    /* Resolved lazily, so the narrower breakpoints below that change
+       --rt-mobile-nav-height are picked up without restating this. */
+    --rt-mobile-nav-inset: calc(var(--rt-mobile-nav-height) + env(safe-area-inset-bottom) + 8px);
   }
 
   .app-sidebar {
+
     display: none;
   }
 
@@ -2847,10 +2856,13 @@ tbody tr:hover {
   .app-main {
     min-height: calc(100vh - var(--rt-topbar-height));
     min-height: calc(100dvh - var(--rt-topbar-height));
-    padding-bottom: calc(var(--rt-mobile-nav-height) + env(safe-area-inset-bottom) + 8px);
+    /* Reserving the nav here is what lets a full-height page subtract exactly the
+       same amount and stay flush with the top of the nav. */
+    padding-bottom: var(--rt-mobile-nav-inset);
   }
 
   .app-mobile-navigation {
+
     position: fixed;
     z-index: 100;
     right: 0;

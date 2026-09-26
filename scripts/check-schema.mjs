@@ -216,28 +216,73 @@ check(
   "dispatch trigger reads a Vault secret or calls pg_net straight from the function body, outside any exception handler, so a project without vault/pg_net cannot create a notification (and therefore cannot create a booking)",
 );
 check(
-  /exception\s*\n?\s*when\s+undefined_function\s+or\s+undefined_table\s+or\s+invalid_schema_name\s+then/i.test(
+  /exception\s*\n?\s*when\s+undefined_function\s+or\s+undefined_table\s+or\s+invalid_schema_name(\s+or\s+undefined_column)?\s+then/i.test(
     dispatchBody,
   ),
-  "dispatch trigger has no handler for a missing vault/pg_net object, so a project without the push extension cannot insert a notification - and therefore cannot create a booking",
+  "dispatch trigger has no handler for a missing vault/pg_net object or column, so a project without the push extension cannot insert a notification - and therefore cannot create a booking",
 );
 // Delivery must be de-duplicated by the notification's own id, and that id must
 // reach the function. Grouping by recipient alone would drop distinct
 // notifications aimed at the same member; keying on the id makes a replayed
 // trigger statement skippable instead.
 check(
-  /select\s+id\s*,\s*user_id::text\s*,\s*title\s*,\s*body\s*,\s*url\s*\n\s*from\s+inserted/i.test(
-    dispatchBody,
-  ),
+  /for\s+v_target\s+in[\s\S]*?\bid\b[\s\S]*?from\s+inserted/i.test(dispatchBody)
+    && /'notification_id'\s*,\s*v_target\.id/.test(dispatchBody),
   "dispatch trigger does not iterate the inserted rows by id, so duplicates cannot be recognised",
-);
-check(
-  /'notification_id'\s*,\s*v_target\.id/.test(dispatchBody),
-  "dispatch trigger does not pass notification_id, so the function cannot de-duplicate",
 );
 check(
   !/distinct\s+on\s*\(\s*user_id\s*\)/i.test(dispatchBody),
   "dispatch trigger groups by recipient alone, which drops distinct notifications",
+);
+// The dispatch query reads the `inserted` transition table, so every column it
+// names has to be a column of public.notifications. `select id, user_id::text,
+// title, body, url from inserted` shipped with a `url` that the table has never
+// had: PostgreSQL raised 42703, which no handler caught, so the trigger aborted
+// and rolled back the notification - and the seat request or chat message behind
+// it. The Edge Function was never called, so push silently delivered nothing.
+// Every bare identifier in the projection is therefore checked against the real
+// column list, expressions included, so `coalesce(url, ...)` fails the same way.
+const notificationsColumnsSql = strip.match(
+  /create\s+table\s+if\s+not\s+exists\s+public\.notifications\s*\(([\s\S]*?)\n\);/i,
+)?.[1] ?? "";
+check(
+  notificationsColumnsSql.length > 0,
+  "public.notifications definition could not be read for the dispatch column check",
+);
+const notificationColumns = new Set(
+  [...notificationsColumnsSql.matchAll(/^ {2}(\w+)\s+\w/gm)].map((m) => m[1].toLowerCase()),
+);
+const dispatchProjection = dispatchBody.match(
+  /for\s+v_target\s+in\s+select\s+([\s\S]*?)\s+from\s+inserted/i,
+)?.[1] ?? "";
+check(
+  dispatchProjection.length > 0,
+  "the dispatch trigger does not read the inserted rows through a select list, so its column references cannot be verified",
+);
+const SQL_WORDS = new Set([
+  "and", "as", "case", "coalesce", "else", "end", "is", "not", "null", "or", "then", "when",
+]);
+/** The identifiers a projection part reads, with literals, casts and aliases out. */
+const projectionWords = (part) => part
+  .replace(/'[^']*'/g, " ")
+  .replace(/::\s*\w+/g, " ")
+  .replace(/\bas\s+\w+\s*$/i, " ")
+  .match(/[a-z_][a-z0-9_]*/gi) ?? [];
+for (const raw of dispatchProjection.split(",")) {
+  for (const word of projectionWords(raw)) {
+    const name = word.toLowerCase();
+    if (SQL_WORDS.has(name) || notificationColumns.has(name)) continue;
+    check(
+      false,
+      `the dispatch trigger reads public.notifications.${name}, which is not a column of that table, so the trigger aborts the insert that created the notification`,
+    );
+  }
+}
+// The target path has to come from the row, so a notification can open the place
+// it is about instead of a hard-coded list.
+check(
+  /'\/chat\/'\s*\|\|/.test(dispatchProjection) && /'\/notifications'/.test(dispatchProjection),
+  "the dispatch trigger does not derive an in-app target path for each notification",
 );
 check(
   /create\s+table\s+if\s+not\s+exists\s+public\.push_deliveries/i.test(strip),

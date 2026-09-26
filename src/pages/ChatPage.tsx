@@ -28,8 +28,8 @@ interface MessageGroup {
 }
 
 const chatStyles = `
-.rt-chat-page { min-height: 100%; padding: 28px 20px 48px; color: var(--rt-text, #17231c); background: var(--rt-surface-subtle, #f6faf7); }
-.rt-chat-shell { max-width: 980px; margin: 0 auto; }
+.rt-chat-page { min-height: 100%; display: flex; flex-direction: column; padding: 28px 20px 48px; color: var(--rt-text, #17231c); background: var(--rt-surface-subtle, #f6faf7); }
+.rt-chat-shell { width: 100%; max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; }
 .rt-chat-heading { display: flex; align-items: center; gap: 7px; color: #148642; font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .rt-chat-details { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid #d7e2da; border-radius: 11px; color: #4d5d54; background: var(--rt-card, #fff); font-size: .78rem; font-weight: 750; text-decoration: none; }
 .rt-chat-details:hover { border-color: #b9d6c3; background: #f1f9f4; }
@@ -98,10 +98,39 @@ const chatStyles = `
 [data-theme="dark"] .rt-chat-textarea { color: #eef7f1; background: #111a14; border-color: #3a4b40; }
 [data-theme="dark"] .rt-chat-textarea:focus { background: #18231b; }
 [data-theme="dark"] .rt-chat-empty p { color: #a6b5ac; }
+@media (max-width: 1024px) {
+  /*
+   * The breakpoint where the fixed bottom nav appears, so this is the range where
+   * the panel has to be sized from the space the shell actually leaves over: the
+   * sticky topbar above and the bottom nav below.
+   *
+   * It used to subtract a hard-coded 210px from 100dvh and then carry a 480px
+   * min-height. Both are wrong. 210px counted the topbar a second time (the page
+   * already starts below it) while missing the real page header, which is a stacked
+   * column with a full-width button under 720px; and a 480px floor overrode the
+   * viewport-derived height outright on a 568-640px phone. The panel then ended
+   * below the fold, where the fixed nav sat on top of the composer and only
+   * scrolling the page - not the message list - could reach it.
+   *
+   * A definite height rather than a min-height is what makes the fix hold: the
+   * message list is a 1fr grid row, so an indefinite container lets that row take
+   * its max-content height, the page grow past the viewport and the document scroll.
+   * Bounding the page, letting the panel shrink and giving the list the
+   * minmax(0, 1fr) row is what keeps the composer on screen and makes the list the
+   * only scroller.
+   */
+  .rt-chat-page {
+    height: calc(100vh - var(--rt-topbar-height, 72px) - var(--rt-mobile-nav-inset, 0px));
+    height: calc(100dvh - var(--rt-topbar-height, 72px) - var(--rt-mobile-nav-inset, 0px));
+  }
+  .rt-chat-shell { flex: 1 1 auto; min-height: 0; }
+  .rt-chat-panel { flex: 1 1 auto; height: auto; min-height: 0; }
+  .rt-chat-state { flex: 1 1 auto; min-height: 0; }
+}
 @media (max-width: 680px) {
   .rt-chat-page { padding: 18px 12px 24px; }
   .rt-chat-details { width: 100%; }
-  .rt-chat-panel { height: calc(100dvh - 210px); min-height: 480px; border-radius: 18px; }
+  .rt-chat-panel { border-radius: 18px; }
   .rt-chat-route { align-items: flex-start; padding: 14px; }
   .rt-chat-meta { max-width: 115px; justify-content: flex-end; }
   .rt-chat-meta span:nth-child(2) { display: none; }
