@@ -1,4 +1,13 @@
 import type { AuthChangeEvent, Session, User as SupabaseUser } from "@supabase/supabase-js";
+import {
+  closeAuthWindow,
+  isAuthCallbackUrl,
+  isCapacitorShellOrigin,
+  isNativeApp,
+  NATIVE_AUTH_REDIRECT_URL,
+  openAuthWindow,
+  readSessionFromDeepLink,
+} from "./nativeAuth";
 import { getSupabaseClient, isSupabaseConfigured } from "./supabase";
 
 export type AuthAction =
@@ -252,8 +261,24 @@ const appOrigin = (): string => {
  * sign-in, which is why the callback is a real page.
  */
 const resolveRedirectTo = (): string => {
+  // Inside the Android shell the WebView is served from https://localhost, so
+  // redirecting to `<origin>/auth/callback` would send Google back to a local
+  // page nobody is serving. Use the app's own scheme instead, which the manifest
+  // routes straight back into the app.
+  if (isNativeApp()) return NATIVE_AUTH_REDIRECT_URL;
+
   const explicit = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim();
   if (explicit) return explicit;
+
+  // Belt and braces for a shell origin that `isNativeApp` somehow missed: refuse
+  // instead of handing Google a redirect nothing is serving. A dead redirect is
+  // indistinguishable from a broken sign-in; an error is not.
+  if (isCapacitorShellOrigin()) {
+    throw new Error(
+      "RideTogether could not work out where to return you from the app. Please reopen RideTogether and try in a moment.",
+    );
+  }
+
   return `${appOrigin()}${AUTH_CALLBACK_PATH}`;
 };
 
@@ -269,21 +294,30 @@ const resolveRecoveryRedirect = (): string => `${appOrigin()}${PASSWORD_RESET_PA
 /**
  * Starts the Google sign-in flow.
  *
- * This does not return a session: the browser leaves the page and Supabase's
- * callback completes the exchange, which arrives back through
+ * On the web this does not return a session: the browser leaves the page and
+ * Supabase's callback completes the exchange, which arrives back through
  * `onAuthStateChange`. Callers must not treat this as a completed sign-in.
+ *
+ * On native the same exchange is finished by `settleNativeAuthRedirect` once the
+ * deep link returns, so it also returns without a session. The difference is who
+ * performs the navigation: the Supabase client in the browser, the system browser
+ * here, because a WebView redirect to a custom scheme is dropped.
  */
 export const signInWithGoogle = async (): Promise<void> => {
   const client = getSupabaseClient();
   const redirectTo = resolveRedirectTo();
+  const native = isNativeApp();
 
-  const { error } = await client.auth.signInWithOAuth({
+  const { data, error } = await client.auth.signInWithOAuth({
     provider: "google",
     options: {
       redirectTo,
-      // Keep the callback on our own origin so the session is not written to
-      // third-party storage.
-      skipBrowserRedirect: false,
+      // Native: take the URL and open it in the system browser ourselves, so the
+      // authorize request is not attempted inside the WebView (Google blocks it)
+      // and the custom-scheme return is not swallowed.
+      // Web: let the client redirect this tab, keeping the callback on our own
+      // origin so the session is not written to third-party storage.
+      skipBrowserRedirect: native,
       scopes: "openid email profile",
       queryParams: {
         access_type: "offline",
@@ -295,6 +329,64 @@ export const signInWithGoogle = async (): Promise<void> => {
   if (error) {
     throw new Error(describeAuthError(error, "sign-in"));
   }
+
+  if (!native) return;
+
+  const authorizeUrl = data?.url;
+  if (!authorizeUrl) {
+    throw new Error(
+      "RideTogether could not start Google sign-in. Please try again in a moment.",
+    );
+  }
+
+  await openAuthWindow(authorizeUrl);
+};
+
+/**
+ * Finishes a native sign-in once the deep link brings the app back.
+ *
+ * The session arrives in the URL fragment, exactly as it does on the web, but the
+ * WebView never navigated to it so `detectSessionInUrl` has nothing to read. The
+ * tokens are handed to the client explicitly, which persists them and fires
+ * `onAuthStateChange` for `AuthContext` like any other sign-in.
+ *
+ * Safe to call for any app URL: unrelated links resolve to `null` and are
+ * ignored, and a second call after a successful settle is a no-op because the
+ * client already holds the session.
+ */
+export const settleNativeAuthRedirect = async (url: string): Promise<boolean> => {
+  if (!isNativeApp()) return false;
+
+  const result = readSessionFromDeepLink(url);
+  if (!result) {
+    // A callback with no session in it is still ours: this sign-in opened that
+    // browser, so leaving it on top of the app would hide the sign-in screen
+    // behind it. Unrelated deep links never match and are left alone. This is
+    // also what a rejected redirect looks like, so dismissing is what lets the
+    // member see the app at all.
+    if (isAuthCallbackUrl(url)) await closeAuthWindow();
+    return false;
+  }
+
+  // The provider can hand back a usable-looking deep link alongside an error, so
+  // the browser is always dismissed before either outcome is reported.
+  if ("error" in result) {
+    await closeAuthWindow();
+    throw new Error(result.error);
+  }
+
+  const client = getSupabaseClient();
+  const { error } = await client.auth.setSession({
+    access_token: result.session.accessToken,
+    refresh_token: result.session.refreshToken,
+  });
+
+  if (error) {
+    throw new Error(describeAuthError(error, "sign-in"));
+  }
+
+  await closeAuthWindow();
+  return true;
 };
 
 /**

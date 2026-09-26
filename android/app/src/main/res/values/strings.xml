@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">RideTogether</string>
+    <string name="title_activity_main">RideTogether</string>
+    <string name="package_name">com.ridetogether.app</string>
+    <!-- Must match appId in capacitor.config.ts and NATIVE_AUTH_SCHEME in
+         src/services/nativeAuth.ts. This is what turns
+         com.ridetogether.app:/auth/callback back into this app. -->
+    <string name="custom_url_scheme">com.ridetogether.app</string>
+</resources>

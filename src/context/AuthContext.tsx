@@ -26,12 +26,14 @@ import {
   onAuthStateChange,
   signIn as supabaseSignIn,
   signInWithGoogle as supabaseSignInWithGoogle,
+  settleNativeAuthRedirect,
   signOut as supabaseSignOut,
   signUp as supabaseSignUp,
   type SignInInput,
   type SignUpInput,
   type SignUpResult,
 } from "../services/auth";
+import { consumeLaunchUrl, listenForAuthDeepLink } from "../services/nativeAuth";
 import { getSupabaseConfigStatus, type SupabaseConfigIssue } from "../services/supabase";
 import type { User } from "../types";
 
@@ -324,6 +326,57 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // The redirect navigates away, so no state is set here. Supabase posts back
     // to the redirect URL and the session is picked up by onAuthStateChange.
     await supabaseSignInWithGoogle();
+  }, []);
+
+  /**
+   * Native OAuth return path.
+   *
+   * On the web the Supabase client settles the callback itself, so there is
+   * nothing to do here and the effect tears down immediately. In the Android
+   * shell the system browser is a separate app, so the return arrives as a
+   * `com.ridetogether.app:/auth/callback` deep link instead of a navigation. This
+   * subscribes for the app's whole lifetime rather than only during a sign-in,
+   * because the OS may have killed the process and restarted the app with that
+   * URL, which is what `consumeLaunchUrl` covers.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let teardown: (() => void) | undefined;
+
+    const handleUrl = (url: string) => {
+      void settleNativeAuthRedirect(url)
+        .then((settled) => {
+          // A deep link with no session in it is not ours to report on: it can be
+          // any link the app is registered for, so it is ignored silently.
+          if (!settled) return;
+          setSessionNotice(null);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          const message =
+            error instanceof Error && error.message
+              ? error.message
+              : "We could not complete your Google sign-in. Please try again.";
+          setSessionNotice(message);
+        });
+    };
+
+    void (async () => {
+      const remove = await listenForAuthDeepLink(handleUrl);
+      if (cancelled) {
+        remove();
+        return;
+      }
+      teardown = remove;
+
+      const launchUrl = await consumeLaunchUrl();
+      if (launchUrl) handleUrl(launchUrl);
+    })();
+
+    return () => {
+      cancelled = true;
+      teardown?.();
+    };
   }, []);
 
   const signUp = useCallback(
