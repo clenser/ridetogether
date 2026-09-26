@@ -1,10 +1,23 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Secrets. Every one of these is a real value on a developer machine or a
+# per-branch override; only the placeholder file is ever committed.
 .env
 .env.local
 .env.*.local
 !.env.example
+
+# Supabase CLI local state. `supabase/.temp/` holds the linked project ref, the
+# pooler connection string and CLI/gotrue/postgres version stamps. There are no
+# passwords in it, but it is per-developer machine state that identifies one
+# deployment, and the CLI regenerates it on `supabase link`.
+supabase/.temp/
+
+# Build/preview output written into the working tree by `npm run preview > log`.
+/preview.log
+*.log
 
 # Playwright
 /test-results/

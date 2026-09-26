@@ -3,7 +3,12 @@ import { CarFront, RefreshCw, ShieldAlert } from "lucide-react";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-const guardStyles = `
+/**
+ * Shared by every full-screen auth state (loading, unavailable, profile error,
+ * OAuth callback failure) so they look identical instead of each page inventing
+ * its own card.
+ */
+export const guardStyles = `
 .rt-guard {
   min-height: 100vh;
   display: grid;
@@ -91,7 +96,7 @@ const ISSUE_COPY: Record<string, string> = {
   "unsafe-key": "VITE_SUPABASE_PUBLISHABLE_KEY looks like a secret key. Use the public publishable key only.",
 };
 
-export function AuthLoadingScreen() {
+export function AuthLoadingScreen({ message = "Restoring your session…" }: { message?: string }) {
   return (
     <div className="app-loading" role="status" aria-live="polite" data-testid="app-loading">
       <span className="app-loading__logo" aria-hidden="true">
@@ -99,7 +104,7 @@ export function AuthLoadingScreen() {
       </span>
       <strong>RideTogether</strong>
       <span className="app-loading__spinner" aria-hidden="true" />
-      <span>Restoring your session…</span>
+      <span>{message}</span>
     </div>
   );
 }

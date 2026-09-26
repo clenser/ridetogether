@@ -10,6 +10,13 @@ type FieldErrors = Partial<Record<"email" | "password", string>>;
 
 interface LocationState {
   from?: string;
+  /**
+   * One-off message passed by a redirect, currently the "your password has been
+   * updated" confirmation from the reset flow. It takes precedence over the
+   * session notice, which would otherwise report the sign-out that the reset
+   * flow performs on its way here.
+   */
+  notice?: string;
 }
 
 export function LoginPage() {
@@ -22,13 +29,24 @@ export function LoginPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const redirectTo = (location.state as LocationState | null)?.from ?? "/";
+  const state = location.state as LocationState | null;
+  const redirectTo = state?.from ?? "/";
+
+  /**
+   * A notice handed over by a redirect is copied into state on arrival, then
+   * dismissed locally. Reading it straight from `location.state` would keep it on
+   * screen while the member types, because clearing the session notice does not
+   * touch the location.
+   */
+  const [stateNotice, setStateNotice] = useState<string | null>(state?.notice ?? null);
+  const notice = stateNotice ?? sessionNotice;
 
   const updateField = (key: keyof FieldErrors, value: string) => {
     if (key === "email") setEmail(value);
     if (key === "password") setPassword(value);
     setErrors((current) => ({ ...current, [key]: undefined }));
     setFormError(null);
+    setStateNotice(null);
     clearSessionNotice();
   };
 
@@ -66,10 +84,10 @@ export function LoginPage() {
     >
       <form onSubmit={handleSubmit} noValidate>
         <div className="rt-auth__body" style={{ padding: 0, gap: 16 }}>
-          {sessionNotice ? (
+          {notice ? (
             <p className="rt-auth__notice" role="status">
               <Info size={16} aria-hidden="true" />
-              {sessionNotice}
+              {notice}
             </p>
           ) : null}
 
@@ -102,7 +120,12 @@ export function LoginPage() {
           </label>
 
           <label className="rt-auth__field">
-            <span className="rt-auth__label">Password</span>
+            <span className="rt-auth__label-row">
+              <span className="rt-auth__label">Password</span>
+              <Link className="rt-auth__label-link" to="/forgot-password" data-testid="login-forgot-password">
+                Forgot password?
+              </Link>
+            </span>
             <input
               className="rt-auth__input"
               data-testid="login-password"

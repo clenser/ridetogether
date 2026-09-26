@@ -1,7 +1,14 @@
 import type { AuthChangeEvent, Session, User as SupabaseUser } from "@supabase/supabase-js";
 import { getSupabaseClient, isSupabaseConfigured } from "./supabase";
 
-export type AuthAction = "sign-in" | "sign-up" | "sign-out" | "session" | "profile";
+export type AuthAction =
+  | "sign-in"
+  | "sign-up"
+  | "sign-out"
+  | "session"
+  | "profile"
+  | "password-reset"
+  | "password-update";
 
 export interface SignInInput {
   email: string;
@@ -32,6 +39,9 @@ const FRIENDLY_MESSAGES: Record<string, string> = {
   weak_password: "Please choose a stronger password.",
   over_request_rate_limit: "Too many attempts. Wait a minute and try again.",
   over_email_send_rate_limit: "Too many attempts. Wait a minute and try again.",
+  otp_expired: "This reset link has expired. Request a new one.",
+  access_denied: "This sign-in link is no longer valid. Please try again.",
+  same_password: "That is the same password you are already using. Choose a different one.",
   failed_to_fetch: "We could not reach the server. Check your connection and try again.",
   network_request_failed: "We could not reach the server. Check your connection and try again.",
   "401": "Your session has expired. Please sign in again.",
@@ -50,6 +60,7 @@ const MESSAGE_HINTS: ReadonlyArray<[RegExp, string]> = [
   [/invalid login credentials/i, "That email and password combination is incorrect."],
   [/failed to fetch|networkerror|network request failed/i, "We could not reach the server. Check your connection and try again."],
   [/jwt expired|token expired|session expired/i, "Your session has expired. Please sign in again."],
+  [/otp_expired|email link is invalid|token has expired|expired or is invalid/i, "This link has expired. Request a new one."],
   [/row-level security|violates row level security/i, "You do not have permission to do that."],
   [/rate limit/i, "Too many attempts. Wait a minute and try again."],
 ];
@@ -60,6 +71,8 @@ const GENERIC_MESSAGES: Record<AuthAction, string> = {
   "sign-out": "We could not sign you out. Please try again.",
   session: "We could not restore your session. Please sign in again.",
   profile: "We could not load your profile. Please try again.",
+  "password-reset": "We could not send that reset email. Please try again.",
+  "password-update": "We could not update your password. Please try again.",
 };
 
 const readError = (
@@ -202,28 +215,56 @@ export const signOut = async (): Promise<void> => {
 };
 
 /**
- * Where Google should send the browser back to.
- *
- * Derived from the current origin instead of a hard-coded deployment URL so the
- * same build works on localhost, a preview branch and production. An explicit
- * `VITE_AUTH_REDIRECT_URL` wins when set, which is what you need when the app is
- * served from a different origin than the one the user started the flow on.
+ * Paths the app owns inside this origin. Both are real routes in `App.tsx`, so
+ * Supabase always sends the browser somewhere that exists: OAuth returns to
+ * AUTH_CALLBACK_PATH, a recovery link returns to PASSWORD_RESET_PATH.
  */
-const resolveRedirectTo = (): string => {
-  const explicit = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim();
-  if (explicit) return explicit;
+export const AUTH_CALLBACK_PATH = "/auth/callback";
+export const PASSWORD_RESET_PATH = "/reset-password";
 
+/** The origin this build is served from. Never a hard-coded deployment URL. */
+const appOrigin = (): string => {
   const origin =
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
       : "";
   if (!origin) {
     throw new Error(
-      "RideTogether could not work out where to return you from Google. Set VITE_AUTH_REDIRECT_URL and try again.",
+      "RideTogether could not work out where to return you. Set VITE_AUTH_REDIRECT_URL and try again.",
     );
   }
   return origin;
 };
+
+/**
+ * Where Google should send the browser back to.
+ *
+ * Derived from the current origin instead of a hard-coded deployment URL so the
+ * same build works on localhost, a preview branch and production. An explicit
+ * `VITE_AUTH_REDIRECT_URL` wins when set, which is what you need when the app is
+ * served from a different origin than the one the user started the flow on.
+ *
+ * The default is `/auth/callback`, not the bare origin. Supabase returns the
+ * session as a URL fragment, and this app routes with the History API, so the
+ * fragment is only readable on a route that exists - `/auth/callback` waits for
+ * the session and then forwards to home or profile completion. Pointing the
+ * provider at a path with no route produced a 404 after a successful Google
+ * sign-in, which is why the callback is a real page.
+ */
+const resolveRedirectTo = (): string => {
+  const explicit = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim();
+  if (explicit) return explicit;
+  return `${appOrigin()}${AUTH_CALLBACK_PATH}`;
+};
+
+/**
+ * Where a recovery email should send the browser.
+ *
+ * Always derived from the current origin. `VITE_AUTH_REDIRECT_URL` is specific
+ * to the OAuth callback, so reusing it here would drop the member on the sign-in
+ * screen instead of the password form.
+ */
+const resolveRecoveryRedirect = (): string => `${appOrigin()}${PASSWORD_RESET_PATH}`;
 
 /**
  * Starts the Google sign-in flow.
@@ -262,6 +303,40 @@ export const signInWithGoogle = async (): Promise<void> => {
  * is reported with a real message rather than hidden.
  */
 export const isGoogleSignInAvailable = (): boolean => isSupabaseConfigured();
+
+/**
+ * Emails a password reset link.
+ *
+ * Supabase owns the token: only a single-use token in the emailed link can set a
+ * new password, and this app never sees, stores or generates one. The email
+ * address is the only value held, and only in the caller's own form state.
+ */
+export const sendPasswordResetEmail = async (email: string): Promise<void> => {
+  const client = getSupabaseClient();
+  const { error } = await client.auth.resetPasswordForEmail(normalizeEmail(email), {
+    redirectTo: resolveRecoveryRedirect(),
+  });
+
+  if (error) {
+    throw new Error(describeAuthError(error, "password-reset"));
+  }
+};
+
+/**
+ * Sets a new password for the member holding the current recovery session.
+ *
+ * Supabase requires an authenticated session for this call, which is why the
+ * reset link lands on a real route: the session arrives in the URL fragment and
+ * is exchanged by the client before this is invoked.
+ */
+export const updatePassword = async (password: string): Promise<void> => {
+  const client = getSupabaseClient();
+  const { error } = await client.auth.updateUser({ password });
+
+  if (error) {
+    throw new Error(describeAuthError(error, "password-update"));
+  }
+};
 
 export const getCurrentSession = async (): Promise<Session | null> => {
   const client = getSupabaseClient();

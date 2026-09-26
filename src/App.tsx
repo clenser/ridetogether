@@ -16,8 +16,11 @@ import SafetyPage from "./pages/SafetyPage";
 import SettingsPage from "./pages/SettingsPage";
 import VehiclesPage from "./pages/VehiclesPage";
 import CompleteProfilePage from "./pages/auth/CompleteProfilePage";
+import ForgotPasswordPage from "./pages/auth/ForgotPasswordPage";
 import LoginPage from "./pages/auth/LoginPage";
+import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
 import SignUpPage from "./pages/auth/SignUpPage";
+import AuthCallbackPage from "./pages/auth/AuthCallbackPage";
 
 const notFoundStyles = `
 .rt-not-found {
@@ -246,6 +249,9 @@ const getDocumentTitle = (pathname: string) => {
   if (pathname === "/settings") return "Settings | RideTogether";
   if (pathname === "/login") return "Log In | RideTogether";
   if (pathname === "/signup") return "Create Account | RideTogether";
+  if (pathname === "/forgot-password") return "Reset Password | RideTogether";
+  if (pathname === "/reset-password") return "Choose a New Password | RideTogether";
+  if (pathname === "/auth/callback") return "Signing In | RideTogether";
   if (pathname === "/complete-profile") return "Complete Your Profile | RideTogether";
   return "Page Not Found | RideTogether";
 };
@@ -309,6 +315,30 @@ export default function App() {
           </RedirectIfAuthenticated>
         }
       />
+      <Route
+        path="/forgot-password"
+        element={
+          <RedirectIfAuthenticated>
+            <ForgotPasswordPage />
+          </RedirectIfAuthenticated>
+        }
+      />
+      {/*
+        Deliberately not wrapped in `RedirectIfAuthenticated`. That guard sends a
+        signed-in member to `/`, which is the right destination but the wrong
+        component to own the OAuth handoff: this page has to wait for the session
+        that arrives in the URL before it can decide anything, and it must show a
+        real error when the provider declined. It forwards to `/` itself, and the
+        `RequireCompleteProfile` guard there sends an incomplete profile to
+        `/complete-profile`.
+      */}
+      <Route path="/auth/callback" element={<AuthCallbackPage />} />
+      {/*
+        Recovery links establish a session in the URL, so this route must stay
+        reachable while signed in. `ResetPasswordPage` re-checks the session and
+        signs the member out on success.
+      */}
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
       <Route element={<RequireAuth />}>
         <Route path="/complete-profile" element={<CompleteProfilePage />} />

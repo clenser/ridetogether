@@ -86,6 +86,9 @@ export const authStyles = `
 .rt-auth__body { padding: 24px 26px 26px; display: grid; gap: 16px; }
 .rt-auth__field { display: grid; gap: 7px; }
 .rt-auth__label { font-size: .8rem; font-weight: 750; color: #34473b; }
+.rt-auth__label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rt-auth__label-link { color: #12813c; font-size: .76rem; font-weight: 800; text-decoration: none; }
+.rt-auth__label-link:hover { text-decoration: underline; }
 .rt-auth__input {
   width: 100%;
   min-height: 46px;
@@ -236,6 +239,7 @@ export const authStyles = `
 }
 [data-theme="dark"] .rt-auth__card { border-color: #2b3a30; background: rgba(23, 33, 26, .96); box-shadow: 0 26px 66px rgba(0, 0, 0, .35); }
 [data-theme="dark"] .rt-auth__label { color: #eef7f1; }
+[data-theme="dark"] .rt-auth__label-link { color: #8be0a6; }
 [data-theme="dark"] .rt-auth__input { color: #eef7f1; background: #1b271f; border-color: #34463a; }
 [data-theme="dark"] .rt-auth__hint,
 [data-theme="dark"] .rt-auth__locked,

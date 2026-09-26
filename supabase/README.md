@@ -286,6 +286,13 @@ Run these in the browser after `npm run dev` with a valid `.env`.
 | E | Submit an incomplete profile | Redirects back to `/complete-profile`; the app stays unreachable. |
 | F | Complete the profile, then reload the page | Session is restored without a re-login; the profile is intact. |
 | G | Sign out | Returns to `/login`; back/forward and a hard reload cannot re-enter the app. |
+| H | `/login` -> "Forgot password?" -> submit an email | "Check your inbox" state naming the address; no password field anywhere. |
+| I | Open the emailed link, set a new password | `/reset-password` accepts it, signs you out, and returns to `/login`. |
+| J | Log in with the new password | Succeeds. The old password no longer works. |
+| K | Re-open the same recovery link | Reports the link as expired or already used, with a way to request a new one. |
+| L | Open `/auth/callback` with no session | Real error screen with "Try signing in again"; not a 404. |
+| M | Sign in with Google, existing complete profile | Returns through `/auth/callback` and lands on Home. |
+| N | Sign in with Google, brand-new account | `handle_new_user()` seeds the profile; an incomplete one lands on `/complete-profile`. |
 
 Also confirm: no password or token is written to `localStorage`/`sessionStorage`
 by app code, and no route is reachable without a Supabase session.
@@ -307,11 +314,53 @@ Email/password works with no extra setup. To add Google:
    callback page to the redirect allow-list, e.g.
    `https://your-app.example.com/auth/callback`.
 
-The browser calls `signInWithOAuth({ provider: "google" })` and returns to
-`VITE_AUTH_REDIRECT_URL`, or to the current origin when that variable is unset
-(which is what local development wants). The Google button only renders when a
+The browser calls `signInWithOAuth({ provider: "google" })` on the single
+centralised client and returns to `VITE_AUTH_REDIRECT_URL`, or to
+`<current origin>/auth/callback` when that variable is unset (which is what
+local development wants). `/auth/callback` is a real route: it waits for the
+session Supabase returns in the URL fragment, then forwards to `/`, where the
+existing `RequireCompleteProfile` guard sends a complete profile to Home and an
+incomplete one to Complete Profile. The Google button only renders when a
 Supabase URL and publishable key are configured, so a misconfigured deployment
 shows the email form instead of a button that cannot work.
+
+---
+
+## Password recovery
+
+No dashboard setup is required - `resetPasswordForEmail` works on a fresh
+project. The flow is:
+
+1. `/login` -> "Forgot password?" -> `/forgot-password` collects the email and
+   calls `client.auth.resetPasswordForEmail(email, { redirectTo })`.
+2. Supabase emails a single-use link to `<origin>/reset-password`.
+3. That route exchanges the token from the link's URL fragment for a session
+   during client startup. An expired, already-used or foreign-device link simply
+   produces no session, which the page reports as an expired link with a way to
+   request a new one.
+4. `client.auth.updateUser({ password })` sets the new password. Supabase requires
+   a session for this call, which is why step 3 has to happen first.
+5. The member is signed out and returned to `/login` to prove the new password
+   works.
+
+Only two origins are derived at runtime, both from `window.location.origin`, so
+no deployment URL is hard-coded. `VITE_AUTH_REDIRECT_URL` is specific to the
+OAuth callback and is deliberately **not** reused here - doing so would drop the
+member on the sign-in screen instead of the password form.
+
+**Redirect URLs to allow-list** (Authentication -> URL Configuration) - add both
+for every origin you deploy to, including `http://localhost:5173`:
+
+| URL | Purpose |
+| --- | --- |
+| `https://your-app.example.com/auth/callback` | Google / OAuth return |
+| `https://your-app.example.com/reset-password` | password recovery email |
+
+If your project has email confirmation enabled, the confirmation link uses the
+Site URL instead, so also set Site URL to your app's origin.
+
+Passwords are never written to `localStorage`, `sessionStorage`, IndexedDB, the
+URL or any log. The new password is passed directly to Supabase Auth and dropped.
 
 ---
 
@@ -446,8 +495,10 @@ device, and a `signatureRejected` count above zero means the deployed
 
 `npm run build` produces a static `dist/`. It can be served from any static host
 as long as unknown paths fall back to `index.html`, because the app uses real
-paths (`/find`, `/rides/:id`, `/auth/callback`) and a hard refresh or a shared
-link would otherwise 404.
+paths (`/find`, `/rides/:id`, `/auth/callback`, `/reset-password`) and a hard
+refresh or a shared link would otherwise 404. That matters for the auth routes
+in particular: an emailed recovery link and a Google return both land on real
+paths that must survive a cold load.
 
 ### Cloudflare Workers Static Assets
 

@@ -163,10 +163,17 @@ export const createVehicle = async (draft: VehicleDraft): Promise<Vehicle> => {
       .limit(1);
 
     if (!existingDefault || existingDefault.length === 0) {
-      await setDefaultVehicle(created.id).catch((error: unknown) => {
+      try {
+        await setDefaultVehicle(created.id);
+        return { ...created, isDefault: true };
+      } catch (error) {
         if (import.meta.env.DEV) console.warn("[vehicles] auto-default skipped", error);
-      });
-      return { ...created, isDefault: true };
+        // Return the row as the database actually holds it. Claiming
+        // `isDefault: true` after a failed promotion would hand the caller a
+        // vehicle that is not the default, and the first reader to trust it
+        // would preselect the wrong car when offering a ride.
+        return created;
+      }
     }
   }
   return created;

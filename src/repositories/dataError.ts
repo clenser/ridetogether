@@ -140,7 +140,10 @@ export const toDataError = (error: unknown, action: DataErrorAction): DataError 
     || code === "22P02"
     || /invalid input value|violates check constraint|out of range|bad request/i.test(haystack)
   ) {
-    return new DataError(GENERIC.update, "invalid", error);
+    // `GENERIC[action]`, not a hard-coded `update`: telling someone adding their
+    // first vehicle "we could not update that" hides both the operation they
+    // attempted and the fact that a plain retry will not help.
+    return new DataError(GENERIC[action], "invalid", error);
   }
   if (code === "42501" || status === "403" || FORBIDDEN_PATTERN.test(haystack)) {
     return new DataError("You do not have permission to do that.", "forbidden", error);
