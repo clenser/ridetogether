@@ -259,32 +259,64 @@ export const subscribeToInstallState = (
 export const getInstallState = (): InstallPromptState => snapshot();
 
 /**
+ * Shows a notification if permission is granted.
+ *
+ * On Android (PWA/standalone mode), this triggers a native-looking notification.
+ * On web, it uses the standard Notification API. Permission is requested if not
+ * already granted.
+ */
+export const showNotification = async (
+  title: string,
+  options: NotificationOptions & { rideId?: string }
+): Promise<boolean> => {
+  if (!("Notification" in window)) {
+    if (import.meta.env.DEV) console.info("[notification] not supported");
+    return false;
+  }
+
+  // Check current permission status
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    if (import.meta.env.DEV) console.info("[notification] permission denied");
+    return false;
+  }
+
+  try {
+    const notification = new Notification(title, {
+      ...options,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag: `ride-${options.data?.rideId || "default"}`,
+    });
+
+    // Auto-close after 5 seconds if not user-interacted
+    setTimeout(() => notification.close(), 5000);
+
+return true;
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn("[notification] failed", error);
+    return false;
+  }
+};
+
+/**
  * Shows the browser's install prompt.
  *
  * Returns the outcome, or `"unavailable"` when the browser is not offering one -
  * which is normal on iOS Safari and in an already-installed window.
  */
 export const requestInstall = async (): Promise<"accepted" | "dismissed" | "unavailable"> => {
-  const prompt = deferredPrompt;
-  if (!prompt) return "unavailable";
-
-  try {
-    await prompt.prompt();
-    const { outcome } = await prompt.userChoice;
-    // The event is single-use; drop it either way so a second tap is a no-op
-    // rather than a promise that never resolves.
-    deferredPrompt = null;
-    emit();
-    return outcome;
-  } catch (error) {
-    if (import.meta.env.DEV) console.warn("[pwa] install prompt failed", error);
-    deferredPrompt = null;
-    emit();
-    return "unavailable";
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(DISMISS_KEY, "1");
   }
+  deferredPrompt = null;
+  emit();
+  return "unavailable";
 };
 
-/** Remembers that the member said no, so the prompt is not shown again. */
+/**
+ * Remembers that the member said no, so the prompt is not shown again.
+ */
 export const dismissInstallPrompt = (): void => {
   if (typeof localStorage !== "undefined") {
     localStorage.setItem(DISMISS_KEY, "1");

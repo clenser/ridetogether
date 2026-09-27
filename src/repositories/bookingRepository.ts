@@ -136,7 +136,10 @@ export const listMyBookings = async (): Promise<Booking[]> => {
     .limit(200)
     .returns<BookingRow[]>();
 
-  if (error) throw toDataError(error, "load");
+  if (error) {
+    console.error("[bookings:listMy] error:", { code: error?.code, message: error?.message });
+    throw toDataError(error, "load");
+  }
   return ((data ?? []) as BookingRow[]).map(rowToBooking);
 };
 
@@ -152,7 +155,10 @@ export const listBookingRequestsForMyRides = async (): Promise<Booking[]> => {
     .from("rides")
     .select("id")
     .eq("driver_id", driverId);
-  if (rideError) throw toDataError(rideError, "load");
+  if (rideError) {
+    console.error("[bookings:listBookingRequestsForMyRides] rideError:", { code: rideError?.code, message: rideError?.message });
+    throw toDataError(rideError, "load");
+  }
 
   const rideIds = ((rideRows ?? []) as { id: string }[]).map((row) => row.id);
   if (rideIds.length === 0) return [];
@@ -166,12 +172,16 @@ export const listBookingRequestsForMyRides = async (): Promise<Booking[]> => {
     .limit(300)
     .returns<BookingRow[]>();
 
-  if (error) throw toDataError(error, "load");
+  if (error) {
+    console.error("[bookings:listBookingRequestsForMyRides] error:", { code: error?.code, message: error?.message });
+    throw toDataError(error, "load");
+  }
   return ((data ?? []) as BookingRow[]).map(rowToBooking);
 };
 
 export const listAllVisibleBookings = async (): Promise<Booking[]> => {
   const [mine, requests] = await Promise.all([listMyBookings(), listBookingRequestsForMyRides()]);
+  console.error("[bookings:listAllVisible] mine=", mine.length, "requests=", requests.length);
   const merged = new Map<string, Booking>();
   for (const booking of [...mine, ...requests]) merged.set(booking.id, booking);
   return [...merged.values()];
