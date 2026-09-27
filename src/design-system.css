@@ -425,19 +425,23 @@
 .ds-search > svg {
   position: absolute;
   left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--rt-subtle);
   pointer-events: none;
+  z-index: 1;
 }
 
 .ds-search .ds-input {
   height: 40px;
   min-height: 40px;
-  padding-left: 38px;
+  padding-left: 40px;
   padding-right: 36px;
   background: var(--rt-surface-muted);
   border-color: transparent;
   border-radius: var(--rt-radius-pill);
   font-size: 0.875rem;
+  line-height: 1.4;
 }
 
 .ds-search .ds-input:hover {

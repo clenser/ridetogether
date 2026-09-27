@@ -36,6 +36,8 @@ const CHANNEL_NAME = "ride-location";
 const REPORT_INTERVAL_MS = 5_000;
 /** A fix older than this is shown as stale rather than as the current position. */
 export const STALE_AFTER_SECONDS = 45;
+/** Fallback polling interval for passengers watching a live ride. */
+const FALLBACK_POLL_INTERVAL_MS = 3_500;
 
 export interface UseRideLocationOptions {
   rideId: string;
@@ -111,6 +113,11 @@ export function useRideLocation({
 
   // Subscribe to writes for this ride. The channel is filtered by `ride_id` so a
   // member with several rides open only receives the one they are watching.
+  //
+  // The callback uses refs to avoid stale closures: `setLocation` and `setNow`
+  // are stable, but the payload handler must never capture an old `location`
+  // value or it will appear to "not update" when React batches renders.
+  const locationRef = useRef<RideLocationRow | null>(null);
   useEffect(() => {
     if (!rideId || !enabled) return undefined;
     const client = getSupabaseClient();
@@ -127,7 +134,9 @@ export function useRideLocation({
         (payload) => {
           const next = (payload.new ?? payload.old) as Partial<RideLocationRow> | undefined;
           if (!next?.ride_id) return;
-          setLocation(rowToRideLocation(next as RideLocationRow));
+          const parsed = rowToRideLocation(next as RideLocationRow);
+          locationRef.current = next as RideLocationRow;
+          setLocation(parsed);
           setNow(Date.now());
         },
       )
@@ -137,6 +146,35 @@ export function useRideLocation({
       void client.removeChannel(channel);
     };
   }, [enabled, rideId]);
+
+  // Fallback polling for passengers watching a live ride. Realtime is the
+  // primary transport; this is a safety net for dropped connections or
+  // environments where realtime is unreliable.
+  useEffect(() => {
+    if (!rideId || !enabled || !isRunning || share) return undefined;
+
+    let active = true;
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const stored = await getRideLocation(rideId);
+        if (!active || !stored) return;
+        const current = locationRef.current;
+        if (current && stored.recordedAt <= current.recorded_at) return;
+        locationRef.current = stored as unknown as RideLocationRow;
+        setLocation(stored);
+        setNow(Date.now());
+      } catch {
+        // Polling failure is silent — realtime may still be working.
+      }
+    };
+
+    const interval = window.setInterval(() => void poll(), FALLBACK_POLL_INTERVAL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [enabled, isRunning, rideId, share]);
 
   const stopWatching = useCallback(() => {
     if (watchId.current !== null) {

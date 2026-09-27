@@ -410,6 +410,24 @@ const rideDetailsStyles = `
 .demo-simulation__progress-info { display: flex; justify-content: space-between; color: var(--rt-muted); font-size: .72rem; font-weight: 700; }
 .demo-simulation__error { margin: 0; color: var(--rt-danger-text); font-size: .74rem; }
 
+.map-panel-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.map-panel-simulation { padding: 10px 14px; border-bottom: 1px solid var(--rt-border); background: var(--rt-surface-subtle); }
+.demo-simulation { display: grid; gap: 8px; }
+.demo-simulation__row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.demo-simulation__status { padding: 2px 8px; border-radius: 999px; font-size: .62rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.demo-simulation__status--off { color: var(--rt-muted); background: var(--rt-surface-muted); }
+.demo-simulation__status--playing { color: #ffffff; background: var(--rt-primary); }
+.demo-simulation__status--paused { color: var(--rt-text); background: var(--rt-surface-muted); }
+.demo-simulation__status--finished { color: var(--rt-primary-strong); background: var(--rt-primary-soft); }
+.demo-simulation__controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.demo-simulation__speed-label { color: var(--rt-muted); font-size: .68rem; font-weight: 700; }
+.demo-simulation__speed-options { display: flex; gap: 4px; flex-wrap: wrap; }
+.demo-simulation__progress { display: grid; gap: 4px; }
+.demo-simulation__progress-bar { height: 5px; border-radius: 999px; background: var(--rt-surface-muted); overflow: hidden; }
+.demo-simulation__progress-fill { height: 100%; border-radius: 999px; background: var(--rt-primary); transition: width .3s ease; }
+.demo-simulation__progress-info { display: flex; justify-content: space-between; color: var(--rt-muted); font-size: .68rem; font-weight: 700; }
+.demo-simulation__error { margin: 0; color: var(--rt-danger-text); font-size: .7rem; }
+
 .gps-permission-prompt { display: flex; align-items: flex-start; gap: 14px; margin: 0 0 16px; padding: 16px; border: 1px solid var(--rt-border); border-radius: 14px; background: var(--rt-card); }
 .gps-permission-prompt__icon { display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); }
 .gps-permission-prompt__content { flex: 1 1 auto; min-width: 0; }

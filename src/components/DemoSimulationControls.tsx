@@ -12,60 +12,58 @@ export function DemoSimulationControls({ simulation }: DemoSimulationControlsPro
 
   return (
     <div className="demo-simulation" aria-label="Demo simulation controls">
-      <div className="demo-simulation__header">
-        <span className="demo-simulation__label">Demo Simulation</span>
+      <div className="demo-simulation__row">
         <span className={`demo-simulation__status demo-simulation__status--${status}`}>
           {status === "off" && "OFF"}
           {status === "playing" && "ON"}
           {status === "paused" && "PAUSED"}
           {status === "finished" && "COMPLETE"}
         </span>
+        <div className="demo-simulation__controls">
+          {status === "off" || status === "finished" ? (
+            <button
+              type="button"
+              className="ds-button ds-button--primary ds-button--sm"
+              onClick={status === "finished" ? simulation.restart : simulation.start}
+            >
+              <Play size={14} />
+              {status === "finished" ? "Restart" : "Start"}
+            </button>
+          ) : null}
+          {status === "playing" ? (
+            <button
+              type="button"
+              className="ds-button ds-button--subtle ds-button--sm"
+              onClick={simulation.pause}
+            >
+              <Pause size={14} />
+              Pause
+            </button>
+          ) : null}
+          {status === "paused" ? (
+            <button
+              type="button"
+              className="ds-button ds-button--primary ds-button--sm"
+              onClick={simulation.resume}
+            >
+              <Play size={14} />
+              Resume
+            </button>
+          ) : null}
+          {status === "playing" || status === "paused" ? (
+            <button
+              type="button"
+              className="ds-button ds-button--ghost ds-button--sm"
+              onClick={simulation.restart}
+            >
+              <RotateCcw size={14} />
+              Restart
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      <div className="demo-simulation__controls">
-        {status === "off" || status === "finished" ? (
-          <button
-            type="button"
-            className="ds-button ds-button--primary ds-button--sm"
-            onClick={status === "finished" ? simulation.restart : simulation.start}
-          >
-            <Play size={14} />
-            {status === "finished" ? "Restart" : "Start"}
-          </button>
-        ) : null}
-        {status === "playing" ? (
-          <button
-            type="button"
-            className="ds-button ds-button--subtle ds-button--sm"
-            onClick={simulation.pause}
-          >
-            <Pause size={14} />
-            Pause
-          </button>
-        ) : null}
-        {status === "paused" ? (
-          <button
-            type="button"
-            className="ds-button ds-button--primary ds-button--sm"
-            onClick={simulation.resume}
-          >
-            <Play size={14} />
-            Resume
-          </button>
-        ) : null}
-        {status === "playing" || status === "paused" ? (
-          <button
-            type="button"
-            className="ds-button ds-button--ghost ds-button--sm"
-            onClick={simulation.restart}
-          >
-            <RotateCcw size={14} />
-            Restart
-          </button>
-        ) : null}
-      </div>
-
-      <div className="demo-simulation__speed">
+      <div className="demo-simulation__row">
         <span className="demo-simulation__speed-label">Speed</span>
         <div className="demo-simulation__speed-options">
           {SPEED_OPTIONS.map((speed) => (
