@@ -643,8 +643,9 @@ export default function RideDetailsPage() {
       enabled: isDriver && ride?.status === "in_progress",
     });
 
-    const [gpsPermissionNeeded, setGpsPermissionNeeded] = useState(false);
-    const [gpsPermissionLoading, setGpsPermissionLoading] = useState(false);
+  const [gpsPermissionNeeded, setGpsPermissionNeeded] = useState(false);
+  const [gpsPermissionLoading, setGpsPermissionLoading] = useState(false);
+  const [simulationExpanded, setSimulationExpanded] = useState(false);
 
     const requestGpsPermission = useCallback(async () => {
       if (!navigator.geolocation) {
@@ -922,10 +923,28 @@ export default function RideDetailsPage() {
             <section className="card details-map-card">
               <div className="map-panel-header">
                 <div><span className="section-kicker">Live route</span><h2>Trip map</h2></div>
-                <button className="icon-button" type="button" onClick={() => setRouteRefresh((value) => value + 1)} disabled={routeLoading} aria-label="Refresh route" title="Refresh route">
-                  <RefreshCw size={17} />
-                </button>
+                <div className="map-panel-header__actions">
+                  {isDriver && isRunning ? (
+                    <button
+                      className="ds-button ds-button--subtle ds-button--sm"
+                      type="button"
+                      onClick={() => setSimulationExpanded((value) => !value)}
+                      aria-expanded={simulationExpanded}
+                      aria-label={simulationExpanded ? "Collapse demo simulation" : "Expand demo simulation"}
+                    >
+                      Demo Simulation
+                    </button>
+                  ) : null}
+                  <button className="icon-button" type="button" onClick={() => setRouteRefresh((value) => value + 1)} disabled={routeLoading} aria-label="Refresh route" title="Refresh route">
+                    <RefreshCw size={17} />
+                  </button>
+                </div>
               </div>
+              {isDriver && isRunning && simulationExpanded ? (
+                <div className="map-panel-simulation">
+                  <DemoSimulationControls simulation={simulation} />
+                </div>
+              ) : null}
               <div className="map-wrap map-wrap-tall">
                 <RideMap
                   origin={ride.origin}
@@ -956,12 +975,6 @@ export default function RideDetailsPage() {
                 <div><Users size={18} /><span><strong>{ride.availableSeats} available</strong><small>of {ride.totalSeats} seats</small></span></div>
               </div>
             </section>
-
-            {isDriver && isRunning ? (
-              <section className="card demo-simulation-card">
-                <DemoSimulationControls simulation={simulation} />
-              </section>
-            ) : null}
 
             <section className="card trip-route-card">
               <div className="card-title-row"><div><span className="section-kicker">The journey</span><h2>Pickup and drop-off</h2></div><RouteIcon size={20} /></div>
