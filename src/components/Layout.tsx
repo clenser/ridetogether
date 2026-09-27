@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, CarFront, CloudOff, Ellipsis, Sun, Moon } from "lucide-react";
+import { Bell, CarFront, Ellipsis, Sun, Moon } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { UserMenu } from "./UserMenu";
 import { GlobalSearch } from "./GlobalSearch";
@@ -68,7 +68,7 @@ function getUnreadCount(notifications: AppNotification[], userId?: string): numb
 }
 
 export function Layout() {
-  const { loading, loadError, activeUser, notifications, refresh } = useApp();
+  const { loading, activeUser, notifications } = useApp();
   const { authUser, profileStatus } = useAuth();
   const location = useLocation();
   const moreMenuRef = useRef<HTMLDivElement>(null);
@@ -193,17 +193,6 @@ export function Layout() {
             target, activating it only scrolls the page and leaves keyboard focus
             up in the navigation, which is the thing it exists to avoid. */}
         <main className="app-main" id="main-content" tabIndex={-1}>
-          {loadError ? (
-            // A refresh failed but the last known data is still on screen, so this
-            // is a dismissible warning rather than a blocking error.
-            <div className="app-refresh-warning" role="status" data-testid="load-warning">
-              <CloudOff size={16} aria-hidden="true" />
-              <span>{loadError}</span>
-              <button type="button" onClick={() => void refresh()} data-testid="load-warning-retry">
-                Retry
-              </button>
-            </div>
-          ) : null}
           <Outlet />
         </main>
       </div>

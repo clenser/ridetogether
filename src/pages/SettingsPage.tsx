@@ -86,7 +86,7 @@ const defaultPreferences: Preferences = {
 const settingsStyles = `
 .rt-settings-page {
   min-height: 100%;
-  padding: 28px 20px 64px;
+  padding: 28px 20px calc(64px + var(--rt-mobile-nav-inset, 0px));
   color: var(--rt-text, var(--rt-text-strong));
   background: var(--rt-surface-subtle, var(--rt-surface-subtle));
 }
@@ -131,14 +131,15 @@ const settingsStyles = `
   grid-template-columns: 36px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  padding: 15px 0;
-  border-bottom: 1px solid var(--rt-surface-muted);
+  padding: 15px 17px;
+  border-bottom: 1px solid var(--rt-border);
   cursor: pointer;
 }
 .rt-setting-toggle:last-child { border-bottom: 0; }
-.rt-setting-toggle-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: var(--rt-text); background: var(--rt-surface-muted); }
-.rt-setting-toggle-copy strong { display: block; color: var(--rt-text); font-size: .83rem; }
-.rt-setting-toggle-copy span { display: block; margin-top: 4px; color: var(--rt-muted); font-size: .72rem; line-height: 1.4; }
+.rt-setting-toggle-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 11px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); flex: 0 0 auto; }
+.rt-setting-toggle-copy { flex: 1 1 auto; min-width: 0; }
+.rt-setting-toggle-copy strong { display: block; color: var(--rt-text); font-size: .875rem; font-weight: 700; line-height: 1.4; }
+.rt-setting-toggle-copy span { display: block; margin-top: 3px; color: var(--rt-muted); font-size: .77rem; line-height: 1.5; }
 .rt-switch { position: relative; width: 43px; height: 24px; flex: 0 0 auto; }
 .rt-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .rt-switch-track { position: absolute; inset: 0; border-radius: 999px; background: var(--rt-border); transition: background .2s ease, box-shadow .2s ease; }
@@ -152,7 +153,9 @@ const settingsStyles = `
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: -6px 0 14px 48px;
+  margin: 0;
+  padding: 10px 17px;
+  border-bottom: 1px solid var(--rt-border);
   color: var(--rt-primary-strong);
   font-size: .72rem;
   line-height: 1.4;
@@ -165,18 +168,19 @@ const settingsStyles = `
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px 12px;
-  margin: -2px 0 12px;
-  padding: 0;
+  margin: 0;
+  padding: 12px 17px;
+  border-bottom: 1px solid var(--rt-border);
   list-style: none;
 }
 .rt-push-status li { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .rt-push-status span { color: var(--rt-muted); font-size: .66rem; letter-spacing: .04em; text-transform: uppercase; }
 .rt-push-status strong { color: var(--rt-text); font-size: .74rem; font-weight: 700; }
-.rt-push-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.rt-push-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 17px; border-bottom: 1px solid var(--rt-border); }
 .rt-push-actions .rt-settings-secondary { display: inline-flex; align-items: center; gap: 7px; }
 
 
-.rt-install-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; flex-wrap: wrap; }
+.rt-install-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 17px; border-bottom: 1px solid var(--rt-border); flex-wrap: wrap; }
 .rt-install-copy { min-width: 0; }
 .rt-install-copy strong { display: block; color: var(--rt-text); font-size: .83rem; }
 .rt-install-copy span { display: block; margin-top: 4px; color: var(--rt-muted); font-size: .72rem; line-height: 1.45; }
@@ -213,7 +217,7 @@ const settingsStyles = `
 
 .rt-faq-list { display: grid; }
 .rt-faq {
-  border-bottom: 1px solid var(--rt-surface-muted);
+  border-bottom: 1px solid var(--rt-border);
 }
 .rt-faq:last-child { border-bottom: 0; }
 .rt-faq summary {
@@ -221,7 +225,7 @@ const settingsStyles = `
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 0;
+  padding: 16px 17px;
   color: var(--rt-text);
   font-size: .82rem;
   font-weight: 730;
@@ -231,7 +235,7 @@ const settingsStyles = `
 .rt-faq summary::-webkit-details-marker { display: none; }
 .rt-faq summary svg { flex: 0 0 auto; color: var(--rt-muted); transition: transform .18s ease; }
 .rt-faq[open] summary svg { transform: rotate(180deg); }
-.rt-faq-answer { margin: -4px 0 17px; color: var(--rt-text); font-size: .76rem; line-height: 1.6; }
+.rt-faq-answer { margin: 0; padding: 0 17px 16px; color: var(--rt-text); font-size: .76rem; line-height: 1.6; }
 
 
 
@@ -242,7 +246,7 @@ const settingsStyles = `
 
 
 
-.rt-reset-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px; border: 1px solid var(--rt-danger-border); border-radius: 14px; background: var(--rt-danger-soft); }
+.rt-reset-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 17px; border-bottom: 1px solid var(--rt-border); }
 .rt-reset-copy { display: flex; align-items: flex-start; gap: 10px; }
 .rt-reset-copy svg { flex: 0 0 auto; color: var(--rt-danger); margin-top: 1px; }
 .rt-reset-copy strong { display: block; color: var(--rt-danger-text); font-size: .8rem; }
@@ -273,8 +277,10 @@ const settingsStyles = `
 
 .rt-settings-secondary:disabled, .rt-settings-danger:disabled { opacity: .58; cursor: not-allowed; }
 
-
-
+[data-theme="dark"] .rt-settings-nav a svg,
+[data-theme="dark"] .rt-settings-note svg {
+  color: var(--rt-primary);
+}
 
 
 
@@ -310,7 +316,7 @@ const settingsStyles = `
   .rt-settings-nav a { flex: 0 0 auto; }
 }
 @media (max-width: 620px) {
-  .rt-settings-page { padding: 18px 14px 44px; }
+  .rt-settings-page { padding: 18px 14px calc(44px + var(--rt-mobile-nav-inset, 0px)); }
 
   .rt-appearance-grid { grid-template-columns: 1fr; }
   .rt-appearance-option { min-height: 96px; }
@@ -334,7 +340,13 @@ const settingsStyles = `
 
 
 @media (prefers-reduced-motion: reduce) {
-
+  .rt-setting-toggle,
+  .rt-switch-track,
+  .rt-switch-track::after,
+  .rt-appearance-option,
+  .rt-faq summary svg {
+    transition: none;
+  }
 }
 `;
 

@@ -112,12 +112,6 @@ export type VehicleFormValues = VehicleDraft;
 
 export interface AppContextValue {
   loading: boolean;
-  /**
-   * Set when a background refresh could not read one or more collections. The UI
-   * stays usable on the last known-good data, so this is a warning rather than a
-   * blocking error.
-   */
-  loadError: string | null;
   users: User[];
   activeUser: User;
   activeUserId: string;
@@ -275,7 +269,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const { authUser, profileUser, updateProfile, isAuthenticated } = useAuth();
   const authUserId = authUser?.id ?? "";
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [rides, setRides] = useState<Ride[]>([]);
@@ -285,6 +278,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [ratings, setRatings] = useState<Rating[]>([]);
   const [safetyContacts, setSafetyContacts] = useState<SafetyContact[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [theme, setTheme] = useState("light");
   const [activeUserId, setActiveUserId] = useState("");
   const activeUserIdRef = useRef("");
   const activeUser = users.find((user) => user.id === activeUserId) ?? loadingUser;
@@ -354,25 +348,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         settle<Payment[]>(() => listMyPayments(), "payments"),
       ]);
 
-    const failed = [
-      ["rides", ridesResult],
-      ["vehicles", vehiclesResult],
-      ["bookings", bookingsResult],
-      ["profiles", profilesResult],
-      ["messages", messagesResult],
-      ["notifications", notificationsResult],
-      ["ratings", ratingsResult],
-      ["safety contacts", contactsResult],
-      ["payments", paymentsResult],
-    ].filter(([, result]) => !(result as { ok: boolean }).ok).map(([name]) => name);
-
-    if (failed.length > 0) {
-      setLoadError(
-        `Some data could not be refreshed (${failed.join(", ")}). `
-        + "What you see may be out of date.",
-      );
-    } else {
-      setLoadError(null);
+    if (paymentsResult.ok) setPayments(paymentsResult.value ?? []);
+    else {
+      if (payments.length === 0) setPayments([]);
     }
 
     const cloudRides = ridesResult.value ?? [];
@@ -523,7 +501,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setSafetyContacts([]);
       setPayments([]);
       setActiveUserId("");
-      setLoadError(null);
       activeUserIdRef.current = "";
       setLoading(false);
       return;
@@ -990,7 +967,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     <AppContext.Provider
       value={{
         loading,
-        loadError,
         users,
         activeUser,
         activeUserId,
