@@ -2204,6 +2204,7 @@ declare
   from_status text;
   to_status text;
   is_driver boolean;
+  ride_state text;
 begin
   if tg_op = 'DELETE' then
     return old;
@@ -2216,10 +2217,13 @@ begin
     return new;
   end if;
 
-  select exists (
-    select 1 from public.rides r
-     where r.id = old.ride_id and r.driver_id = auth.uid()
-  ) into is_driver;
+  select r.status::text, exists (
+    select 1 from public.rides r2
+     where r2.id = r.id and r2.driver_id = auth.uid()
+  )
+    into ride_state, is_driver
+    from public.rides r
+   where r.id = old.ride_id;
 
   -- The payment trigger and the ride-cancellation cascade run as SECURITY
   -- DEFINER with no signed-in user, so `auth.uid()` is null for them and the
@@ -2259,6 +2263,29 @@ begin
 
   if from_status = 'picked_up' and to_status not in ('completed', 'no_show', 'cancelled') then
     raise exception 'A passenger who is in the vehicle can only complete the trip, be marked as a no-show, or have the ride cancelled'
+      using errcode = 'check_violation';
+  end if;
+
+  if ride_state is null then
+    raise exception 'That ride no longer exists'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  -- Collecting a passenger describes something that happens at the kerbside while
+  -- the trip is running, so it is impossible while the ride is still parked.
+  -- Without this a host could collect a passenger days before departure.
+  --
+  -- A no-show is also reachable once the ride has finished, because that is
+  -- exactly what `finalize_ride_completion` does with everyone still waiting at
+  -- the kerb when the trip ends. It is not reachable from a ride that is merely
+  -- published: that is a trip that has not started.
+  if to_status = 'picked_up' and ride_state is distinct from 'in_progress' then
+    raise exception 'Start the ride before you can collect a passenger'
+      using errcode = 'check_violation';
+  end if;
+
+  if to_status = 'no_show' and ride_state not in ('in_progress', 'completed', 'cancelled') then
+    raise exception 'Start the ride before you can write off a passenger'
       using errcode = 'check_violation';
   end if;
 
@@ -2316,7 +2343,7 @@ $$;
 -- consumed forever.
 create or replace function public.cascade_ride_cancellation()
 returns trigger
-language plpgsql
+  language plpgsql
 security definer
 set search_path = ''
 as $$
@@ -2355,7 +2382,7 @@ $$;
 -- obligation exists and is complete, so a real gateway has somewhere to write.
 create or replace function public.finalize_ride_completion()
 returns trigger
-language plpgsql
+  language plpgsql
 security definer
 set search_path = ''
 as $$
@@ -2371,6 +2398,24 @@ begin
   end if;
 
   delete from public.ride_locations where ride_id = new.id;
+
+  -- Requests the host never answered, and seats accepted but never paid for, are
+  -- closed rather than left open on a trip that has already finished. They are
+  -- kept as `cancelled` rows, not deleted, so the rider still sees the outcome
+  -- and the host's history still shows the request - but `enforce_booking_status_transition`
+  -- now makes them terminal, so a `payment_pending` seat can no longer be
+  -- confirmed onto a completed ride and hold a seat nobody will drive.
+  for affected in
+    select b.id
+      from public.bookings b
+     where b.ride_id = new.id
+       and b.status::text in ('pending', 'payment_pending')
+     for update
+  loop
+    update public.bookings
+       set status = 'cancelled'
+     where id = affected.id;
+  end loop;
 
   -- Anyone still waiting at the kerb when the trip ends did not get picked up.
   for affected in
@@ -2461,15 +2506,60 @@ $$;
 -- their own payment would make "confirmed" a self-issued fact, so the rider is
 -- refused here. A real gateway replaces this with a service-role call, which
 -- the `auth.uid() is null` branch already allows.
+--
+-- The one exception is a booking that has been closed. `pending -> failed` and
+-- `success -> refunded` are then the *only* legal moves, and they exist so the
+-- database can void a charge nobody is entitled to keep rather than leaving a
+-- payment row claiming money is owed for a seat that no longer exists. That is
+-- not a loophole for a client: the branch is unreachable while the seat is open,
+-- which is exactly when the host's own choice above is meaningful.
 create or replace function public.guard_payment_transition()
 returns trigger
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  booking_state text;
 begin
   if new.status::text = old.status::text then
     return new;
+  end if;
+
+  select b.status::text into booking_state
+    from public.bookings b
+   where b.id = new.booking_id;
+
+  if booking_state in ('cancelled', 'rejected') then
+    if new.status::text = 'refunded' then
+      if old.status::text <> 'success' then
+        raise exception 'Only a payment that succeeded can be refunded'
+          using errcode = 'check_violation';
+      end if;
+
+      -- Nothing is owed, so the payout obligation is withdrawn rather than
+      -- settled. `provider_ref` is deliberately left in place: it is the handle a
+      -- real gateway would need to find and reverse the original charge.
+      new.settlement := 'not_due';
+      new.settled_at := null;
+      return new;
+    end if;
+
+    if new.status::text = 'failed' then
+      if old.status::text <> 'pending' then
+        raise exception 'This payment has already been resolved'
+          using errcode = 'check_violation';
+      end if;
+
+      new.failure_reason := coalesce(
+        new.failure_reason,
+        'The seat was cancelled before the payment was resolved.'
+      );
+      return new;
+    end if;
+
+    raise exception 'A payment for a cancelled seat can only be voided or refunded'
+      using errcode = 'check_violation';
   end if;
 
   if auth.uid() is not null and not public.is_ride_driver(new.ride_id) then
@@ -2494,6 +2584,52 @@ begin
   return new;
 end;
 $$;
+
+-- A cancelled seat has no money obligation left in it.
+--
+-- Two cases, both decided here rather than by whichever client happened to do the
+-- cancelling, so a rider withdrawing and a host cancelling a ride leave the
+-- payment history identical:
+--
+--   success -> refunded   the charge is reversed (as a placeholder)
+--   pending -> failed     the charge was never resolved and cannot be
+--
+-- A `failed` payment is left alone: `apply_payment_outcome` already cancelled the
+-- booking, and a second write would be a no-op that exists only to confuse.
+create or replace function public.release_refund_for_closed_booking()
+returns trigger
+plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  if new.status::text <> 'cancelled' or old.status::text = 'cancelled' then
+    return new;
+  end if;
+
+  update public.payments
+     set status = case
+       when status::text = 'success' then 'refunded'::public.payment_status
+       else 'failed'::public.payment_status
+     end
+   where booking_id = new.id
+     and status::text in ('pending', 'success');
+
+  return new;
+end;
+$$;
+
+comment on function public.release_refund_for_closed_booking() is
+  'Reverses the placeholder charge for a booking that was cancelled, so no payment row is left claiming money is owed for a seat that no longer exists.';
+
+drop trigger if exists bookings_release_refund on public.bookings;
+create trigger bookings_release_refund
+  after update of status on public.bookings
+  for each row execute function public.release_refund_for_closed_booking();
 
 -- Turns the payment outcome into the booking transition. Success confirms the
 -- seat; failure releases it rather than leaving a seat held by a booking that
@@ -2524,6 +2660,58 @@ begin
   return new;
 end;
 $$;
+
+-- The third leg of the placeholder money lifecycle.
+--
+--   payment_success -> settlement_pending -> settlement_complete
+--
+-- `finalize_ride_completion` moves a successful payment to `settlement_pending`
+-- when the trip ends, because the host is owed from the moment the passenger has
+-- actually travelled. Nothing pays out: this function only records that the host
+-- has acknowledged the obligation, which is where a real gateway's payout call
+-- would sit. Swapping in that gateway is a change to this function alone, and the
+-- ride lifecycle never learns which one it is talking to.
+--
+-- Host-only and scoped to rides they drive, so it cannot mark somebody else's
+-- payout as settled. The `settlement = 'pending'` predicate is also the
+-- concurrency guard: a second, overlapping call finds no rows and returns 0
+-- rather than settling the same payout twice.
+--
+-- Deliberately NOT `security definer`. It runs as the caller, so
+-- `payments_update_involved` and the explicit driver check below both apply, and
+-- a browser cannot use it to reach a payment it is not part of. It is the same
+-- reasoning as `set_default_vehicle`.
+create or replace function public.record_payout_placeholders()
+returns integer
+language plpgsql
+set search_path = ''
+as $$
+declare
+  acknowledged integer := 0;
+begin
+  update public.payments p
+     set settlement = 'complete',
+         settled_at = now()
+   where p.settlement = 'pending'
+     and p.status = 'success'
+     and public.is_ride_driver(p.ride_id)
+     and exists (
+       select 1
+         from public.rides r
+        where r.id = p.ride_id
+          and r.driver_id = auth.uid()
+     );
+
+  get diagnostics acknowledged = row_count;
+  return acknowledged;
+end;
+$$;
+
+comment on function public.record_payout_placeholders() is
+  'Marks the signed-in host''s own due placeholder payouts as settled. Moves no money; it records the step a real gateway payout would occupy. Returns how many payouts were recorded.';
+
+revoke all on function public.record_payout_placeholders() from public, anon;
+grant execute on function public.record_payout_placeholders() to authenticated;
 
 -- -----------------------------------------------------------------------------
 -- 9f. Live location and the approaching notification
@@ -2917,6 +3105,53 @@ create trigger ride_locations_notify_approaching
   for each row execute function public.notify_driver_approaching();
 
 -- -----------------------------------------------------------------------------
+-- 9j. The vehicle a ride is published with must be the host's own
+--     `rides_insert_own` / `rides_update_own` only check `driver_id`, so without
+--     this a caller could attach somebody else's vehicle to a ride they drive
+--     and show its plate, model and colour to every passenger. The app already
+--     only offers the host's own vehicles; this is what makes that a rule rather
+--     than a convention.
+-- -----------------------------------------------------------------------------
+
+create or replace function public.guard_ride_vehicle_ownership()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.vehicle_id is null then
+    return new;
+  end if;
+
+  if not exists (
+    select 1
+      from public.vehicles v
+     where v.id = new.vehicle_id
+       and v.owner_id = new.driver_id
+  ) then
+    raise exception 'You can only offer a ride using one of your own vehicles'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.guard_ride_vehicle_ownership() is
+  'Stops a ride (or a recurring series) from being published with a vehicle its driver does not own.';
+
+drop trigger if exists rides_guard_vehicle on public.rides;
+create trigger rides_guard_vehicle
+  before insert or update of vehicle_id, driver_id on public.rides
+  for each row execute function public.guard_ride_vehicle_ownership();
+
+drop trigger if exists ride_series_guard_vehicle on public.ride_series;
+create trigger ride_series_guard_vehicle
+  before insert or update of vehicle_id, driver_id on public.ride_series
+  for each row execute function public.guard_ride_vehicle_ownership();
+
+-- -----------------------------------------------------------------------------
 -- 9k. Departure reminders
 -- -----------------------------------------------------------------------------
 
@@ -3055,7 +3290,7 @@ end
 $outer$;
 
 -- -----------------------------------------------------------------------------
--- 9j. RLS for the new tables
+-- 9l. RLS for the new tables
 --     Nothing here widens an existing policy. The only change to an old policy
 --     is `bookings`, whose update policy gains the host-only transition guard's
 --     counterpart in the database rather than in the browser.
@@ -3160,9 +3395,8 @@ create policy profile_payment_details_delete_own
   using (user_id = auth.uid());
 
 -- -----------------------------------------------------------------------------
--- 9k. Grants and realtime for the new objects
+-- 9m. Grants and realtime for the new objects
 -- -----------------------------------------------------------------------------
-
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on all tables in schema public to authenticated;
 alter default privileges in schema public
@@ -3203,6 +3437,8 @@ begin
     'public.guard_payment_transition()',
     'public.apply_payment_outcome()',
     'public.guard_ride_location()',
+    'public.guard_ride_vehicle_ownership()',
+    'public.release_refund_for_closed_booking()',
     'public.notify_driver_approaching()',
     'public.notify_ride_lifecycle()',
     'public.notify_booking_journey()'

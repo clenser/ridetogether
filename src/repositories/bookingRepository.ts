@@ -437,6 +437,13 @@ const transitionBooking = async (
         error,
       );
     }
+    if (/start the ride before you can (collect|write off)/i.test(detail)) {
+      throw new DataError(
+        "Start the ride before you can collect or write off a passenger.",
+        "invalid",
+        error,
+      );
+    }
     if (/only a ride that is in progress|only a published ride/i.test(detail)) {
       throw new DataError("Start the ride before making that change.", "invalid", error);
     }
@@ -510,16 +517,18 @@ export const cancelBooking = (bookingId: string): Promise<Booking> =>
   transitionBooking(bookingId, "cancelled", {}, "cancel");
 
 /**
- * Kept for the older call sites that only needed confirm/reject/cancel. New code
- * should use the named transitions above so the step being taken is obvious at
- * the call site.
+ * There is intentionally no generic `setBookingStatus(bookingId, status)` here.
+ *
+ * One existed, and because it accepted `"confirmed"` it offered the database a
+ * transition the booking trigger refuses: a `pending` request must be accepted
+ * first, which moves it to `payment_pending` and holds the seat. The only way to
+ * reach `confirmed` is by resolving that payment, which is a different operation
+ * with different seat and notification consequences. A helper that lets a caller
+ * name `confirmed` without having crossed the payment step is how the host's main
+ * accept button came to always fail.
+ *
+ * Every state the workflow can actually reach has a named function above, and
+ * `enforce_booking_status_transition` is the single authority on which are legal.
  */
-export const updateBookingStatus = async (
-  bookingId: string,
-  status: Extract<BookingStatus, "confirmed" | "rejected" | "cancelled">,
-): Promise<Booking> => {
-  const action = status === "confirmed" ? "confirm" : status === "cancelled" ? "cancel" : "update";
-  return transitionBooking(bookingId, status, {}, action);
-};
 
 export { BOOKING_COLUMNS, BOOKING_TABLE, rowToBookingStatus };

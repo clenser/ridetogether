@@ -28,6 +28,12 @@ const SERIES_COLUMNS =
 
 /** Two full seasons is plenty, and it keeps one insert bounded. */
 export const MAX_SERIES_DAYS = 120;
+/**
+ * Most rides a single schedule may publish at once.
+ *
+ * Checked against the schedule the host actually asked for, so this is a limit
+ * they are told about rather than one applied behind their back.
+ */
 const MAX_OCCURRENCES = 60;
 
 export interface SeriesRow {
@@ -130,36 +136,103 @@ const parseIsoDate = (value: string): Date | null => {
 const toIsoDate = (date: Date): string => date.toISOString().slice(0, 10);
 
 /**
- * The dates a schedule covers, in order.
+ * How many calendar days a range covers, inclusive of both ends, or `null` if
+ * either end is unparseable.
  *
- * Dates are walked in UTC so a member in a half-hour timezone zone gets the
- * dates they picked rather than a day either side.
+ * Exported so the offer form can apply the same `MAX_SERIES_DAYS` limit while the
+ * host is still choosing dates. The rule and its wording live here rather than in
+ * the page, so the form cannot drift from what the validator will accept.
  */
-export const occurrenceDates = (input: {
+export const seriesRangeDayCount = (validFrom: string, validUntil: string): number | null => {
+  const from = parseIsoDate(validFrom);
+  const to = parseIsoDate(validUntil);
+  if (!from || !to || to < from) return null;
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1;
+};
+
+/**
+ * Every date a schedule covers, in order, with the instant each occurrence
+ * actually departs.
+ *
+ * Dates are walked in UTC so a member in a half-hour timezone zone gets the dates
+ * they picked rather than a day either side, and each one is paired with the same
+ * local-time instant that will be written to `departure_at`.
+ */
+interface Occurrence {
+  date: string;
+  departureAt: string;
+}
+
+const enumerateOccurrences = (input: {
   daysOfWeek: number[];
   validFrom: string;
   validUntil: string;
-}): string[] => {
+  departureTime: string;
+}): Occurrence[] => {
   const from = parseIsoDate(input.validFrom);
   const to = parseIsoDate(input.validUntil);
   if (!from || !to || to < from) return [];
 
   const wanted = new Set(input.daysOfWeek);
-  const dates: string[] = [];
+  const occurrences: Occurrence[] = [];
   const cursor = new Date(from.getTime());
   // Bounded by the range length so a hostile `validUntil` cannot spin here; the
   // validator below rejects anything longer than `MAX_SERIES_DAYS` first.
   for (let guard = 0; guard <= MAX_SERIES_DAYS && cursor <= to; guard += 1) {
     if (wanted.has(cursor.getUTCDay())) {
-      dates.push(toIsoDate(cursor));
-      if (dates.length >= MAX_OCCURRENCES) break;
+      occurrences.push({
+        date: toIsoDate(cursor),
+        departureAt: new Date(`${toIsoDate(cursor)}T${input.departureTime}:00`).toISOString(),
+      });
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
-  return dates;
+  return occurrences;
 };
 
-const validateSeriesInput = (input: SeriesInput): { baseFare: number; contribution: number } => {
+/**
+ * The dates a schedule covers, in order.
+ *
+ * Occurrences that have already departed are left out. A host who starts a
+ * weekday commute from a date earlier in the week means "from now on", and
+ * publishing rides for days that have passed puts rows in the database that can
+ * never be booked and that the host then has to look at on My Rides.
+ */
+export const occurrenceDates = (input: {
+  daysOfWeek: number[];
+  validFrom: string;
+  validUntil: string;
+  departureTime?: string;
+  /** Departures at or before this instant are treated as already gone. */
+  notBefore?: number;
+}): string[] => {
+  const departureTime = input.departureTime?.trim() || "00:00";
+  const occurrences = enumerateOccurrences({ ...input, departureTime });
+  const cutoff = input.notBefore ?? Number.NEGATIVE_INFINITY;
+
+  return occurrences
+    .filter((occurrence) => new Date(occurrence.departureAt).getTime() > cutoff)
+    .map((occurrence) => occurrence.date);
+};
+
+/**
+ * Normalises the end of the range.
+ *
+ * `validUntil` is optional and an empty date input produces `""` rather than
+ * `undefined`. Treating those two differently is how a schedule with a blank end
+ * date ends up with an end date of `""`, which then fails to parse and produces
+ * zero occurrences - reported to the host as "no dates in that range fall on the
+ * days you chose", which is not what went wrong. One rule for every caller.
+ */
+const resolveValidUntil = (validFrom: Date, requested?: string): Date => {
+  if (!requested || !requested.trim()) return validFrom;
+  return parseIsoDate(requested.trim()) ?? new Date(Number.NaN);
+};
+
+const validateSeriesInput = (
+  input: SeriesInput,
+  now: number,
+): { baseFare: number; contribution: number; validUntil: string; occurrences: string[] } => {
   if (!isValidCoordinate(input.origin)) {
     throw new DataError("Choose a valid starting point for the schedule.", "invalid");
   }
@@ -196,14 +269,45 @@ const validateSeriesInput = (input: SeriesInput): { baseFare: number; contributi
 
   const validFrom = parseIsoDate(input.validFrom);
   if (!validFrom) throw new DataError("Choose a valid start date for the schedule.", "invalid");
-  const validUntil = input.validUntil ? parseIsoDate(input.validUntil) : validFrom;
-  if (!validUntil) throw new DataError("Choose a valid end date for the schedule.", "invalid");
+  const validUntil = resolveValidUntil(validFrom, input.validUntil);
+  if (!validUntil || Number.isNaN(validUntil.getTime())) {
+    throw new DataError("Choose a valid end date for the schedule.", "invalid");
+  }
   if (validUntil < validFrom) {
     throw new DataError("The schedule cannot end before it starts.", "invalid");
   }
-  const spanDays = Math.round((validUntil.getTime() - validFrom.getTime()) / 86_400_000) + 1;
+  // The inclusive day count comes from the shared helper the offer form also calls,
+  // so the range limit reads the same in the form and here.
+  const spanDays = seriesRangeDayCount(input.validFrom, toIsoDate(validUntil)) ?? 0;
   if (spanDays > MAX_SERIES_DAYS) {
     throw new DataError(`A schedule can cover at most ${MAX_SERIES_DAYS} days at a time.`, "invalid");
+  }
+
+  const departureTime = input.departureTime.trim();
+  const occurrences = occurrenceDates({
+    daysOfWeek: input.daysOfWeek,
+    validFrom: input.validFrom,
+    validUntil: toIsoDate(validUntil),
+    departureTime,
+    notBefore: now,
+  });
+
+  if (occurrences.length === 0) {
+    throw new DataError(
+      "That range has no upcoming dates on the days you chose. Try a later start date or a wider range.",
+      "invalid",
+    );
+  }
+  /**
+   * Checked against the whole range before anything is written, and reported with
+   * the number the host would have got. Silently stopping at the limit left them
+   * with a schedule that looked complete and quietly missing its last few weeks.
+   */
+  if (occurrences.length > MAX_OCCURRENCES) {
+    throw new DataError(
+      `That schedule covers ${occurrences.length} rides, which is more than the ${MAX_OCCURRENCES} one schedule can publish. Shorten the range or pick fewer days.`,
+      "invalid",
+    );
   }
 
   const range = getFareRange(input.distanceKm);
@@ -218,6 +322,8 @@ const validateSeriesInput = (input: SeriesInput): { baseFare: number; contributi
   return {
     baseFare: range.base ?? Math.round(input.distanceKm * FARE_PER_KM),
     contribution: normalizeContributionForDistance(input.contribution, input.distanceKm),
+    validUntil: toIsoDate(validUntil),
+    occurrences,
   };
 };
 
@@ -237,16 +343,9 @@ export interface CreatedSeries {
  * single Tuesday without touching the rest.
  */
 export const createSeries = async (input: SeriesInput): Promise<CreatedSeries> => {
-  const fare = validateSeriesInput(input);
-  const validUntil = input.validUntil ?? input.validFrom;
-  const dates = occurrenceDates({ daysOfWeek: input.daysOfWeek, validFrom: input.validFrom, validUntil });
-
-  if (dates.length === 0) {
-    throw new DataError(
-      "No dates in that range fall on the days you chose. Try a wider range.",
-      "invalid",
-    );
-  }
+  const fare = validateSeriesInput(input, Date.now());
+  const validUntil = fare.validUntil;
+  const dates = fare.occurrences;
 
   const driverId = await getAuthenticatedUserId();
   const client = getSupabaseClient();
@@ -278,7 +377,14 @@ export const createSeries = async (input: SeriesInput): Promise<CreatedSeries> =
     .select(SERIES_COLUMNS)
     .single<SeriesRow>();
 
-  if (seriesError) throw toDataError(seriesError, "create");
+  if (seriesError) {
+    // The vehicle has to belong to the driver; `ride_series_guard_vehicle` is what
+    // decides that, so map its message rather than reporting a bare insert failure.
+    if (/your own vehicle|not a vehicle you/i.test(seriesError.message ?? "")) {
+      throw new DataError("You can only offer a schedule using one of your own vehicles.", "forbidden", seriesError);
+    }
+    throw toDataError(seriesError, "create");
+  }
   const series = rowToSeries(seriesData as SeriesRow);
 
   const rows = dates.map((date, index) => ({

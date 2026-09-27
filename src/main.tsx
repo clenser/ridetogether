@@ -9,6 +9,7 @@ import { registerServiceWorker, watchInstallPrompt } from "./services/pwa";
 import { initializeAppearance } from "./services/theme";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./index.css";
+import "./design-system.css";
 
 initializeAppearance();
 

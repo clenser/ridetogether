@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import type { LucideIcon } from "lucide-react";
 import {
   AlertCircle,
   CalendarDays,
@@ -22,6 +23,7 @@ import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import RideCard from "../components/RideCard";
 import { BookingStatusBadge, isLiveRide, nextStepFor } from "../components/StatusBadge";
+import { Tabs } from "../components/ui/Tabs";
 import { useApp } from "../context/AppContext";
 import { PAYMENT_DISCLAIMER } from "../services/payment";
 import { formatRupees } from "../services/fare";
@@ -45,72 +47,121 @@ interface CancellationDialog {
   bookingId: string;
 }
 
+type BookingTab = "upcoming" | "active" | "completed" | "cancelled";
+
+/**
+ * Per-tab wording. Kept next to the tab list so a new tab cannot appear without
+ * a title, an explanation and an empty state of its own.
+ */
+const TAB_COPY: Record<BookingTab, {
+  label: string;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  emptyTitle: string;
+  emptyDescription: string;
+}> = {
+  upcoming: {
+    label: "Upcoming",
+    title: "Upcoming journeys",
+    description: "Requested, paying and confirmed seats that have not departed yet.",
+    icon: CalendarDays,
+    emptyTitle: "No upcoming bookings",
+    emptyDescription: "Find a compatible community ride and send the driver a seat request.",
+  },
+  active: {
+    label: "Active",
+    title: "Under way",
+    description: "Trips you are riding right now, including the pickup in progress.",
+    icon: RouteIcon,
+    emptyTitle: "Nothing under way",
+    emptyDescription: "A journey appears here from the moment the driver starts the trip.",
+  },
+  completed: {
+    label: "Completed",
+    title: "Completed trips",
+    description: "Journeys you finished, ready to rate the driver.",
+    icon: CheckCircle2,
+    emptyTitle: "No completed trips yet",
+    emptyDescription: "Trips you have finished will be listed here so you can leave a rating.",
+  },
+  cancelled: {
+    label: "Cancelled",
+    title: "Cancelled and closed",
+    description: "Declined, withdrawn and cancelled requests, kept for your records.",
+    icon: History,
+    emptyTitle: "Nothing closed",
+    emptyDescription: "Declined, withdrawn and cancelled requests will be listed here.",
+  },
+};
+
 const myBookingsStyles = `
-.rt-bookings-page { min-height: 100%; padding: 28px 20px 60px; color: var(--rt-text, #17231c); background: var(--rt-surface-subtle, #f6faf7); }
+.rt-bookings-page { min-height: 100%; padding: 28px 20px 60px; color: var(--rt-text, var(--rt-text-strong)); background: var(--rt-surface-subtle, var(--rt-surface-subtle)); }
 .rt-bookings-shell { max-width: 1180px; margin: 0 auto; }
-.rt-bookings-heading { display: flex; align-items: center; gap: 7px; color: #148642; font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.rt-bookings-find { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 17px; border: 0; border-radius: 12px; color: #fff; background: #159447; box-shadow: 0 8px 20px rgba(21,148,71,.2); font: inherit; font-size: .84rem; font-weight: 780; text-decoration: none; }
-.rt-bookings-find:hover { background: #10813b; }
+.rt-bookings-tabs { margin: 0 0 18px; }
+.rt-bookings-heading { display: flex; align-items: center; gap: 7px; color: var(--rt-primary-strong); font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.rt-bookings-find { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 17px; border: 0; border-radius: 12px; color: var(--rt-text-inverse); background: var(--rt-primary); box-shadow: 0 8px 20px color-mix(in srgb, var(--rt-primary) 20%, transparent); font: inherit; font-size: .84rem; font-weight: 780; text-decoration: none; }
+.rt-bookings-find:hover { background: var(--rt-primary-strong); }
 .rt-bookings-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 26px; }
-.rt-bookings-stat { display: flex; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--rt-border, #dce7df); border-radius: 17px; background: var(--rt-card, #fff); box-shadow: 0 8px 24px rgba(29,64,42,.045); }
-.rt-bookings-stat-icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: #148642; background: #e2f5e8; }
-.rt-bookings-stat:nth-child(2) .rt-bookings-stat-icon { color: #2563a7; background: #e9f2fb; }
-.rt-bookings-stat:nth-child(3) .rt-bookings-stat-icon { color: #a56608; background: #fff3dc; }
+.rt-bookings-stat { display: flex; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--rt-border, var(--rt-border)); border-radius: 17px; background: var(--rt-card, var(--rt-card)); box-shadow: 0 8px 24px color-mix(in srgb, var(--rt-primary) 5%, transparent); }
+.rt-bookings-stat-icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-bookings-stat:nth-child(2) .rt-bookings-stat-icon { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-bookings-stat:nth-child(3) .rt-bookings-stat-icon { color: var(--rt-warning-text); background: var(--rt-warning-border); }
 .rt-bookings-stat strong { display: block; font-size: 1.16rem; line-height: 1; }
-.rt-bookings-stat span:last-child { display: block; margin-top: 5px; color: #748178; font-size: .72rem; }
-.rt-bookings-alert { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid #efb9b9; border-radius: 13px; color: #a43131; background: #fff1f1; font-size: .81rem; line-height: 1.45; }
-.rt-bookings-alert-success { border-color: #bce4c9; color: #116f38; background: #edf9f1; }
+.rt-bookings-stat span:last-child { display: block; margin-top: 5px; color: var(--rt-muted); font-size: .72rem; }
+.rt-bookings-alert { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--rt-danger-border); border-radius: 13px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .81rem; line-height: 1.45; }
+.rt-bookings-alert-success { border-color: var(--rt-border); color: var(--rt-primary-strong); background: var(--rt-surface-subtle); }
 .rt-bookings-alert svg { flex: 0 0 auto; margin-top: 1px; }
 .rt-bookings-section { margin-top: 26px; }
 .rt-bookings-section:first-of-type { margin-top: 0; }
 .rt-bookings-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; margin-bottom: 13px; }
 .rt-bookings-section-title { display: flex; align-items: center; gap: 9px; }
-.rt-bookings-section-title > span { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; color: #148642; background: #e2f5e8; }
+.rt-bookings-section-title > span { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
 .rt-bookings-section h2 { margin: 0; font-size: 1.06rem; letter-spacing: -.018em; }
-.rt-bookings-section-head p { margin: 4px 0 0; color: #748178; font-size: .78rem; }
+.rt-bookings-section-head p { margin: 4px 0 0; color: var(--rt-muted); font-size: .78rem; }
 .rt-bookings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px; align-items: start; }
 .rt-bookings-grid .ride-card { height: 100%; }
 .rt-bookings-status-line { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
-.rt-bookings-status { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 999px; color: #526259; background: #f0f4f2; font-size: .69rem; font-weight: 800; text-transform: capitalize; }
-.rt-bookings-status--confirmed { color: #116f39; background: #e2f5e9; }
-.rt-bookings-status--pending { color: #94600a; background: #fff2d8; }
-.rt-bookings-status--rejected { color: #a13939; background: #fdeaea; }
-.rt-bookings-status--cancelled { color: #66726b; background: #edf0ee; }
-.rt-bookings-status--completed { color: #116f39; background: #e2f5e9; }
-.rt-bookings-window { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 999px; color: #526259; background: #f1f5f2; font-size: .69rem; font-weight: 720; }
-.rt-bookings-window--departed { color: #116f39; background: #e2f5e9; }
+.rt-bookings-status { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 999px; color: var(--rt-text); background: var(--rt-surface-muted); font-size: .69rem; font-weight: 800; text-transform: capitalize; }
+.rt-bookings-status--confirmed { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-bookings-status--pending { color: var(--rt-warning-text); background: var(--rt-warning-border); }
+.rt-bookings-status--rejected { color: var(--rt-danger-text); background: var(--rt-danger-soft); }
+.rt-bookings-status--cancelled { color: var(--rt-text); background: var(--rt-surface-muted); }
+.rt-bookings-status--completed { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-bookings-window { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 999px; color: var(--rt-text); background: var(--rt-surface-subtle); font-size: .69rem; font-weight: 720; }
+.rt-bookings-window--departed { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
 .rt-bookings-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; width: 100%; }
 .rt-bookings-action { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; border-radius: 11px; font: inherit; font-size: .76rem; font-weight: 760; text-decoration: none; cursor: pointer; }
-.rt-bookings-action--primary { border: 0; color: #fff; background: #159447; }
-.rt-bookings-action--primary:hover { background: #10813b; }
-.rt-bookings-action--secondary { border: 1px solid #d8e3db; color: #4d5d54; background: #fff; }
-.rt-bookings-action--secondary:hover { border-color: #b9d6c3; background: #f1f9f4; }
-.rt-bookings-action--danger { border: 1px solid #edc2c2; color: #a63838; background: #fff7f7; }
-.rt-bookings-action--danger:hover { background: #feecec; }
+.rt-bookings-action--primary { border: 0; color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-bookings-action--primary:hover { background: var(--rt-primary-strong); }
+.rt-bookings-action--secondary { border: 1px solid var(--rt-border); color: var(--rt-text); background: var(--rt-card); }
+.rt-bookings-action--secondary:hover { border-color: var(--rt-border); background: var(--rt-surface-subtle); }
+.rt-bookings-action--danger { border: 1px solid var(--rt-danger-border); color: var(--rt-danger-text); background: var(--rt-danger-soft); }
+.rt-bookings-action--danger:hover { background: var(--rt-danger-soft); }
 .rt-bookings-action:disabled { opacity: .48; cursor: not-allowed; }
-.rt-bookings-lock-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: #7a877f; font-size: .69rem; line-height: 1.4; }
+.rt-bookings-lock-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: var(--rt-muted); font-size: .69rem; line-height: 1.4; }
 .rt-bookings-lock-note svg { flex: 0 0 auto; margin-top: 1px; }
-.rt-bookings-pickup { display: flex; align-items: flex-start; gap: 6px; margin: 9px 0 0; color: #4f6457; font-size: .71rem; line-height: 1.45; }
-.rt-bookings-pickup svg { flex: 0 0 auto; margin-top: 2px; color: #159447; }
-.rt-bookings-next { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; color: #40564a; background: #f2f8f4; font-size: .71rem; line-height: 1.45; }
-.rt-bookings-empty { min-height: 220px; display: grid; place-items: center; border: 1px dashed #cad8cf; border-radius: 20px; background: rgba(255,255,255,.55); }
-.rt-bookings-missing { height: 100%; display: grid; align-content: center; justify-items: center; min-height: 270px; padding: 26px; border: 1px solid #e1e8e3; border-radius: 20px; background: var(--rt-card, #fff); text-align: center; }
-.rt-bookings-missing-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 17px; color: #7a877f; background: #edf2ef; }
+.rt-bookings-pickup { display: flex; align-items: flex-start; gap: 6px; margin: 9px 0 0; color: var(--rt-text); font-size: .71rem; line-height: 1.45; }
+.rt-bookings-pickup svg { flex: 0 0 auto; margin-top: 2px; color: var(--rt-primary); }
+.rt-bookings-next { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; color: var(--rt-text); background: var(--rt-surface-subtle); font-size: .71rem; line-height: 1.45; }
+.rt-bookings-empty { min-height: 220px; display: grid; place-items: center; border: 1px dashed var(--rt-border); border-radius: 20px; background: rgba(255,255,255,.55); }
+.rt-bookings-missing { height: 100%; display: grid; align-content: center; justify-items: center; min-height: 270px; padding: 26px; border: 1px solid var(--rt-border); border-radius: 20px; background: var(--rt-card, var(--rt-card)); text-align: center; }
+.rt-bookings-missing-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 17px; color: var(--rt-muted); background: var(--rt-surface-muted); }
 .rt-bookings-missing h3 { margin: 15px 0 5px; font-size: 1rem; }
-.rt-bookings-missing p { max-width: 360px; margin: 0; color: #738078; font-size: .8rem; line-height: 1.55; }
-.rt-bookings-modal-copy { display: grid; gap: 13px; color: #59675f; font-size: .86rem; line-height: 1.6; }
-.rt-bookings-modal-warning { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: #8f3838; background: #fff0f0; font-size: .79rem; line-height: 1.5; }
+.rt-bookings-missing p { max-width: 360px; margin: 0; color: var(--rt-muted); font-size: .8rem; line-height: 1.55; }
+.rt-bookings-modal-copy { display: grid; gap: 13px; color: var(--rt-text); font-size: .86rem; line-height: 1.6; }
+.rt-bookings-modal-warning { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .79rem; line-height: 1.5; }
 .rt-bookings-modal-warning svg { flex: 0 0 auto; margin-top: 2px; }
 .rt-bookings-modal-footer { display: flex; justify-content: flex-end; gap: 9px; width: 100%; }
 .rt-bookings-spin { animation: rt-bookings-spin .8s linear infinite; }
 @keyframes rt-bookings-spin { to { transform: rotate(360deg); } }
-[data-theme="dark"] .rt-bookings-page { --rt-surface-subtle: #101712; --rt-card: #17211a; --rt-border: #2b3a30; --rt-text: #eef7f1; }
-[data-theme="dark"] .rt-bookings-stat, [data-theme="dark"] .rt-bookings-empty { background: #17211a; border-color: #2b3a30; }
-[data-theme="dark"] .rt-bookings-section-head p { color: #a6b5ac; }
-[data-theme="dark"] .rt-bookings-status, [data-theme="dark"] .rt-bookings-window { color: #c5d0c9; background: #263229; }
+[data-theme="dark"] .rt-bookings-page { --rt-surface-subtle: var(--rt-surface-subtle); --rt-card: var(--rt-surface); --rt-border: var(--rt-border); --rt-text: var(--rt-text); }
+[data-theme="dark"] .rt-bookings-stat, [data-theme="dark"] .rt-bookings-empty { background: var(--rt-surface); border-color: var(--rt-border); }
+[data-theme="dark"] .rt-bookings-section-head p { color: var(--rt-muted); }
+[data-theme="dark"] .rt-bookings-status, [data-theme="dark"] .rt-bookings-window { color: var(--rt-muted); background: #263229; }
 [data-theme="dark"] .rt-bookings-action--secondary { color: #dce7df; background: #1a251e; border-color: #3a4a40; }
-[data-theme="dark"] .rt-bookings-missing { background: #17211a; border-color: #2b3a30; }
-[data-theme="dark"] .rt-bookings-missing p { color: #a6b5ac; }
+[data-theme="dark"] .rt-bookings-missing { background: var(--rt-surface); border-color: var(--rt-border); }
+[data-theme="dark"] .rt-bookings-missing p { color: var(--rt-muted); }
 /*
  * Per-status dark values, declared after the base status-chip rule.
  *
@@ -121,14 +172,14 @@ const myBookingsStyles = `
  * the label text still carries the meaning, so colour is reinforcement here
  * rather than the only signal.
  */
-[data-theme="dark"] .rt-bookings-status--confirmed, [data-theme="dark"] .rt-bookings-status--completed { color: #a9e0c1; background: #16301f; }
-[data-theme="dark"] .rt-bookings-status--pending { color: #f0d199; background: #33290f; }
-[data-theme="dark"] .rt-bookings-status--rejected { color: #f0b4b4; background: #341c1c; }
-[data-theme="dark"] .rt-bookings-status--cancelled { color: #c5d0c9; background: #263229; }
+[data-theme="dark"] .rt-bookings-status--confirmed, [data-theme="dark"] .rt-bookings-status--completed { color: var(--rt-success-text); background: #16301f; }
+[data-theme="dark"] .rt-bookings-status--pending { color: var(--rt-warning-text); background: #33290f; }
+[data-theme="dark"] .rt-bookings-status--rejected { color: var(--rt-danger-text); background: #341c1c; }
+[data-theme="dark"] .rt-bookings-status--cancelled { color: var(--rt-muted); background: #263229; }
 [data-theme="dark"] .rt-bookings-window--departed { color: #bcd8f0; background: #1d2c3a; }
 [data-theme="dark"] .rt-bookings-action--primary { background: #1fae55; }
 [data-theme="dark"] .rt-bookings-action--primary:hover { background: #32b965; }
-[data-theme="dark"] .rt-bookings-action--danger { color: #f0b4b4; background: #2a1717; border-color: #5c3232; }
+[data-theme="dark"] .rt-bookings-action--danger { color: var(--rt-danger-text); background: #2a1717; border-color: #5c3232; }
 [data-theme="dark"] .rt-bookings-action--danger:hover { background: #351d1d; }
 @media (max-width: 900px) { .rt-bookings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) {
@@ -181,6 +232,8 @@ interface BookingSectionProps {
   now: number;
   cancelling: boolean;
   paying: string | null;
+  /** Payments keyed by booking, so a seat that is already open says so. */
+  openedPaymentBookings: ReadonlySet<string>;
   onCancel: (booking: Booking) => void;
   onPay: (booking: Booking) => void;
   history?: boolean;
@@ -198,6 +251,7 @@ function BookingSection({
   now,
   cancelling,
   paying,
+  openedPaymentBookings,
   onCancel,
   onPay,
   history = false,
@@ -238,7 +292,27 @@ function BookingSection({
             const started = ride ? !isLiveRide(ride.status) || ride.status === "in_progress" : false;
             const cancellableStatus = CANCELLABLE_BOOKING_STATUSES.includes(booking.status);
             const canCancel = Boolean(ride && !departed && !started && cancellableStatus);
-            const canPay = ride?.status === "active" && booking.status === "payment_pending";
+            /**
+             * A held seat stays payable for as long as the ride is running, not
+             * only while it is still open for bookings.
+             *
+             * The seat is the rider's from the moment the host accepts it, and the
+             * host may confirm the payment on a departed trip. Gating this on
+             * `active` alone meant a rider whose host had already set off lost the
+             * Pay button, leaving the host's only remaining option to release a seat
+             * the rider was trying to pay for. Both sides now share one rule: while
+             * the ride is live, `payment_pending` can be paid; once it is closed the
+             * booking is closed too and there is nothing to pay.
+             */
+            const canPay = Boolean(ride && isLiveRide(ride.status) && booking.status === "payment_pending");
+            /**
+             * A payment that has already been opened is not something to offer
+             * again. The button is idempotent, but showing "Pay" to a rider who has
+             * already paid-as-far-as-the-placeholder-goes invites them to press it
+             * again and tells the host nothing about what is actually outstanding.
+             */
+            const paymentOpen = openedPaymentBookings.has(booking.id);
+            const canPayNow = canPay && !paymentOpen;
             const canChat = ACTIVE_BOOKING_STATUSES.includes(booking.status) || booking.status === "completed";
             const cancellationLocked = Boolean(ride && (departed || started) && cancellableStatus);
             const nextStep = nextStepFor(booking.status, false);
@@ -270,7 +344,7 @@ function BookingSection({
                         <MessageCircle size={15} aria-hidden="true" /> Chat
                       </Link>
                     ) : null}
-                    {canPay ? (
+                    {canPayNow ? (
                       <button
                         className="rt-bookings-action rt-bookings-action--primary"
                         type="button"
@@ -314,7 +388,11 @@ function BookingSection({
                 ) : null}
                 {nextStep ? <p className="rt-bookings-next">{nextStep}</p> : null}
                 {booking.status === "payment_pending" ? (
-                  <p className="rt-bookings-lock-note"><Wallet size={13} /> {PAYMENT_DISCLAIMER}</p>
+                  paymentOpen ? (
+                    <p className="rt-bookings-lock-note"><Clock3 size={13} /> Your payment is open. The driver marks it received to confirm your seat.</p>
+                  ) : (
+                    <p className="rt-bookings-lock-note"><Wallet size={13} /> {PAYMENT_DISCLAIMER}</p>
+                  )
                 ) : null}
                 {cancellationLocked ? <p className="rt-bookings-lock-note"><LockKeyhole size={13} /> Cancellation closes when the trip starts. Contact the driver if plans change.</p> : null}
               </RideCard>
@@ -342,6 +420,7 @@ export function MyBookingsPage() {
     vehicles,
     rides,
     bookings,
+    payments,
     payBooking,
     cancelBooking: withdrawBooking,
   } = useApp();
@@ -351,6 +430,7 @@ export function MyBookingsPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [bookingTab, setBookingTab] = useState<BookingTab>("upcoming");
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -362,6 +442,9 @@ export function MyBookingsPage() {
     setCancellationDialog(null);
     setError("");
     setSuccess("");
+    /* A different member has entirely different bookings, so leaving the tab on
+       "Cancelled" would open onto someone else's history. */
+    setBookingTab("upcoming");
   }, [activeUserId]);
 
   const entries = useMemo<BookingEntry[]>(() => bookings
@@ -379,30 +462,69 @@ export function MyBookingsPage() {
     }), [activeUserId, bookings, rides, users]);
 
   /**
-   * "Current" means the trip has not finished: a request, a seat being paid for,
-   * a confirmed seat, or a passenger already in the car. Trips that already
-   * started sort first because those are the ones that need attention now.
+   * Which of this rider's bookings already have an open payment.
+   *
+   * Derived from the payments already loaded in context, which the realtime
+   * subscription keeps current, so a card flips to "waiting for the driver" the
+   * moment the payment row is written rather than on the next navigation.
    */
-  const currentEntries = useMemo(() => entries
-    .filter(({ booking, ride }) => (
-      ride
-      && ACTIVE_BOOKING_STATUSES.includes(booking.status)
-      && (ride.status === "active" || ride.status === "in_progress")
-    ))
-    .sort((first, second) => {
-      const firstStarted = first.timestamp <= now;
-      const secondStarted = second.timestamp <= now;
-      if (firstStarted !== secondStarted) return firstStarted ? -1 : 1;
-      return firstStarted ? second.timestamp - first.timestamp : first.timestamp - second.timestamp;
-    }), [entries, now]);
+  const openedPaymentBookings = useMemo(
+    () => new Set(payments.filter((payment) => payment.status === "pending").map((payment) => payment.bookingId)),
+    [payments],
+  );
 
-  const historyEntries = useMemo(() => entries
-    .filter(({ booking, ride }) => (
-      !ride
-      || !ACTIVE_BOOKING_STATUSES.includes(booking.status)
-      || (ride.status !== "active" && ride.status !== "in_progress")
-    ))
-    .sort((first, second) => second.timestamp - first.timestamp), [entries]);
+  /**
+   * The four lifecycle views a rider actually thinks in.
+   *
+   * Previously these were two buckets - "current & upcoming" and "everything
+   * else" - which put a trip that has not departed in the same list as one being
+   * driven right now, and mixed a declined request in with a completed trip.
+   * Splitting them by what the rider can do about it is the useful distinction.
+   */
+  // These buckets have to be mutually exclusive and exhaustive, or a booking
+  // shows up twice or vanishes. They follow the ride lifecycle - a published
+  // ride is upcoming, `in_progress` is under way, and it ends as completed or
+  // cancelled - with the rider's own outcome taking priority over the ride's,
+  // because a rejected seat on a finished trip was never travelled.
+  const isTerminalBooking = ({ booking }: Pick<BookingEntry, "booking">): boolean =>
+    booking.status === "cancelled" || booking.status === "rejected" || booking.status === "no_show";
+
+  const isClosed = (entry: BookingEntry): boolean =>
+    isTerminalBooking(entry) || entry.ride?.status === "cancelled";
+
+  const isFinished = ({ booking, ride }: BookingEntry): boolean =>
+    booking.status === "completed" || ride?.status === "completed";
+
+  const isUnderway = ({ ride }: BookingEntry): boolean => ride?.status === "in_progress";
+
+  const isUpcoming = ({ booking, ride }: BookingEntry): boolean =>
+    ride?.status === "active" && !isTerminalBooking({ booking });
+
+  const tabEntries = useMemo<Record<BookingTab, BookingEntry[]>>(() => {
+    const byTime = (first: BookingEntry, second: BookingEntry) => first.timestamp - second.timestamp;
+    const newestFirst = (first: BookingEntry, second: BookingEntry) => second.timestamp - first.timestamp;
+
+    return {
+      upcoming: entries.filter((entry) => !isClosed(entry) && isUpcoming(entry)).sort(byTime),
+      active: entries.filter((entry) => !isClosed(entry) && !isFinished(entry) && isUnderway(entry)).sort(byTime),
+      completed: entries.filter((entry) => !isClosed(entry) && isFinished(entry)).sort(newestFirst),
+      // A booking whose ride could not be loaded is not a real outcome, so it
+      // lands here rather than disappearing from every tab and its count.
+      cancelled: entries.filter((entry) => isClosed(entry) || !entry.ride).sort(newestFirst),
+    };
+  }, [entries]);
+
+  const bookingTabs = useMemo(
+    () => (Object.keys(TAB_COPY) as BookingTab[]).map((id) => ({
+      id,
+      label: TAB_COPY[id].label,
+      count: tabEntries[id].length,
+    })),
+    [tabEntries],
+  );
+
+  const activeTabCopy = TAB_COPY[bookingTab];
+  const activeTabEntries = tabEntries[bookingTab];
 
   const selectedBooking = cancellationDialog
     ? bookings.find((booking) => booking.id === cancellationDialog.bookingId && booking.riderId === activeUserId) ?? null
@@ -475,9 +597,8 @@ export function MyBookingsPage() {
   const heldSeats = entries
     .filter(({ booking }) => booking.status === "payment_pending" || booking.status === "confirmed" || booking.status === "picked_up" || booking.status === "completed")
     .reduce((total, { booking }) => total + booking.seats, 0);
-  const upcomingSeats = currentEntries
-    .filter(({ timestamp }) => timestamp > now)
-    .reduce((total, { booking }) => total + booking.seats, 0);
+  const currentCount = tabEntries.upcoming.length + tabEntries.active.length;
+  const upcomingSeats = tabEntries.upcoming.reduce((total, { booking }) => total + booking.seats, 0);
   const awaitingPayment = entries.filter(({ booking }) => booking.status === "payment_pending").length;
 
   return (
@@ -492,7 +613,7 @@ export function MyBookingsPage() {
         />
 
         <section className="rt-bookings-summary" aria-label="Booking overview">
-          <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><CalendarDays size={19} /></span><div><strong>{currentEntries.length}</strong><span>Current bookings</span></div></div>
+          <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><CalendarDays size={19} /></span><div><strong>{currentCount}</strong><span>Current bookings</span></div></div>
           <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><CheckCircle2 size={19} /></span><div><strong>{heldSeats}</strong><span>Seats held</span></div></div>
           <div className="rt-bookings-stat"><span className="rt-bookings-stat-icon"><UsersRound size={19} /></span><div><strong>{upcomingSeats}</strong><span>Upcoming seats</span></div></div>
         </section>
@@ -509,36 +630,32 @@ export function MyBookingsPage() {
         {error && !cancellationDialog ? <div className="rt-bookings-alert" role="alert"><AlertCircle size={17} />{error}</div> : null}
         {success ? <div className="rt-bookings-alert rt-bookings-alert-success" role="status"><CheckCircle2 size={17} />{success}</div> : null}
 
+        <div className="rt-bookings-tabs">
+          <Tabs
+            items={bookingTabs}
+            activeId={bookingTab}
+            onChange={(id) => setBookingTab(id as BookingTab)}
+            label="Filter bookings"
+            idPrefix="booking-tab"
+          />
+        </div>
+
         <BookingSection
-          title="Current & upcoming"
-          description="Requested, paying, confirmed and on-board seats."
-          entries={currentEntries}
-          icon={CalendarDays}
-          emptyTitle="No current bookings"
-          emptyDescription="Find a compatible community ride and send the driver a seat request."
+          title={activeTabCopy.title}
+          description={activeTabCopy.description}
+          entries={activeTabEntries}
+          icon={activeTabCopy.icon}
+          emptyTitle={activeTabCopy.emptyTitle}
+          emptyDescription={activeTabCopy.emptyDescription}
           vehicles={vehicles}
           activeUserId={activeUserId}
           now={now}
-          cancelling={cancelling}
-          paying={paying}
-          onCancel={openCancellation}
-          onPay={handlePay}
-        />
-        <BookingSection
-          title="Booking history"
-          description="Completed, declined, cancelled, and unavailable ride records."
-          entries={historyEntries}
-          icon={History}
-          emptyTitle="No booking history"
-          emptyDescription="Completed and closed booking records will stay here for easy reference."
-          vehicles={vehicles}
-          activeUserId={activeUserId}
-          now={now}
-          cancelling={cancelling}
-          paying={paying}
-          onCancel={openCancellation}
-          onPay={handlePay}
-          history
+            cancelling={cancelling}
+            paying={paying}
+            openedPaymentBookings={openedPaymentBookings}
+            onCancel={openCancellation}
+            onPay={handlePay}
+            history={bookingTab === "completed" || bookingTab === "cancelled"}
         />
       </div>
 

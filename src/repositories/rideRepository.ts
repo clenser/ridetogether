@@ -457,12 +457,36 @@ export const getRideById = async (rideId: string): Promise<RideWithRelations | n
 
 // --- writes -----------------------------------------------------------------
 
+/**
+ * Confirms the vehicle being published actually belongs to the driver.
+ *
+ * `rides_guard_vehicle` in the database refuses the write either way; this is
+ * here so the host is told "pick one of your own vehicles" instead of being
+ * handed a permission error for a control that only ever listed their own cars.
+ */
+const assertOwnVehicle = async (vehicleId: string, driverId: string): Promise<void> => {
+  if (!vehicleId) return;
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from("vehicles")
+    .select("id")
+    .eq("id", vehicleId)
+    .eq("owner_id", driverId)
+    .maybeSingle()
+    .returns<{ id: string }>();
+  if (error) throw toDataError(error, "load");
+  if (!data) {
+    throw new DataError("You can only offer a ride using one of your own vehicles.", "forbidden");
+  }
+};
+
 export const createRide = async (input: RideInput): Promise<Ride> => {
   validateInput(input);
   // The driver is the authenticated Supabase user. `RideInput` has no driverId
   // field at all, so there is nothing for a caller to forge here.
   const driverId = await getAuthenticatedUserId();
   const client = getSupabaseClient();
+  await assertOwnVehicle(input.vehicleId, driverId);
 
   const { baseFare, contribution } = resolveFare(input.distanceKm, input.contribution);
 
@@ -530,8 +554,9 @@ export const createRide = async (input: RideInput): Promise<Ride> => {
 
 export const updateRide = async (rideId: string, input: RideInput): Promise<Ride> => {
   validateInput(input);
-  await getAuthenticatedUserId();
+  const driverId = await getAuthenticatedUserId();
   const client = getSupabaseClient();
+  await assertOwnVehicle(input.vehicleId, driverId);
 
   const { baseFare, contribution } = resolveFare(input.distanceKm, input.contribution);
   const stops = input.waypoints ?? [];
@@ -615,15 +640,39 @@ export const setRideStatus = async (
 
   if (error) {
     const detail = `${error.message ?? ""} ${error.details ?? ""}`;
-    if (/only be reached from in_progress|only be completed from in_progress/i.test(detail)) {
+    if (/only a ride that is in progress can be completed/i.test(detail)) {
       throw new DataError(
         "Start the ride before ending it. Open the ride and choose Start Ride, then End Ride when you arrive.",
         "invalid",
         error,
       );
     }
-    if (/already finished or been cancelled/i.test(detail)) {
+    if (/only a published ride can be started/i.test(detail)) {
+      throw new DataError(
+        "This ride can no longer be started because it has already run or been closed.",
+        "cancelled-ride",
+        error,
+      );
+    }
+    if (/a (completed|cancelled) ride cannot change status/i.test(detail)) {
       throw new DataError("This ride has already been finished or cancelled.", "cancelled-ride", error);
+    }
+    if (/cannot go back to published/i.test(detail)) {
+      throw new DataError(
+        "This ride has already started driving, so it cannot be reopened.",
+        "cancelled-ride",
+        error,
+      );
+    }
+    if (/only the host can change this ride/i.test(detail)) {
+      throw new DataError("Only the driver can change this ride.", "forbidden", error);
+    }
+    if (/only be reached from in_progress|only be completed from in_progress|already finished or been cancelled/i.test(detail)) {
+      throw new DataError(
+        "Start the ride before ending it. Open the ride and choose Start Ride, then End Ride when you arrive.",
+        "invalid",
+        error,
+      );
     }
     if (error.code === "42501") {
       throw new DataError("Only the driver can change this ride.", "forbidden", error);

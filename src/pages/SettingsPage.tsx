@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import {
   Bell,
   Check,
-  CheckCircle2,
   ChevronDown,
+  CreditCard,
   Download,
   ExternalLink,
   HelpCircle,
   Info,
   Laptop,
-  LoaderCircle,
   LockKeyhole,
   Mail,
   MessageSquareText,
@@ -18,15 +18,20 @@ import {
   Palette,
   RotateCcw,
   ShieldCheck,
+  Smartphone,
   Sun,
+  UserRound,
   Wallet,
 } from "lucide-react";
 import { Modal } from "../components/Modal";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Button } from "../components/ui/Button";
+import { Group, Row, RowValue } from "../components/ui/Group";
+import { UpiField } from "../components/ui/UpiField";
 import { PushNotificationToggle } from "../components/PushNotificationToggle";
 import { useApp } from "../context/AppContext";
 import { hasLegacyLocalData } from "../services/database";
-import { normalizeUpiId, PAYMENT_DISCLAIMER } from "../services/payment";
+import { PAYMENT_DISCLAIMER } from "../services/payment";
 import { isSupabaseConfigured } from "../services/supabase";
 import { readAppearance, saveAppearance, type Appearance } from "../services/theme";
 import {
@@ -82,85 +87,65 @@ const settingsStyles = `
 .rt-settings-page {
   min-height: 100%;
   padding: 28px 20px 64px;
-  color: var(--rt-text, #17231c);
-  background: var(--rt-surface-subtle, #f6faf7);
+  color: var(--rt-text, var(--rt-text-strong));
+  background: var(--rt-surface-subtle, var(--rt-surface-subtle));
 }
 .rt-settings-shell { max-width: 1100px; margin: 0 auto; }
-.rt-settings-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: fit-content;
-  margin: 20px 0 18px;
-  padding: 8px 11px;
-  border: 1px solid #cae6d4;
-  border-radius: 999px;
-  color: #237544;
-  background: #eff9f2;
-  font-size: .73rem;
-  font-weight: 700;
-}
-.rt-settings-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #22a35a; box-shadow: 0 0 0 4px rgba(34,163,90,.12); }
+
+
 .rt-settings-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 22px; align-items: start; }
 .rt-settings-nav {
   position: sticky;
   top: 94px;
   padding: 12px;
-  border: 1px solid var(--rt-border, #dce7df);
+  border: 1px solid var(--rt-border, var(--rt-border));
   border-radius: 18px;
-  background: var(--rt-card, #fff);
-  box-shadow: 0 8px 24px rgba(29, 64, 42, .045);
+  background: var(--rt-card, var(--rt-card));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--rt-primary) 5%, transparent);
 }
-.rt-settings-nav-title { margin: 5px 8px 11px; color: #7b887f; font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
+.rt-settings-nav-title { margin: 5px 8px 11px; color: var(--rt-muted); font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
 .rt-settings-nav a {
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 10px 11px;
   border-radius: 10px;
-  color: #5b6a61;
+  color: var(--rt-text);
   text-decoration: none;
   font-size: .79rem;
   font-weight: 650;
 }
-.rt-settings-nav a:hover { color: #137c3d; background: #eff8f2; }
-.rt-settings-nav a svg { color: #159447; }
+.rt-settings-nav a:hover { color: var(--rt-primary-strong); background: var(--rt-surface-subtle); }
+.rt-settings-nav a svg { color: var(--rt-primary-strong); }
 .rt-settings-content { display: grid; gap: 18px; min-width: 0; }
-.rt-settings-card {
-  scroll-margin-top: 90px;
-  border: 1px solid var(--rt-border, #dce7df);
-  border-radius: 20px;
-  background: var(--rt-card, #fff);
-  box-shadow: 0 10px 30px rgba(29, 64, 42, .05);
-  overflow: hidden;
-}
-.rt-settings-card-head { display: flex; align-items: flex-start; gap: 13px; padding: 20px 22px 17px; border-bottom: 1px solid #edf2ee; }
-.rt-settings-card-icon { width: 39px; height: 39px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: #137d3d; background: #e2f5e8; }
-.rt-settings-card-head h2 { margin: 0; font-size: 1.04rem; letter-spacing: -.015em; }
-.rt-settings-card-head p { margin: 5px 0 0; color: #6d7b73; font-size: .78rem; line-height: 1.45; }
-.rt-settings-card-body { padding: 8px 22px 20px; }
-.rt-settings-note { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 8px; padding: 11px 12px; border-radius: 11px; color: #58685f; background: #f3f7f4; font-size: .74rem; line-height: 1.5; }
-.rt-settings-note svg { flex: 0 0 auto; margin-top: 1px; color: #159447; }
+
+
+
+
+
+
+.rt-settings-note { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 8px; padding: 11px 12px; border-radius: 11px; color: var(--rt-text); background: var(--rt-surface-subtle); font-size: .74rem; line-height: 1.5; }
+.rt-settings-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--rt-primary-strong); }
 .rt-setting-toggle {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 15px 0;
-  border-bottom: 1px solid #edf2ee;
+  border-bottom: 1px solid var(--rt-surface-muted);
   cursor: pointer;
 }
 .rt-setting-toggle:last-child { border-bottom: 0; }
-.rt-setting-toggle-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: #57675d; background: #f0f4f1; }
-.rt-setting-toggle-copy strong { display: block; color: #304238; font-size: .83rem; }
-.rt-setting-toggle-copy span { display: block; margin-top: 4px; color: #748178; font-size: .72rem; line-height: 1.4; }
+.rt-setting-toggle-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: var(--rt-text); background: var(--rt-surface-muted); }
+.rt-setting-toggle-copy strong { display: block; color: var(--rt-text); font-size: .83rem; }
+.rt-setting-toggle-copy span { display: block; margin-top: 4px; color: var(--rt-muted); font-size: .72rem; line-height: 1.4; }
 .rt-switch { position: relative; width: 43px; height: 24px; flex: 0 0 auto; }
 .rt-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.rt-switch-track { position: absolute; inset: 0; border-radius: 999px; background: #cbd5ce; transition: background .2s ease, box-shadow .2s ease; }
-.rt-switch-track::after { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: #fff; box-shadow: 0 2px 5px rgba(20,40,28,.24); transition: transform .2s ease; }
-.rt-switch input:checked + .rt-switch-track { background: #159447; }
+.rt-switch-track { position: absolute; inset: 0; border-radius: 999px; background: var(--rt-border); transition: background .2s ease, box-shadow .2s ease; }
+.rt-switch-track::after { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: var(--rt-card); box-shadow: 0 2px 5px rgba(20,40,28,.24); transition: transform .2s ease; }
+.rt-switch input:checked + .rt-switch-track { background: var(--rt-primary-strong); }
 .rt-switch input:checked + .rt-switch-track::after { transform: translateX(19px); }
-.rt-switch input:focus-visible + .rt-switch-track { box-shadow: 0 0 0 3px rgba(21,148,71,.18); }
+.rt-switch input:focus-visible + .rt-switch-track { box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 18%, transparent); }
 /* Wraps one toggle that carries its own status line (push, install). */
 .rt-setting-toggle-group .rt-setting-toggle { cursor: default; }
 .rt-setting-toggle-note {
@@ -168,11 +153,11 @@ const settingsStyles = `
   align-items: center;
   gap: 6px;
   margin: -6px 0 14px 48px;
-  color: #15823f;
+  color: var(--rt-primary-strong);
   font-size: .72rem;
   line-height: 1.4;
 }
-.rt-setting-toggle-note--error { color: #bd3434; }
+.rt-setting-toggle-note--error { color: var(--rt-danger); }
 /* The four push facts (supported / permission / this device / delivery). Two
    columns on a phone, four on a desktop card: each fact is read from the browser
    or the database so a member can tell a working setup from a broken one. */
@@ -185,50 +170,50 @@ const settingsStyles = `
   list-style: none;
 }
 .rt-push-status li { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rt-push-status span { color: #8b968f; font-size: .66rem; letter-spacing: .04em; text-transform: uppercase; }
-.rt-push-status strong { color: #3a4a41; font-size: .74rem; font-weight: 700; }
+.rt-push-status span { color: var(--rt-muted); font-size: .66rem; letter-spacing: .04em; text-transform: uppercase; }
+.rt-push-status strong { color: var(--rt-text); font-size: .74rem; font-weight: 700; }
 .rt-push-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
 .rt-push-actions .rt-settings-secondary { display: inline-flex; align-items: center; gap: 7px; }
-[data-theme="dark"] .rt-push-status span { color: #8d9b92; }
-[data-theme="dark"] .rt-push-status strong { color: #e6f0e9; }
+
+
 .rt-install-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; flex-wrap: wrap; }
 .rt-install-copy { min-width: 0; }
-.rt-install-copy strong { display: block; color: #304238; font-size: .83rem; }
-.rt-install-copy span { display: block; margin-top: 4px; color: #748178; font-size: .72rem; line-height: 1.45; }
-[data-theme="dark"] .rt-install-copy strong { color: #eef7f1; }
-[data-theme="dark"] .rt-install-copy span { color: #a6b5ac; }
-[data-theme="dark"] .rt-setting-toggle-note { color: #8be0a6; }
-[data-theme="dark"] .rt-setting-toggle-note--error { color: #ffb0b0; }
+.rt-install-copy strong { display: block; color: var(--rt-text); font-size: .83rem; }
+.rt-install-copy span { display: block; margin-top: 4px; color: var(--rt-muted); font-size: .72rem; line-height: 1.45; }
+
+
+
+
 .rt-appearance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 14px; }
 .rt-appearance-option {
   position: relative;
   min-height: 116px;
   padding: 14px;
-  border: 1px solid #d9e3db;
+  border: 1px solid var(--rt-border);
   border-radius: 15px;
-  color: #3d4e44;
-  background: #fff;
+  color: var(--rt-text);
+  background: var(--rt-card);
   text-align: left;
   font: inherit;
   cursor: pointer;
   transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
-.rt-appearance-option:hover { transform: translateY(-1px); border-color: #a9d7b8; }
-.rt-appearance-option-active { border-color: #159447; box-shadow: 0 0 0 2px rgba(21,148,71,.11); }
-.rt-appearance-preview { height: 48px; display: flex; gap: 6px; padding: 7px; margin-bottom: 11px; border-radius: 9px; background: #edf5ef; }
-.rt-appearance-option-dark .rt-appearance-preview { background: #172019; }
-.rt-appearance-side { width: 24px; border-radius: 5px; background: #fff; border: 1px solid #d7e2d9; }
-.rt-appearance-option-dark .rt-appearance-side { background: #202c23; border-color: #35433a; }
+.rt-appearance-option:hover { transform: translateY(-1px); border-color: var(--rt-border); }
+.rt-appearance-option-active { border-color: var(--rt-primary-strong); box-shadow: 0 0 0 2px color-mix(in srgb, var(--rt-primary) 11%, transparent); }
+.rt-appearance-preview { height: 48px; display: flex; gap: 6px; padding: 7px; margin-bottom: 11px; border-radius: 9px; background: var(--rt-surface-muted); }
+.rt-appearance-option-dark .rt-appearance-preview { background: var(--rt-text-strong); }
+.rt-appearance-side { width: 24px; border-radius: 5px; background: var(--rt-card); border: 1px solid var(--rt-border); }
+.rt-appearance-option-dark .rt-appearance-side { background: var(--rt-text-strong); border-color: var(--rt-text); }
 .rt-appearance-main { flex: 1; display: grid; gap: 5px; }
-.rt-appearance-bar { height: 5px; border-radius: 99px; background: #d6e1d8; }
-.rt-appearance-bar-green { width: 65%; background: #42aa69; }
+.rt-appearance-bar { height: 5px; border-radius: 99px; background: var(--rt-border); }
+.rt-appearance-bar-green { width: 65%; background: var(--rt-primary); }
 .rt-appearance-bar-short { width: 48%; }
-.rt-appearance-option-dark .rt-appearance-bar { background: #3b4a40; }
+.rt-appearance-option-dark .rt-appearance-bar { background: var(--rt-text); }
 .rt-appearance-caption { display: flex; align-items: center; gap: 7px; font-size: .76rem; font-weight: 760; }
-.rt-appearance-check { position: absolute; top: 10px; right: 10px; width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #159447; }
+
 .rt-faq-list { display: grid; }
 .rt-faq {
-  border-bottom: 1px solid #edf2ee;
+  border-bottom: 1px solid var(--rt-surface-muted);
 }
 .rt-faq:last-child { border-bottom: 0; }
 .rt-faq summary {
@@ -237,54 +222,39 @@ const settingsStyles = `
   justify-content: space-between;
   gap: 12px;
   padding: 16px 0;
-  color: #33463a;
+  color: var(--rt-text);
   font-size: .82rem;
   font-weight: 730;
   cursor: pointer;
   list-style: none;
 }
 .rt-faq summary::-webkit-details-marker { display: none; }
-.rt-faq summary svg { flex: 0 0 auto; color: #6e7c73; transition: transform .18s ease; }
+.rt-faq summary svg { flex: 0 0 auto; color: var(--rt-muted); transition: transform .18s ease; }
 .rt-faq[open] summary svg { transform: rotate(180deg); }
-.rt-faq-answer { margin: -4px 0 17px; color: #69776e; font-size: .76rem; line-height: 1.6; }
-.rt-help-guide { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
-.rt-help-step { padding: 14px; border-radius: 13px; background: #f3f7f4; }
-.rt-help-step-number { width: 24px; height: 24px; display: grid; place-items: center; margin-bottom: 9px; border-radius: 8px; color: #fff; background: #159447; font-size: .67rem; font-weight: 800; }
-.rt-help-step strong { display: block; font-size: .76rem; }
-.rt-help-step span { display: block; margin-top: 4px; color: #738078; font-size: .69rem; line-height: 1.45; }
-.rt-about-version { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 17px; }
-.rt-about-item { padding: 14px; border-radius: 13px; background: #f4f7f5; }
-.rt-about-item span { display: block; color: #7a877f; font-size: .66rem; text-transform: uppercase; letter-spacing: .05em; }
-.rt-about-item strong { display: block; margin-top: 5px; font-size: .8rem; }
-.rt-about-copy { margin: 0 0 16px; color: #68766d; font-size: .78rem; line-height: 1.6; }
-.rt-reset-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px; border: 1px solid #f0cccc; border-radius: 14px; background: #fff7f7; }
+.rt-faq-answer { margin: -4px 0 17px; color: var(--rt-text); font-size: .76rem; line-height: 1.6; }
+
+
+
+
+
+
+
+
+
+
+.rt-reset-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px; border: 1px solid var(--rt-danger-border); border-radius: 14px; background: var(--rt-danger-soft); }
 .rt-reset-copy { display: flex; align-items: flex-start; gap: 10px; }
-.rt-reset-copy svg { flex: 0 0 auto; color: #c54343; margin-top: 1px; }
-.rt-reset-copy strong { display: block; color: #8e3333; font-size: .8rem; }
-.rt-reset-copy span { display: block; margin-top: 4px; color: #8c6262; font-size: .7rem; line-height: 1.4; }
-.rt-reset-button {
-  min-height: 38px;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 12px;
-  border: 1px solid #df9a9a;
-  border-radius: 10px;
-  color: #a53232;
-  background: #fff;
-  font: inherit;
-  font-size: .75rem;
-  font-weight: 760;
-  cursor: pointer;
-}
-.rt-reset-button:hover { background: #fff0f0; }
-.rt-reset-button:disabled { opacity: .58; cursor: not-allowed; }
-.rt-settings-feedback { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border: 1px solid #bce1c8; border-radius: 11px; color: #176f3a; background: #edf9f1; font-size: .76rem; }
-.rt-settings-feedback-error { color: #9c3232; border-color: #efb7b7; background: #fff0f0; }
-.rt-reset-warning { display: flex; align-items: flex-start; gap: 10px; padding: 13px; border: 1px solid #efbbbb; border-radius: 12px; color: #913131; background: #fff1f1; font-size: .78rem; line-height: 1.5; }
+.rt-reset-copy svg { flex: 0 0 auto; color: var(--rt-danger); margin-top: 1px; }
+.rt-reset-copy strong { display: block; color: var(--rt-danger-text); font-size: .8rem; }
+.rt-reset-copy span { display: block; margin-top: 4px; color: var(--rt-danger); font-size: .7rem; line-height: 1.4; }
+
+
+
+.rt-settings-feedback { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-primary-strong); background: var(--rt-surface-subtle); font-size: .76rem; }
+.rt-settings-feedback-error { color: var(--rt-danger-text); border-color: var(--rt-danger-border); background: var(--rt-danger-soft); }
+.rt-reset-warning { display: flex; align-items: flex-start; gap: 10px; padding: 13px; border: 1px solid var(--rt-danger-border); border-radius: 12px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .78rem; line-height: 1.5; }
 .rt-reset-warning svg { flex: 0 0 auto; }
-.rt-reset-modal-copy { margin: 14px 0 0; color: #647169; font-size: .82rem; line-height: 1.55; }
+.rt-reset-modal-copy { margin: 14px 0 0; color: var(--rt-text); font-size: .82rem; line-height: 1.55; }
 .rt-reset-modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 19px; }
 .rt-settings-secondary, .rt-settings-danger {
   min-height: 41px;
@@ -299,31 +269,29 @@ const settingsStyles = `
   font-weight: 750;
   cursor: pointer;
 }
-.rt-settings-secondary { border: 1px solid #d5dfd8; color: #55635a; background: #fff; }
-.rt-settings-danger { border: 0; color: #fff; background: #cf4343; }
+.rt-settings-secondary { border: 1px solid var(--rt-border); color: var(--rt-text); background: var(--rt-card); }
+
 .rt-settings-secondary:disabled, .rt-settings-danger:disabled { opacity: .58; cursor: not-allowed; }
-[data-theme="dark"] .rt-settings-page { --rt-surface-subtle: #101712; --rt-card: #17211a; --rt-border: #2b3a30; --rt-text: #eef7f1; }
-[data-theme="dark"] .rt-settings-nav a { color: #bdc9c1; }
-[data-theme="dark"] .rt-settings-nav a:hover { color: #b8efc8; background: #1d2b21; }
-[data-theme="dark"] .rt-settings-card-head, [data-theme="dark"] .rt-setting-toggle, [data-theme="dark"] .rt-faq { border-color: #2b3a30; }
-[data-theme="dark"] .rt-settings-card-head p, [data-theme="dark"] .rt-setting-toggle-copy span, [data-theme="dark"] .rt-faq-answer, [data-theme="dark"] .rt-help-step span, [data-theme="dark"] .rt-about-copy { color: #a6b5ac; }
-[data-theme="dark"] .rt-setting-toggle-copy strong, [data-theme="dark"] .rt-faq summary { color: #eef7f1; }
-[data-theme="dark"] .rt-setting-toggle-icon, [data-theme="dark"] .rt-help-step, [data-theme="dark"] .rt-about-item, [data-theme="dark"] .rt-settings-note, [data-theme="dark"] .rt-settings-card-icon { background: #1c2820; }
+
+
+
+
+
+
+
 /* The icon rules above hard-code the light-theme green, but the containers they
    sit on are re-coloured for dark mode. Without this the nav and note icons stay
-   #159447 on a #17211a card, which lands near 3.9:1 and reads as a dim smudge
-   next to the #bdc9c1 label beside it. On mobile that nav is a horizontal strip
+   var(--rt-primary-strong) on a var(--rt-text-strong) card, which lands near 3.9:1 and reads as a dim smudge
+   next to the var(--rt-border) label beside it. On mobile that nav is a horizontal strip
    of these icons, so it is the most visible place the shortfall shows up. */
-[data-theme="dark"] .rt-settings-nav a svg,
-[data-theme="dark"] .rt-settings-note svg,
-[data-theme="dark"] .rt-settings-card-icon { color: #8be0a6; }
-[data-theme="dark"] .rt-appearance-option, [data-theme="dark"] .rt-settings-secondary { color: #eef7f1; background: #17211a; border-color: #34463a; }
-[data-theme="dark"] .rt-appearance-preview { background: #29372d; }
-[data-theme="dark"] .rt-appearance-side { background: #17211a; border-color: #405046; }
-[data-theme="dark"] .rt-appearance-bar { background: #46564b; }
-[data-theme="dark"] .rt-reset-row, [data-theme="dark"] .rt-reset-button { color: #f3b1b1; background: #291c1c; border-color: #654040; }
-[data-theme="dark"] .rt-reset-copy strong { color: #ffc5c5; }
-[data-theme="dark"] .rt-reset-copy span { color: #d7a7a7; }
+
+
+
+
+
+
+
+
 @media (max-width: 820px) {
   .rt-settings-layout { grid-template-columns: 1fr; }
   /* Becomes a horizontal strip of clickable icon+label links. Momentum scrolling
@@ -343,11 +311,11 @@ const settingsStyles = `
 }
 @media (max-width: 620px) {
   .rt-settings-page { padding: 18px 14px 44px; }
-  .rt-settings-card-head, .rt-settings-card-body { padding-left: 17px; padding-right: 17px; }
-  .rt-appearance-grid, .rt-help-guide, .rt-about-version { grid-template-columns: 1fr; }
+
+  .rt-appearance-grid { grid-template-columns: 1fr; }
   .rt-appearance-option { min-height: 96px; }
   .rt-reset-row { align-items: stretch; flex-direction: column; }
-  .rt-reset-button { width: 100%; }
+
   .rt-reset-modal-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* The input takes the full row on a phone so it is not squeezed to an
      unusable width by two buttons, which then wrap onto their own row. */
@@ -355,32 +323,18 @@ const settingsStyles = `
   .rt-settings-upi-row .rt-settings-primary,
   .rt-settings-upi-row .rt-settings-secondary { width: 100%; }
 }
-.rt-settings-upi { display: grid; gap: 7px; margin-top: 4px; }
-.rt-settings-upi label { color: #33443a; font-size: .8rem; font-weight: 720; }
-.rt-settings-upi-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
-.rt-settings-upi-row input {
-  min-width: 0;
-  min-height: 44px;
-  padding: 0 13px;
-  border: 1px solid #dbe6de;
-  border-radius: 11px;
-  background: #fff;
-  color: #17231c;
-  font: inherit;
-  font-size: .86rem;
-}
-.rt-settings-upi-row input::placeholder { color: #9aa79f; }
-.rt-settings-upi-row input:focus { border-color: #159447; outline: none; box-shadow: 0 0 0 3px rgba(21, 148, 71, .18); }
-.rt-settings-upi-row input[aria-invalid="true"] { border-color: #c93f3f; }
-.rt-settings-upi-hint { color: #748178; font-size: .74rem; line-height: 1.45; }
-.rt-settings-upi-hint:empty { display: none; }
-[data-theme="dark"] .rt-settings-upi label { color: #eef7f1; }
-[data-theme="dark"] .rt-settings-upi-row input { background: #131d17; border-color: #33453a; color: #eef7f1; }
-[data-theme="dark"] .rt-settings-upi-row input::placeholder { color: #6f7e75; }
-[data-theme="dark"] .rt-settings-upi-hint { color: #a6b5ac; }
-.rt-settings-spin { animation: rt-global-spin .8s linear infinite; }
+
+
+
+
+
+
+
+
+
+
 @media (prefers-reduced-motion: reduce) {
-  .rt-settings-spin { animation-duration: 2.4s; }
+
 }
 `;
 
@@ -407,24 +361,12 @@ function readPreferences(): Preferences {
 }
 
 /**
- * Turns a repository failure into something a member can act on.
+ * One notification or privacy switch.
  *
- * The context already rewrites Supabase errors into plain sentences, so this
- * only needs a fallback for the case where something below that layer threw.
- * The raw message is not shown: it can contain column names and constraint
- * details, which help nobody reading a settings page.
+ * The whole row is the label, so the sentence next to the switch is part of the
+ * hit target. The switch itself stays a real `<input type="checkbox">` so it
+ * works with a keyboard and with assistive technology without extra wiring.
  */
-const describeUpiError = (error: unknown, action: "load" | "save" | "clear") => {
-  if (error instanceof Error && error.message && !/select|insert|update|policy|relation|column/i.test(error.message)) {
-    return error.message;
-  }
-  return action === "load"
-    ? "We could not load your saved UPI ID. You can still save a new one below."
-    : action === "save"
-      ? "We could not save your UPI ID. Check your connection and try again."
-      : "We could not remove your UPI ID. Check your connection and try again.";
-};
-
 function SettingToggle({ id, icon, title, description, checked, onChange }: ToggleProps) {
   return (
     <label className="rt-setting-toggle" htmlFor={id}>
@@ -439,11 +381,7 @@ function SettingToggle({ id, icon, title, description, checked, onChange }: Togg
 }
 
 export function SettingsPage() {
-  const { clearLocalCache, activeUser, activeUserId, readMyUpiId, saveUpiId, clearUpiId } = useApp();
-  const [upiDraft, setUpiDraft] = useState("");
-  const [upiStored, setUpiStored] = useState<string | undefined>(undefined);
-  const [upiSaving, setUpiSaving] = useState(false);
-  const [upiMessage, setUpiMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const { clearLocalCache, activeUser } = useApp();
   const [preferences, setPreferences] = useState<Preferences>(readPreferences);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -471,7 +409,7 @@ export function SettingsPage() {
     [],
   );
 
-  /**
+  /*
    * The browser only offers `beforeinstallprompt` on some platforms, and only
    * once. The button is hidden when there is nothing to trigger, and the copy
    * explains the manual route rather than leaving a control that does nothing.
@@ -521,72 +459,6 @@ export function SettingsPage() {
     setResetMessage(null);
   };
 
-  /*
-   * The UPI field keeps its own state rather than folding into `preferences`,
-   * because that object is mirrored into localStorage as "settings on this
-   * device" - it is not where a payment handle belongs, and it is not
-   * something that should survive on a shared machine.
-   */
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const stored = await readMyUpiId();
-        if (cancelled) return;
-        setUpiStored(stored);
-        setUpiDraft(stored ?? "");
-      } catch (error) {
-        // A failure here must not block the rest of the page. The field simply
-        // starts empty, and saving will report the real failure.
-        if (!cancelled) setUpiMessage({ type: "error", text: describeUpiError(error, "load") });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeUserId, readMyUpiId]);
-
-  const handleUpiSave = async () => {
-    if (upiSaving) return;
-    const { upiId, error } = normalizeUpiId(upiDraft);
-    if (error) {
-      setUpiMessage({ type: "error", text: error });
-      return;
-    }
-    if (!upiId) {
-      setUpiMessage({ type: "error", text: "Enter a UPI ID, or use Clear to remove the saved one." });
-      return;
-    }
-    setUpiSaving(true);
-    setUpiMessage(null);
-    try {
-      await saveUpiId(upiId);
-      setUpiDraft(upiId);
-      setUpiStored(upiId);
-      setUpiMessage({ type: "success", text: "UPI ID saved to your private payment profile." });
-    } catch (caught) {
-      setUpiMessage({ type: "error", text: describeUpiError(caught, "save") });
-    } finally {
-      setUpiSaving(false);
-    }
-  };
-
-  const handleUpiClear = async () => {
-    if (upiSaving) return;
-    setUpiSaving(true);
-    setUpiMessage(null);
-    try {
-      await clearUpiId();
-      setUpiDraft("");
-      setUpiStored(undefined);
-      setUpiMessage({ type: "success", text: "UPI ID removed." });
-    } catch (caught) {
-      setUpiMessage({ type: "error", text: describeUpiError(caught, "clear") });
-    } finally {
-      setUpiSaving(false);
-    }
-  };
-
   const setAppearance = (appearance: Appearance) => {
     saveAppearance(appearance);
     setPreferences((current) => ({ ...current, appearance }));
@@ -618,220 +490,197 @@ export function SettingsPage() {
       <style>{settingsStyles}</style>
       <div className="rt-settings-shell">
         <PageHeader
+          eyebrow="Settings"
           title="Settings"
-          subtitle="Control notification, appearance, and privacy preferences stored in this browser."
+          description="Control how RideTogether looks, which updates you get, and what stays private. Changes save automatically on this device."
         />
-        <div className="rt-settings-status"><span className="rt-settings-status-dot" /> Preferences save automatically on this device</div>
 
         <div className="rt-settings-layout">
           <nav className="rt-settings-nav" aria-label="Settings sections">
             <span className="rt-settings-nav-title">On this page</span>
-            <a href="#rt-notifications"><Bell size={15} /> Notifications</a>
             <a href="#rt-appearance"><Palette size={15} /> Appearance</a>
+            <a href="#rt-notifications"><Bell size={15} /> Notifications</a>
             <a href="#rt-privacy"><LockKeyhole size={15} /> Privacy</a>
             <a href="#rt-payments"><Wallet size={15} /> Payments</a>
+            <a href="#rt-security"><ShieldCheck size={15} /> Security</a>
             <a href="#rt-app"><Download size={15} /> Install</a>
+            <a href="#rt-account"><UserRound size={15} /> Account</a>
             <a href="#rt-help"><HelpCircle size={15} /> Help</a>
-            <a href="#rt-about"><Info size={15} /> About</a>
           </nav>
 
           <div className="rt-settings-content">
-            {resetMessage && (
+            {resetMessage ? (
               <div className={`rt-settings-feedback${resetMessage.type === "error" ? " rt-settings-feedback-error" : ""}`} role="status">
-                {resetMessage.type === "success" ? <CheckCircle2 size={16} /> : <Info size={16} />}
+                {resetMessage.type === "success" ? <Check size={16} /> : <Info size={16} />}
                 {resetMessage.text}
               </div>
-            )}
+            ) : null}
 
-            <section className="rt-settings-card" id="rt-notifications">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><Bell size={20} /></span>
-                <div><h2>Notifications</h2><p>Choose which notification channels you want enabled.</p></div>
+            <Group
+              id="rt-appearance"
+              title="Appearance"
+              description="Apply a theme immediately and keep it for your next visit."
+            >
+              <div className="rt-appearance-grid" role="group" aria-label="Colour theme">
+                {appearanceOptions.map((option) => (
+                  <button
+                    className={`rt-appearance-option${option.className}${preferences.appearance === option.value ? " rt-appearance-option-active" : ""}`}
+                    type="button"
+                    key={option.value}
+                    onClick={() => setAppearance(option.value)}
+                    aria-pressed={preferences.appearance === option.value}
+                  >
+                    <span className="rt-appearance-preview" aria-hidden="true">
+                      <span className="rt-appearance-side" />
+                      <span className="rt-appearance-main"><span className="rt-appearance-bar rt-appearance-bar-green" /><span className="rt-appearance-bar" /><span className="rt-appearance-bar rt-appearance-bar-short" /></span>
+                    </span>
+                    <span className="rt-appearance-caption">{option.icon}{option.label}</span>
+                  </button>
+                ))}
               </div>
-              <div className="rt-settings-card-body">
-                <p className="rt-settings-note"><Info size={15} /> In-app and push updates are delivered for real. The email option is remembered for a future mailing list and sends nothing today.</p>
-                <SettingToggle id="rt-email-notifications" icon={<Mail size={17} />} title="Email updates" description="Save your preference for ride and booking summaries by email." checked={preferences.notifications.email} onChange={(value) => updateNotification("email", value)} />
-                <PushNotificationToggle
-                  checked={preferences.notifications.push}
-                  onChange={(value) => updateNotification("push", value)}
-                />
-                <SettingToggle id="rt-in-app-notifications" icon={<MessageSquareText size={17} />} title="In-app updates" description="Keep important ride activity visible in the notifications center." checked={preferences.notifications.inApp} onChange={(value) => updateNotification("inApp", value)} />
+              <div className="rt-settings-note">
+                <Info size={15} aria-hidden="true" />
+                <span>System follows your device. Light and dark are remembered on this device only.</span>
               </div>
-            </section>
+            </Group>
 
-            <section className="rt-settings-card" id="rt-appearance">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><Palette size={20} /></span>
-                <div><h2>Appearance</h2><p>Apply a theme immediately and keep it for your next visit.</p></div>
+            <Group
+              id="rt-notifications"
+              title="Notifications"
+              description="Choose which updates RideTogether may bring you."
+            >
+              <div className="rt-settings-note">
+                <Info size={15} aria-hidden="true" />
+                <span>In-app and push updates are delivered for real. Email is remembered for a future mailing list and sends nothing today.</span>
               </div>
-              <div className="rt-settings-card-body">
-                <div className="rt-appearance-grid" role="group" aria-label="Color theme">
-                  {appearanceOptions.map((option) => (
-                    <button
-                      className={`rt-appearance-option${option.className}${preferences.appearance === option.value ? " rt-appearance-option-active" : ""}`}
-                      type="button"
-                      key={option.value}
-                      onClick={() => setAppearance(option.value)}
-                      aria-pressed={preferences.appearance === option.value}
-                    >
-                      {preferences.appearance === option.value && <span className="rt-appearance-check">✓</span>}
-                      <span className="rt-appearance-preview" aria-hidden="true">
-                        <span className="rt-appearance-side" />
-                        <span className="rt-appearance-main"><span className="rt-appearance-bar rt-appearance-bar-green" /><span className="rt-appearance-bar" /><span className="rt-appearance-bar rt-appearance-bar-short" /></span>
-                      </span>
-                      <span className="rt-appearance-caption">{option.icon}{option.label}</span>
-                    </button>
-                  ))}
+              <SettingToggle id="rt-in-app-notifications" icon={<MessageSquareText size={17} />} title="In-app updates" description="Keep important ride activity visible in the notifications center." checked={preferences.notifications.inApp} onChange={(value) => updateNotification("inApp", value)} />
+              <SettingToggle id="rt-email-notifications" icon={<Mail size={17} />} title="Email updates" description="Save your preference for ride and booking summaries by email." checked={preferences.notifications.email} onChange={(value) => updateNotification("email", value)} />
+              <PushNotificationToggle
+                checked={preferences.notifications.push}
+                onChange={(value) => updateNotification("push", value)}
+              />
+            </Group>
+
+            <Group
+              id="rt-privacy"
+              title="Privacy"
+              description="Decide what co-riders can see about you and your trips."
+            >
+              <SettingToggle id="rt-show-profile" icon={<Laptop size={17} />} title="Show profile to co-riders" description="Allow people in your rides to see your basic profile and contact details." checked={preferences.privacy.showProfile} onChange={(value) => updatePrivacy("showProfile", value)} />
+              <SettingToggle id="rt-share-trip-details" icon={<ExternalLink size={17} />} title="Share trip details" description="Save your preference to share pickup, destination, and timing with confirmed co-riders." checked={preferences.privacy.shareTripDetails} onChange={(value) => updatePrivacy("shareTripDetails", value)} />
+            </Group>
+
+            <Group
+              id="rt-payments"
+              title="Payments"
+              description="Save the UPI handle a driver would send contributions to."
+            >
+              <div className="rt-settings-note">
+                <Info size={15} aria-hidden="true" />
+                <span>{PAYMENT_DISCLAIMER}</span>
+              </div>
+              <div className="rt-settings-note">
+                <LockKeyhole size={15} aria-hidden="true" />
+                <span>Optional, and private to you. It is stored in your own payment profile and never appears on your public profile.</span>
+              </div>
+              <UpiField />
+            </Group>
+
+            <Group
+              id="rt-security"
+              title="Security &amp; safety"
+              description="Keep your emergency details ready and review your account protection."
+            >
+              <Row
+                as="div"
+                icon={<ShieldCheck size={17} />}
+                title="Emergency contacts"
+                description="Trusted contacts you can reach if a ride goes wrong. Private to your profile."
+                action={<Link className="ds-button ds-button--subtle ds-button--sm" to="/safety">Manage</Link>}
+              />
+              <div className="rt-settings-note">
+                <Info size={15} aria-hidden="true" />
+                <span>The SOS control in Safety is an interface demo. It never calls, messages, or shares your location.</span>
+              </div>
+              <Row
+                as="div"
+                icon={<LockKeyhole size={17} />}
+                title="Password and sign-in"
+                description={`Signed in as ${activeUser?.email ?? "a guest account"}. Your sign-in email cannot be changed from this page.`}
+                action={<RowValue tone={activeUser ? "success" : "warning"}>{activeUser ? "Active" : "Guest"}</RowValue>}
+              />
+            </Group>
+
+            <Group
+              id="rt-app"
+              title="Install app"
+              description="Add RideTogether to your home screen for quicker access."
+            >
+              <div className="rt-install-row">
+                <div className="rt-install-copy">
+                  <strong>{installState.isInstalled ? "RideTogether is installed" : "Install RideTogether"}</strong>
+                  <span>{installMessage}</span>
                 </div>
+                {installState.canInstall ? (
+                  <Button variant="subtle" type="button" onClick={() => void handleInstall()} loading={installing} loadingLabel="Installing">
+                    {installing ? null : <Download size={15} aria-hidden="true" />}
+                    Install
+                  </Button>
+                ) : null}
               </div>
-            </section>
+            </Group>
 
-            <section className="rt-settings-card" id="rt-privacy">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><ShieldCheck size={20} /></span>
-                <div><h2>Privacy</h2><p>Choose what ride information you prefer to share with co-riders.</p></div>
-              </div>
-              <div className="rt-settings-card-body">
-                <SettingToggle id="rt-show-profile" icon={<Laptop size={17} />} title="Show profile to co-riders" description="Allow people in your rides to see your basic profile and contact details." checked={preferences.privacy.showProfile} onChange={(value) => updatePrivacy("showProfile", value)} />
-                <SettingToggle id="rt-share-trip-details" icon={<ExternalLink size={17} />} title="Share trip details" description="Save your preference to share pickup, destination, and timing with confirmed co-riders." checked={preferences.privacy.shareTripDetails} onChange={(value) => updatePrivacy("shareTripDetails", value)} />
-              </div>
-            </section>
-
-            <section className="rt-settings-card" id="rt-payments">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><Wallet size={20} /></span>
-                <div><h2>Payments</h2><p>Save the UPI handle a driver would send contributions to.</p></div>
-              </div>
-              <div className="rt-settings-card-body">
-                <p className="rt-settings-note"><Info size={15} /> {PAYMENT_DISCLAIMER}</p>
-                <p className="rt-settings-note"><LockKeyhole size={15} /> Optional, and private to you. It is stored in your own payment profile and is never shown on your public profile or to anyone you share a ride with.</p>
-                <form
-                  className="rt-settings-upi"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void handleUpiSave();
-                  }}
-                >
-                  <label htmlFor="rt-upi-id">UPI ID</label>
-                  <div className="rt-settings-upi-row">
-                    <input
-                      id="rt-upi-id"
-                      type="text"
-                      inputMode="text"
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="name@bank"
-                      value={upiDraft}
-                      onChange={(event) => {
-                        setUpiDraft(event.target.value);
-                        setUpiMessage(null);
-                      }}
-                      aria-describedby="rt-upi-hint"
-                      aria-invalid={upiMessage?.type === "error"}
-                    />
-                    <button className="rt-settings-primary" type="submit" disabled={upiSaving}>
-                      {upiSaving ? <LoaderCircle className="rt-settings-spin" size={16} /> : <Check size={16} />}
-                      Save
-                    </button>
-                    {upiDraft.trim() ? (
-                      <button className="rt-settings-secondary" type="button" disabled={upiSaving} onClick={() => void handleUpiClear()}>
-                        Clear
-                      </button>
-                    ) : null}
+            <Group
+              id="rt-account"
+              title="Account"
+              description="RideTogether demo information and this device's storage."
+            >
+              <Row as="div" icon={<UserRound size={17} />} title="Signed in as" description={activeUser?.name ?? "Guest"} action={<RowValue>{activeUser?.email ?? "Not signed in"}</RowValue>} />
+              <Row as="div" icon={<Smartphone size={17} />} title="Storage" description="Where your rides, bookings, messages and vehicles are kept." action={<RowValue tone={cloudConfigured ? "success" : "warning"}>{cloudConfigured ? "Cloud" : "Unavailable"}</RowValue>} />
+              <Row as="div" icon={<Info size={17} />} title="Version" description="Responsive carpooling demo with real maps and trip data." action={<RowValue>{APP_VERSION}</RowValue>} />
+              {hasLocalData ? (
+                <div className="rt-reset-row">
+                  <div className="rt-reset-copy">
+                    <RotateCcw size={18} />
+                    <span><strong>Clear local browser data</strong><span>Removes trip records an older version cached on this device. Nothing in your account is affected.</span></span>
                   </div>
-                  <span id="rt-upi-hint" className="rt-settings-upi-hint">
-                    {upiMessage
-                      ? upiMessage.text
-                      : upiStored
-                        ? `Currently saved as ${upiStored}. Leave blank to keep it.`
-                        : "No UPI ID saved yet. You can leave this empty."}
-                  </span>
-                </form>
-              </div>
-            </section>
+                  <Button variant="danger-quiet" type="button" onClick={() => { setResetOpen(true); setResetMessage(null); }} disabled={resetting}>
+                    <RotateCcw size={14} aria-hidden="true" />
+                    Clear local data
+                  </Button>
+                </div>
+              ) : (
+                <div className="rt-settings-note">
+                  <Info size={15} aria-hidden="true" />
+                  <span>No leftover local trip data is stored on this device. Everything here loads fresh when you sign in.</span>
+                </div>
+              )}
+            </Group>
 
-            <section className="rt-settings-card" id="rt-app">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><Download size={20} /></span>
-                <div><h2>Install app</h2><p>Add RideTogether to your home screen for quicker access and an offline fallback page.</p></div>
+            <Group
+              id="rt-help"
+              title="Help"
+              description="Quick answers for using RideTogether."
+            >
+              <div className="rt-faq-list">
+                <details className="rt-faq">
+                  <summary>How do I find or offer a ride?<ChevronDown size={16} /></summary>
+                  <p className="rt-faq-answer">Use Find Ride with your route, date, time, and seat count. To share a car, complete Offer Ride, select one of your vehicles, and publish the trip.</p>
+                </details>
+                <details className="rt-faq">
+                  <summary>How do booking requests work?<ChevronDown size={16} /></summary>
+                  <p className="rt-faq-answer">A rider�s request starts as pending. The driver can confirm or reject it from My Rides, and confirmed seat counts are reflected on the trip.</p>
+                </details>
+                <details className="rt-faq">
+                  <summary>What does the SOS demo do?<ChevronDown size={16} /></summary>
+                  <p className="rt-faq-answer">Nothing outside that page. It toggles a local demo state and never places a call, sends a message, shares location, or contacts anyone.</p>
+                </details>
+                <details className="rt-faq">
+                  <summary>Where is my data stored?<ChevronDown size={16} /></summary>
+                  <p className="rt-faq-answer">Your rides, bookings, messages, notifications, ratings, vehicles and safety contacts are stored in your RideTogether account and shared across every device you sign in on. Only the display preferences on this page stay in this browser.</p>
+                </details>
               </div>
-              <div className="rt-settings-card-body">
-                <div className="rt-install-row">
-                  <div className="rt-install-copy">
-                    <strong>{installState.isInstalled ? "RideTogether is installed" : "Install RideTogether"}</strong>
-                    <span>{installMessage}</span>
-                  </div>
-                  {installState.canInstall ? (
-                    <button
-                      className="rt-settings-secondary"
-                      type="button"
-                      onClick={() => void handleInstall()}
-                      disabled={installing}
-                    >
-                      {installing ? "Installing…" : "Install"}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </section>
-
-            <section className="rt-settings-card" id="rt-help">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><HelpCircle size={20} /></span>
-                <div><h2>Help</h2><p>Quick answers for using this local RideTogether demo.</p></div>
-              </div>
-              <div className="rt-settings-card-body">
-                <div className="rt-faq-list">
-                  <details className="rt-faq">
-                    <summary>How do I find or offer a ride?<ChevronDown size={16} /></summary>
-                    <p className="rt-faq-answer">Use Find Ride with your route, date, time, and seat count. To share a car, complete Offer Ride, select one of your vehicles, and publish the trip.</p>
-                  </details>
-                  <details className="rt-faq">
-                    <summary>How do booking requests work?<ChevronDown size={16} /></summary>
-                    <p className="rt-faq-answer">A rider’s request starts as pending. The driver can confirm or reject it from My Rides, and confirmed seat counts are reflected on the trip.</p>
-                  </details>
-                  <details className="rt-faq">
-                    <summary>What does the SOS demo do?<ChevronDown size={16} /></summary>
-                    <p className="rt-faq-answer">Nothing outside this page. It toggles a local demo state and never places a call, sends a message, shares location, or contacts emergency services or saved contacts.</p>
-                  </details>
-                  <details className="rt-faq">
-                    <summary>Where is my data stored?<ChevronDown size={16} /></summary>
-                    <p className="rt-faq-answer">Your rides, bookings, messages, notifications, ratings, vehicles and safety contacts are stored in your RideTogether account and are shared across every device you sign in on. Only your display preferences on this page are kept in this browser.</p>
-                  </details>
-                </div>
-                <div className="rt-help-guide">
-                  <div className="rt-help-step"><span className="rt-help-step-number">1</span><strong>Ride issue?</strong><span>Open the trip chat and contact the driver or rider there.</span></div>
-                  <div className="rt-help-step"><span className="rt-help-step-number">2</span><strong>Vehicle issue?</strong><span>Review the Vehicles page before the next departure.</span></div>
-                  <div className="rt-help-step"><span className="rt-help-step-number">3</span><strong>Safety concern?</strong><span>Review Safety guidance and use your phone in a real emergency.</span></div>
-                </div>
-              </div>
-            </section>
-
-            <section className="rt-settings-card" id="rt-about">
-              <div className="rt-settings-card-head">
-                <span className="rt-settings-card-icon"><Info size={20} /></span>
-                <div><h2>About</h2><p>RideTogether demo information and account details.</p></div>
-              </div>
-              <div className="rt-settings-card-body">
-                <div className="rt-about-version">
-                  <div className="rt-about-item"><span>Version</span><strong>{APP_VERSION}</strong></div>
-                  <div className="rt-about-item"><span>Storage</span><strong>{cloudConfigured ? "Cloud" : "Unavailable"}</strong></div>
-                  <div className="rt-about-item"><span>Accounts</span><strong>{activeUser ? "Signed in" : "Guest"}</strong></div>
-                </div>
-                <p className="rt-about-copy">RideTogether is a responsive carpooling demonstration with real maps and trip data that syncs across your devices. It is not a live transportation or emergency service.</p>
-                {hasLocalData ? (
-                  <div className="rt-reset-row">
-                    <div className="rt-reset-copy">
-                      <RotateCcw size={18} />
-                      <span><strong>Clear local browser data</strong><span>Removes trip records an older version of RideTogether cached on this device. Nothing in your account is affected.</span></span>
-                    </div>
-                    <button className="rt-reset-button" type="button" onClick={() => { setResetOpen(true); setResetMessage(null); }} disabled={resetting}><RotateCcw size={14} /> Clear local data</button>
-                  </div>
-                ) : (
-                  <p className="rt-reset-modal-copy">No leftover local trip data is stored on this device. Everything you see here is loaded fresh when you sign in.</p>
-                )}
-              </div>
-            </section>
+            </Group>
           </div>
         </div>
       </div>
@@ -840,8 +689,11 @@ export function SettingsPage() {
         <div className="rt-reset-warning"><Info size={18} /><span>This clears the leftover demo records an older version of RideTogether kept in this browser before your data moved online.</span></div>
         <p className="rt-reset-modal-copy">It does not delete anything from your account. Your rides, bookings, messages, vehicles, ratings and safety contacts stay safe and are still shared across your devices. Your saved settings and appearance preference on this device will remain unchanged.</p>
         <div className="rt-reset-modal-actions">
-          <button className="rt-settings-secondary" type="button" onClick={() => setResetOpen(false)} disabled={resetting}>Cancel</button>
-          <button className="rt-settings-danger" type="button" onClick={() => void handleReset()} disabled={resetting}><RotateCcw size={14} /> {resetting ? "Clearing…" : "Clear local data"}</button>
+          <Button variant="ghost" type="button" onClick={() => setResetOpen(false)} disabled={resetting}>Cancel</Button>
+          <Button variant="danger" type="button" onClick={() => void handleReset()} loading={resetting} loadingLabel="Clearing">
+            <RotateCcw size={14} aria-hidden="true" />
+            Clear local data
+          </Button>
         </div>
       </Modal>
     </div>

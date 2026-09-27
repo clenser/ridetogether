@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowRight,
@@ -12,6 +12,7 @@ import {
   LoaderCircle,
   MapPin,
   Plus,
+  Repeat2,
   Route as RouteIcon,
   Trash2,
   Users,
@@ -20,8 +21,15 @@ import {
 import LocationSearch from "../components/LocationSearch";
 import RideMap, { type MapCoordinate, type RideMapSelectionTarget } from "../components/RideMap";
 import { DraftBanner } from "../components/DraftBanner";
+import { StepIndicator } from "../components/ui/Stats";
 import { useApp } from "../context/AppContext";
 import { useDraft } from "../services/drafts";
+import {
+  MAX_OCCURRENCES,
+  MAX_SERIES_DAYS,
+  occurrenceDates,
+  seriesRangeDayCount,
+} from "../repositories/rideSeriesRepository";
 import {
   formatRupees,
   getFareRange,
@@ -29,6 +37,7 @@ import {
   normalizeContributionForDistance,
 } from "../services/fare";
 import { reverseGeocodeLocation } from "../services/geocoding";
+import { readJourneyParams } from "../services/journeyParams";
 import { getRoute, MAX_ROUTE_WAYPOINTS } from "../services/routing";
 import type { Coordinates, RouteResult, RideInput } from "../types";
 
@@ -60,6 +69,61 @@ const localDateKey = (date: Date) => {
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
+/**
+ * The schedule half of the form: which weekdays, and over what range.
+ *
+ * `validUntil` is a plain string because that is what a date input gives, and an
+ * empty one means "no end date" rather than "invalid". The repository normalises
+ * it the same way; see `resolveValidUntil`.
+ */
+interface RecurringChoice {
+  enabled: boolean;
+  /** ISO weekdays, 0 = Sunday. */
+  daysOfWeek: number[];
+  validFrom: string;
+  validUntil: string;
+}
+
+/**
+ * What the chosen days and range would actually publish, worked out from the same
+ * `occurrenceDates` call the repository makes so the two can never disagree.
+ *
+ * `tone` keeps a rejected range from being rendered as if it had succeeded, and
+ * `count` is what the submit button promises.
+ */
+interface RecurringPlan {
+  count: number;
+  tone: "ok" | "error";
+  message: string;
+}
+
+/** Monday first, which is how people describe a commute. */
+const WEEKDAY_CHOICES: Array<{ value: number; short: string; full: string }> = [
+  { value: 1, short: "Mon", full: "Monday" },
+  { value: 2, short: "Tue", full: "Tuesday" },
+  { value: 3, short: "Wed", full: "Wednesday" },
+  { value: 4, short: "Thu", full: "Thursday" },
+  { value: 5, short: "Fri", full: "Friday" },
+  { value: 6, short: "Sat", full: "Saturday" },
+  { value: 0, short: "Sun", full: "Sunday" },
+];
+
+/**
+ * The three steps of offering a ride: where, when, then confirm.
+ *
+ * Split so each one asks a question the host can actually answer on its own.
+ * The order is the order of the decisions - a route is meaningless without a
+ * time, and neither is publishable without a vehicle - and the final step exists
+ * so nothing is written until the host has seen the whole trip at once.
+ */
+const OFFER_STEPS = [
+  { id: "route", title: "Route", description: "Where you are going" },
+  { id: "schedule", title: "Schedule", description: "When and how many seats" },
+  { id: "review", title: "Confirm & publish", description: "Check it over" },
+] as const;
+
+type OfferStep = 0 | 1 | 2;
+
 const isAbortError = (error: unknown): boolean =>
   error instanceof Error && error.name === "AbortError";
 
@@ -74,116 +138,134 @@ const sameLocation = (first: Coordinates, second: Coordinates) =>
   Math.abs(first.lat - second.lat) < 0.0001 && Math.abs(first.lon - second.lon) < 0.0001;
 
 const offerStyles = `
-.rt-offer-page { min-height: 100%; color: #17231c; background: #f7fbf8; }
+.rt-offer-page { min-height: 100%; color: var(--rt-text-strong); background: var(--rt-surface-subtle); }
 .rt-offer-page .container { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
 .rt-offer-page .page-container { padding: 38px 0 66px; }
 .rt-offer-page h1, .rt-offer-page h2, .rt-offer-page h3, .rt-offer-page p { margin-top: 0; }
 .rt-offer-page .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 25px; }
-.rt-offer-page .page-heading h1 { margin: 8px 0 7px; color: #183c25; font-size: clamp(1.8rem, 3vw, 2.55rem); letter-spacing: -.05em; }
-.rt-offer-page .page-heading p { margin: 0; color: #6e7e74; font-size: .91rem; }
-.rt-offer-page .section-kicker { color: #148642; font-size: .72rem; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
-.rt-offer-page .page-heading-icon { width: 54px; height: 54px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 17px; color: #148642; background: #e1f5e7; }
-.rt-offer-page .card { border: 1px solid #dbe8de; border-radius: 21px; background: #fff; box-shadow: 0 13px 34px rgba(32,75,45,.07); }
+.rt-offer-page .page-heading h1 { margin: 8px 0 7px; color: var(--rt-text-strong); font-size: clamp(1.8rem, 3vw, 2.55rem); letter-spacing: -.05em; }
+.rt-offer-page .page-heading p { margin: 0; color: var(--rt-muted); font-size: .91rem; }
+.rt-offer-page .section-kicker { color: var(--rt-primary-strong); font-size: .72rem; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
+.rt-offer-page .page-heading-icon { width: 54px; height: 54px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 17px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-offer-page .card { border: 1px solid var(--rt-border); border-radius: 21px; background: var(--rt-card); box-shadow: 0 13px 34px rgba(32,75,45,.07); }
 .rt-offer-page .offer-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(340px, .92fr); gap: 20px; align-items: start; }
+.rt-offer-steps { margin-bottom: 20px; }
+.rt-offer-steps .ds-steps { gap: 8px; }
+.rt-offer-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rt-offer-nav .btn { min-height: 51px; }
+.rt-offer-summary { display: grid; gap: 0; margin: 18px 0; padding: 0; border: 1px solid var(--rt-border); border-radius: 14px; overflow: hidden; }
+.rt-offer-summary > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--rt-border-subtle); }
+.rt-offer-summary > div:last-child { border-bottom: 0; }
+.rt-offer-summary dt { color: var(--rt-muted); font-size: .73rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.rt-offer-summary dd { margin: 0; overflow-wrap: anywhere; color: var(--rt-text-strong); font-size: .82rem; font-weight: 600; }
+.rt-offer-review-list { margin-bottom: 4px; }
 .rt-offer-page .offer-form-column { display: grid; gap: 15px; }
 .rt-offer-page .form-card { padding: 23px; }
-.rt-offer-page .form-section-title { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 17px; color: #2c4835; }
-.rt-offer-page .form-section-title > svg { flex: 0 0 auto; margin-top: 1px; color: #159447; }
+.rt-offer-page .form-section-title { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 17px; color: var(--rt-text); }
+.rt-offer-page .form-section-title > svg { flex: 0 0 auto; margin-top: 1px; color: var(--rt-primary); }
 .rt-offer-page .form-section-title h2 { margin: 0; font-size: 1rem; letter-spacing: -.015em; }
-.rt-offer-page .form-section-title p { margin: 4px 0 0; color: #7a887f; font-size: .75rem; line-height: 1.4; }
+.rt-offer-page .form-section-title p { margin: 4px 0 0; color: var(--rt-muted); font-size: .75rem; line-height: 1.4; }
 .rt-offer-page .location-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .rt-offer-page .field-group { display: grid; gap: 7px; min-width: 0; }
-.rt-offer-page .field-group > label, .rt-offer-page .location-search__label { color: #405448; font-size: .78rem; font-weight: 760; }
+.rt-offer-page .field-group > label, .rt-offer-page .location-search__label { color: var(--rt-text); font-size: .78rem; font-weight: 760; }
 .rt-offer-page .location-search { position: relative; }
 .rt-offer-page .location-search__label { display: block; margin-bottom: 7px; }
 .rt-offer-page .location-search__control { position: relative; }
-.rt-offer-page .location-search__input { width: 100%; min-height: 45px; padding: 10px 40px 10px 37px; border: 1px solid #d7e3da; border-radius: 11px; color: #263d2e; background: #fff; outline: none; font: inherit; font-size: .84rem; transition: border-color .18s ease, box-shadow .18s ease; }
-.rt-offer-page .location-search__input:focus { border-color: #159447; box-shadow: 0 0 0 3px rgba(21,148,71,.11); }
-.rt-offer-page .location-search__search-icon { position: absolute; z-index: 1; top: 13px; left: 12px; color: #809087; pointer-events: none; }
+.rt-offer-page .location-search__input { width: 100%; min-height: 45px; padding: 10px 40px 10px 37px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-text-strong); background: var(--rt-card); outline: none; font: inherit; font-size: .84rem; transition: border-color .18s ease, box-shadow .18s ease; }
+.rt-offer-page .location-search__input:focus { border-color: var(--rt-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 11%, transparent); }
+.rt-offer-page .location-search__search-icon { position: absolute; z-index: 1; top: 13px; left: 12px; color: var(--rt-muted); pointer-events: none; }
 .rt-offer-page .location-search__spinner, .rt-offer-page .location-search__selected-icon, .rt-offer-page .location-search__clear { position: absolute; top: 12px; right: 10px; }
-.rt-offer-page .location-search__spinner { color: #159447; animation: rt-offer-spin .8s linear infinite; }
-.rt-offer-page .location-search__selected-icon { color: #159447; }
-.rt-offer-page .location-search__clear { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 7px; color: #78877e; background: transparent; cursor: pointer; }
-.rt-offer-page .location-search__clear:hover { color: #b33d3d; background: #fff0f0; }
-.rt-offer-page .location-search__dropdown { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; left: 0; overflow: auto; border: 1px solid #d8e5db; border-radius: 13px; background: #fff; box-shadow: 0 16px 30px rgba(24,64,38,.14); }
-.rt-offer-page .location-search__option { display: flex; align-items: center; gap: 9px; padding: 11px 12px; color: #405448; font-size: .78rem; cursor: pointer; }
-.rt-offer-page .location-search__option:hover, .rt-offer-page .location-search__option.is-active { background: #eff9f2; }
-.rt-offer-page .location-search__option-icon { color: #159447; }
-.rt-offer-page .location-search__state { display: flex; align-items: center; gap: 8px; padding: 12px; color: #77857c; font-size: .76rem; }
-.rt-offer-page .location-search__state--error { color: #ad3838; }
-.rt-offer-page .location-search__state button { margin-left: auto; border: 0; color: #148642; background: transparent; font: inherit; font-size: .74rem; font-weight: 750; cursor: pointer; }
-.rt-offer-page .map-pick-button { display: inline-flex; align-items: center; gap: 5px; justify-self: start; padding: 0; border: 0; color: #148642; background: transparent; font: inherit; font-size: .72rem; font-weight: 750; cursor: pointer; }
-.rt-offer-page .map-pick-button:hover, .rt-offer-page .map-pick-button.is-active { color: #0c5f2d; }
+.rt-offer-page .location-search__spinner { color: var(--rt-primary); animation: rt-offer-spin .8s linear infinite; }
+.rt-offer-page .location-search__selected-icon { color: var(--rt-primary); }
+.rt-offer-page .location-search__clear { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 7px; color: var(--rt-muted); background: transparent; cursor: pointer; }
+.rt-offer-page .location-search__clear:hover { color: var(--rt-danger); background: var(--rt-danger-soft); }
+.rt-offer-page .location-search__dropdown { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; left: 0; overflow: auto; border: 1px solid var(--rt-border); border-radius: 13px; background: var(--rt-card); box-shadow: 0 16px 30px rgba(24,64,38,.14); }
+.rt-offer-page .location-search__option { display: flex; align-items: center; gap: 9px; padding: 11px 12px; color: var(--rt-text); font-size: .78rem; cursor: pointer; }
+.rt-offer-page .location-search__option:hover, .rt-offer-page .location-search__option.is-active { background: var(--rt-surface-subtle); }
+.rt-offer-page .location-search__option-icon { color: var(--rt-primary); }
+.rt-offer-page .location-search__state { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--rt-muted); font-size: .76rem; }
+.rt-offer-page .location-search__state--error { color: var(--rt-danger-text); }
+.rt-offer-page .location-search__state button { margin-left: auto; border: 0; color: var(--rt-primary-strong); background: transparent; font: inherit; font-size: .74rem; font-weight: 750; cursor: pointer; }
+.rt-offer-page .map-pick-button { display: inline-flex; align-items: center; gap: 5px; justify-self: start; padding: 0; border: 0; color: var(--rt-primary-strong); background: transparent; font: inherit; font-size: .72rem; font-weight: 750; cursor: pointer; }
+.rt-offer-page .map-pick-button:hover, .rt-offer-page .map-pick-button.is-active { color: var(--rt-primary-strong); }
 .rt-offer-page .map-pick-button.is-active { text-decoration: underline; text-underline-offset: 3px; }
 .rt-offer-page .map-pick-cancel { min-height: 30px; display: inline-flex; align-items: center; padding: 0 9px; border: 0; border-radius: 8px; color: inherit; background: rgba(255,255,255,.88); font: inherit; font-size: .7rem; font-weight: 760; cursor: pointer; }
-.rt-offer-page .optional-label { margin-left: 4px; color: #8a978e; font-size: .68rem; font-weight: 500; }
-.rt-offer-page .stop-builder { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #edf2ee; }
+.rt-offer-page .optional-label { margin-left: 4px; color: var(--rt-muted); font-size: .68rem; font-weight: 500; }
+.rt-offer-page .stop-builder { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--rt-surface-muted); }
 .rt-offer-page .stop-action-buttons { min-width: 138px; display: grid; justify-items: stretch; gap: 8px; }
 .rt-offer-page .stop-action-buttons .map-pick-button { min-height: 34px; justify-content: center; }
 .rt-offer-page .stop-add-button { min-height: 45px; white-space: nowrap; }
 .rt-offer-page .btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border: 1px solid transparent; border-radius: 11px; font: inherit; font-size: .82rem; font-weight: 780; text-decoration: none; cursor: pointer; }
-.rt-offer-page .btn-primary { color: #fff; background: #159447; box-shadow: 0 8px 18px rgba(21,148,71,.18); }
-.rt-offer-page .btn-primary:hover:not(:disabled) { background: #10813b; }
-.rt-offer-page .btn-outline { border-color: #c4ddcb; color: #14763c; background: #f7fcf8; }
-.rt-offer-page .btn-outline:hover:not(:disabled) { border-color: #8ec9a0; background: #eef9f1; }
-.rt-offer-page .btn-ghost { border-color: #efd1d1; color: #a23d3d; background: #fff8f8; }
+.rt-offer-page .btn-primary { color: var(--rt-text-inverse); background: var(--rt-primary); box-shadow: 0 8px 18px color-mix(in srgb, var(--rt-primary) 18%, transparent); }
+.rt-offer-page .btn-primary:hover:not(:disabled) { background: var(--rt-primary-strong); }
+.rt-offer-page .btn-outline { border-color: var(--rt-border); color: var(--rt-primary-strong); background: var(--rt-surface-subtle); }
+.rt-offer-page .btn-outline:hover:not(:disabled) { border-color: var(--rt-border-strong); background: var(--rt-surface-subtle); }
+.rt-offer-page .btn-ghost { border-color: var(--rt-danger-border); color: var(--rt-danger-text); background: var(--rt-danger-soft); }
 .rt-offer-page .btn:disabled { opacity: .52; cursor: not-allowed; box-shadow: none; }
  .rt-offer-page .btn-block { width: 100%; }
  .rt-offer-page .btn-lg { min-height: 50px; font-size: .9rem; }
  .rt-offer-page .spin { animation: rt-offer-spin .8s linear infinite; }
 .rt-offer-page .stop-list { display: grid; gap: 8px; margin-top: 14px; }
-.rt-offer-page .stop-list-heading { display: flex; justify-content: space-between; color: #4b5f51; font-size: .76rem; }
-.rt-offer-page .stop-list-heading span { color: #89958d; font-size: .7rem; }
-.rt-offer-page .stop-item { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 10px; border: 1px solid #dce9df; border-radius: 11px; color: #52655a; background: #f8fbf9; font-size: .76rem; }
+.rt-offer-page .stop-list-heading { display: flex; justify-content: space-between; color: var(--rt-text); font-size: .76rem; }
+.rt-offer-page .stop-list-heading span { color: var(--rt-muted); font-size: .7rem; }
+.rt-offer-page .stop-item { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 10px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-text); background: var(--rt-surface-subtle); font-size: .76rem; }
 .rt-offer-page .stop-item > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rt-offer-page .stop-number { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 7px; color: #14763c; background: #dff4e6; font-size: .68rem; font-weight: 800; }
-.rt-offer-page .icon-button { width: 35px; height: 35px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid #d8e4da; border-radius: 10px; color: #65766c; background: #fff; cursor: pointer; }
-.rt-offer-page .icon-button:hover { color: #148642; background: #eff9f2; }
-.rt-offer-page .danger-icon { margin-left: auto; color: #b44a4a; }
-.rt-offer-page .danger-icon:hover { color: #a52f2f; background: #fff0f0; border-color: #f0caca; }
+.rt-offer-page .stop-number { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 7px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); font-size: .68rem; font-weight: 800; }
+.rt-offer-page .icon-button { width: 35px; height: 35px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid var(--rt-border); border-radius: 10px; color: var(--rt-text); background: var(--rt-card); cursor: pointer; }
+.rt-offer-page .icon-button:hover { color: var(--rt-primary-strong); background: var(--rt-surface-subtle); }
+.rt-offer-page .danger-icon { margin-left: auto; color: var(--rt-danger); }
+.rt-offer-page .danger-icon:hover { color: var(--rt-danger-text); background: var(--rt-danger-soft); border-color: var(--rt-danger-border); }
 .rt-offer-page .form-grid { display: grid; gap: 13px; margin-top: 2px; }
 .rt-offer-page .form-grid-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .rt-offer-page .form-grid-two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 15px; }
-.rt-offer-page input:not([type="checkbox"]), .rt-offer-page select, .rt-offer-page textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #d7e3da; border-radius: 11px; color: #263d2e; background: #fff; outline: none; font: inherit; font-size: .83rem; }
-.rt-offer-page input:focus, .rt-offer-page select:focus, .rt-offer-page textarea:focus { border-color: #159447; box-shadow: 0 0 0 3px rgba(21,148,71,.11); }
-.rt-offer-page .field-hint { color: #849189; font-size: .69rem; line-height: 1.4; }
-.rt-offer-page .field-error { color: #a73737; font-size: .69rem; line-height: 1.4; }
+.rt-offer-page input:not([type="checkbox"]), .rt-offer-page select, .rt-offer-page textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-text-strong); background: var(--rt-card); outline: none; font: inherit; font-size: .83rem; }
+.rt-offer-page input:focus, .rt-offer-page select:focus, .rt-offer-page textarea:focus { border-color: var(--rt-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 11%, transparent); }
+.rt-offer-page .field-hint { color: var(--rt-muted); font-size: .69rem; line-height: 1.4; }
+.rt-offer-page .field-error { color: var(--rt-danger-text); font-size: .69rem; line-height: 1.4; }
 .rt-offer-page .input-with-icon { position: relative; }
-.rt-offer-page .input-with-icon svg { position: absolute; z-index: 1; top: 13px; left: 11px; color: #159447; }
+.rt-offer-page .input-with-icon svg { position: absolute; z-index: 1; top: 13px; left: 11px; color: var(--rt-primary); }
 .rt-offer-page .input-with-icon input { padding-left: 35px !important; }
-.rt-offer-page .inline-empty { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 11px 12px; border-radius: 11px; color: #7b5a1c; background: #fff8e5; font-size: .76rem; line-height: 1.45; }
-.rt-offer-page .inline-empty a { color: #137d3d; font-weight: 750; }
+.rt-offer-page .inline-empty { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 11px 12px; border-radius: 11px; color: var(--rt-warning-text); background: var(--rt-warning-border); font-size: .76rem; line-height: 1.45; }
+.rt-offer-page .inline-empty a { color: var(--rt-primary-strong); font-weight: 750; }
+.rt-offer-page .checkbox-row { display: flex; align-items: center; gap: 9px; margin-top: 14px; font-size: .83rem; font-weight: 700; color: var(--rt-text-strong); cursor: pointer; }
+.rt-offer-page .checkbox-row input { width: 17px; height: 17px; accent-color: var(--rt-primary); cursor: pointer; }
+.rt-offer-page .recurring-days { margin: 16px 0 0; padding: 0; border: 0; }
+.rt-offer-page .recurring-days legend { margin-bottom: 8px; padding: 0; color: var(--rt-text-strong); font-size: .78rem; font-weight: 780; }
+.rt-offer-page .recurring-day-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt-offer-page .recurring-day { min-width: 46px; min-height: 38px; padding: 0 10px; border: 1px solid var(--rt-border); border-radius: 10px; color: var(--rt-text); background: var(--rt-card); font: inherit; font-size: .76rem; font-weight: 750; cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
+.rt-offer-page .recurring-day:hover { border-color: var(--rt-border-strong); background: var(--rt-surface-subtle); }
+.rt-offer-page .recurring-day.is-selected { border-color: var(--rt-primary); color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-offer-page .recurring-summary { margin: 15px 0 4px; padding: 10px 11px; border-radius: 10px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); font-size: .75rem; font-weight: 700; line-height: 1.45; }
+.rt-offer-page .recurring-summary.is-error { color: var(--rt-danger-text); background: var(--rt-danger-soft); }
 .rt-offer-page .form-message { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 10px 11px; border-radius: 10px; font-size: .75rem; line-height: 1.45; }
-.rt-offer-page .error-message { color: #a73737; background: #fff0f0; }
-.rt-offer-page .success-message { color: #126e39; background: #eaf8ee; }
+.rt-offer-page .error-message { color: var(--rt-danger-text); background: var(--rt-danger-soft); }
+.rt-offer-page .success-message { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
 .rt-offer-page .form-message svg { flex: 0 0 auto; margin-top: 1px; }
 .rt-offer-page .offer-map-column { display: grid; gap: 15px; position: sticky; top: 20px; }
 .rt-offer-page .map-panel { min-width: 0; overflow: hidden; }
 .rt-offer-page .map-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 20px 20px 15px; }
-.rt-offer-page .map-panel-header h2 { margin: 6px 0 0; color: #1d3b27; font-size: 1.05rem; }
-.rt-offer-page .route-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 10px; color: #6f7f75; font-size: .7rem; }
+.rt-offer-page .map-panel-header h2 { margin: 6px 0 0; color: var(--rt-text-strong); font-size: 1.05rem; }
+.rt-offer-page .route-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 10px; color: var(--rt-muted); font-size: .7rem; }
 .rt-offer-page .route-summary span { display: inline-flex; align-items: center; gap: 5px; }
-.rt-offer-page .route-summary svg { color: #159447; }
-.rt-offer-page .map-wrap { position: relative; min-height: 395px; overflow: hidden; background: #eaf3ec; }
+.rt-offer-page .route-summary svg { color: var(--rt-primary); }
+.rt-offer-page .map-wrap { position: relative; min-height: 395px; overflow: hidden; background: var(--rt-surface-muted); }
 .rt-offer-page .map-wrap-tall { min-height: 395px; }
 .rt-offer-page .ride-map { width: 100%; height: 395px; min-height: 395px; }
-.rt-offer-page .map-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 9px; color: #45604f; background: rgba(247,252,248,.72); font-size: .8rem; font-weight: 700; pointer-events: none; }
-.rt-offer-page .map-overlay-empty { flex-direction: column; color: #6c8173; }
-.rt-offer-page .map-overlay-empty svg { color: #159447; }
-.rt-offer-page .map-pick-banner { position: absolute; z-index: 4; top: 12px; left: 12px; right: 58px; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid #b9ddc5; border-radius: 12px; color: #24543a; background: rgba(255,255,255,.95); box-shadow: 0 8px 24px rgba(20,55,32,.16); font-size: .74rem; font-weight: 720; }
-.rt-offer-page .map-pick-banner > svg { flex: 0 0 auto; color: #159447; }
+.rt-offer-page .map-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--rt-text); background: rgba(247,252,248,.72); font-size: .8rem; font-weight: 700; pointer-events: none; }
+.rt-offer-page .map-overlay-empty { flex-direction: column; color: var(--rt-muted); }
+.rt-offer-page .map-overlay-empty svg { color: var(--rt-primary); }
+.rt-offer-page .map-pick-banner { position: absolute; z-index: 4; top: 12px; left: 12px; right: 58px; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--rt-border); border-radius: 12px; color: var(--rt-text); background: rgba(255,255,255,.95); box-shadow: 0 8px 24px rgba(20,55,32,.16); font-size: .74rem; font-weight: 720; }
+.rt-offer-page .map-pick-banner > svg { flex: 0 0 auto; color: var(--rt-primary); }
 .rt-offer-page .map-pick-banner > span { min-width: 0; flex: 1; }
-.rt-offer-page .map-error { display: flex; align-items: flex-start; gap: 8px; padding: 12px 15px; color: #a13b3b; background: #fff3f3; font-size: .74rem; line-height: 1.45; }
+.rt-offer-page .map-error { display: flex; align-items: flex-start; gap: 8px; padding: 12px 15px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .74rem; line-height: 1.45; }
 .rt-offer-page .map-error svg { flex: 0 0 auto; margin-top: 1px; }
-.rt-offer-page .route-checklist { padding: 19px 20px; }
-.rt-offer-page .route-checklist .form-section-title { margin-bottom: 13px; }
 .rt-offer-page .check-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
-.rt-offer-page .check-list li { display: flex; align-items: center; gap: 8px; color: #87938b; font-size: .75rem; }
-.rt-offer-page .check-list li > span { width: 21px; height: 21px; display: grid; place-items: center; border-radius: 7px; color: #84938a; background: #eef2ef; font-size: .66rem; font-weight: 800; }
-.rt-offer-page .check-list li.done { color: #2c5638; }
-.rt-offer-page .check-list li.done > span { color: #fff; background: #159447; }
-.rt-offer-page .route-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 11px; border-radius: 11px; color: #63756a; background: #f1f8f3; font-size: .72rem; line-height: 1.45; }
-.rt-offer-page .route-note svg { flex: 0 0 auto; color: #159447; }
+.rt-offer-page .check-list li { display: flex; align-items: center; gap: 8px; color: var(--rt-muted); font-size: .75rem; }
+.rt-offer-page .check-list li > span { width: 21px; height: 21px; display: grid; place-items: center; border-radius: 7px; color: var(--rt-muted); background: var(--rt-surface-muted); font-size: .66rem; font-weight: 800; }
+.rt-offer-page .check-list li.done { color: var(--rt-text); }
+.rt-offer-page .check-list li.done > span { color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-offer-page .route-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 11px; border-radius: 11px; color: var(--rt-text); background: var(--rt-surface-subtle); font-size: .72rem; line-height: 1.45; }
+.rt-offer-page .route-note svg { flex: 0 0 auto; color: var(--rt-primary); }
 [data-theme="dark"] .rt-offer-page .field-error { color: #ffb0b0; }
 @keyframes rt-offer-spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) {
@@ -193,6 +275,12 @@ const offerStyles = `
 @media (max-width: 620px) {
   .rt-offer-page .container { width: min(100% - 28px, 1180px); }
   .rt-offer-page .page-container { padding: 24px 0 45px; }
+  /* The two nav buttons go full width so neither becomes a 40px target beside
+     the other on a phone. */
+  .rt-offer-page .rt-offer-nav { display: grid; grid-template-columns: 1fr; }
+  .rt-offer-page .rt-offer-nav > span { display: none; }
+  .rt-offer-page .rt-offer-nav .btn { width: 100%; }
+  .rt-offer-page .rt-offer-summary > div { grid-template-columns: 1fr; gap: 2px; }
   .rt-offer-page .page-heading { align-items: flex-start; }
   .rt-offer-page .page-heading-icon { width: 44px; height: 44px; border-radius: 13px; }
   .rt-offer-page .form-card { padding: 18px; }
@@ -208,7 +296,8 @@ const offerStyles = `
 
 export default function OfferRidePage() {
   const { rideId: editingRideId } = useParams<{ rideId: string }>();
-  const { loading, activeUserId, vehicles, rides, createRide, updateRide } = useApp();
+  const [searchParams] = useSearchParams();
+  const { loading, activeUserId, vehicles, rides, createRide, updateRide, createSeries } = useApp();
   const navigate = useNavigate();
    const requestedEditingRide = rides.find((ride) => ride.id === editingRideId);
    const editingRide = requestedEditingRide?.driverId === activeUserId ? requestedEditingRide : undefined;
@@ -253,6 +342,28 @@ export default function OfferRidePage() {
   const setContribution = (value: number | ((current: number) => number)) =>
     setFormValue((c) => ({ ...c, contribution: typeof value === "function" ? value(c.contribution) : value }));
 
+  /**
+   * A journey handed over from the home page planner.
+   *
+   * Only applied when not editing an existing ride - an edit is a statement
+   * about a specific published ride and must not inherit a route from a URL.
+   * The route itself is recalculated by the normal effect below, so the driver
+   * still sees real distance, duration and fare before they publish.
+   */
+  const handoffApplied = useRef(false);
+  useEffect(() => {
+    if (isEditing || handoffApplied.current) return;
+    const params = readJourneyParams(searchParams);
+    if (!params) return;
+    handoffApplied.current = true;
+    if (params.origin) setOrigin(params.origin);
+    if (params.destination) setDestination(params.destination);
+    if (params.date) setDate(params.date);
+    if (params.time) setTime(params.time);
+    if (params.seats) setAvailableSeats(params.seats);
+    if (params.contribution) setContribution(params.contribution);
+  }, [isEditing, searchParams]);
+
   const [stopInput, setStopInput] = useState<Coordinates | null>(null);
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -267,6 +378,100 @@ export default function OfferRidePage() {
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [published, setPublished] = useState(false);
+  const [step, setStep] = useState<OfferStep>(0);
+  /**
+   * The recurring schedule being described, if any.
+   *
+   * Held apart from the single-ride draft on purpose: the draft is about one
+   * journey, and a schedule is a different kind of thing to publish. Defaulted
+   * here rather than in the draft so turning the checkbox off and back on starts
+   * from the same sensible place instead of a stale range from last time.
+   */
+  const [recurring, setRecurring] = useState<RecurringChoice>({
+    enabled: false,
+    daysOfWeek: [],
+    validFrom: localDateKey(new Date()),
+    validUntil: "",
+  });
+
+  /**
+   * How many rides the chosen schedule would actually publish, and when.
+   *
+   * Computed with the same function the repository uses, so the count shown here
+   * is the count that gets written. Reporting "60 rides" for a range that would
+   * publish 86 is the exact failure the repository now refuses, and it should be
+   * visible before the host presses the button rather than as an error after.
+   */
+  const recurringPlan = useMemo((): RecurringPlan | null => {
+    if (!recurring.enabled || recurring.daysOfWeek.length === 0 || !recurring.validFrom) {
+      return null;
+    }
+    const dates = occurrenceDates({
+      daysOfWeek: recurring.daysOfWeek,
+      validFrom: recurring.validFrom,
+      validUntil: recurring.validUntil.trim() || recurring.validFrom,
+      departureTime: time,
+      notBefore: Date.now(),
+    });
+    const lastDate = recurring.validUntil.trim() || recurring.validFrom;
+    const spanDays = seriesRangeDayCount(recurring.validFrom, lastDate);
+    if (spanDays === null) {
+      return {
+        count: 0,
+        tone: "error",
+        message: "The schedule cannot end before it starts.",
+      };
+    }
+    if (spanDays > MAX_SERIES_DAYS) {
+      return {
+        count: dates.length,
+        tone: "error",
+        message: `That range is ${spanDays} days. A schedule can cover at most ${MAX_SERIES_DAYS} days at a time.`,
+      };
+    }
+    if (dates.length === 0) {
+      return {
+        count: 0,
+        tone: "error",
+        message: "That range has no upcoming dates on the days you chose.",
+      };
+    }
+    if (dates.length > MAX_OCCURRENCES) {
+      return {
+        count: dates.length,
+        tone: "error",
+        message: `That is ${dates.length} rides. Shorten the range or pick fewer days to stay within ${MAX_OCCURRENCES}.`,
+      };
+    }
+    const first = dates[0];
+    const last = dates[dates.length - 1];
+    return {
+      count: dates.length,
+      tone: "ok",
+      message: dates.length === 1
+        ? `1 ride, on ${first}.`
+        : `${dates.length} rides, from ${first} to ${last}.`,
+    };
+  }, [recurring, time]);
+
+  /** The number the button commits to, so it matches the repository's own count. */
+  const recurringCount = recurringPlan?.count ?? 0;
+
+  /**
+   * The last date a range can end on, counted from when the range starts.
+   *
+   * Derived from `validFrom`, not from today, because `MAX_SERIES_DAYS` is a
+   * property of the range. Anchoring it to today meant a host who started their
+   * schedule more than 120 days out got a `max` earlier than `min`, which is an
+   * input that silently refuses every keystroke.
+   */
+  const latestSchedulableDate = useMemo(() => {
+    const start = recurring.validFrom ? new Date(`${recurring.validFrom}T00:00:00`) : new Date();
+    if (Number.isNaN(start.getTime())) return "";
+    const end = new Date(start);
+    end.setDate(end.getDate() + MAX_SERIES_DAYS - 1);
+    return localDateKey(end);
+  }, [recurring.validFrom]);
 
   const ownVehicles = useMemo(
     () => vehicles.filter((vehicle) => vehicle.userId === activeUserId),
@@ -277,6 +482,40 @@ export default function OfferRidePage() {
   const contributionError = route && fareRange && !isContributionInRange(contribution, route.distanceKm)
     ? `Choose a contribution between ${formatRupees(fareRange.min)} and ${formatRupees(fareRange.max)}.`
     : "";
+
+  /**
+   * What each step needs before the host may move past it.
+   *
+   * Step 1 is not satisfied by "both text boxes have something in them" - it
+   * needs a route that actually resolved, because that geometry is what gets
+   * published and what the fare is calculated from. A routing failure therefore
+   * blocks the stepper instead of letting a host reach the publish button with
+   * no geometry behind it.
+   */
+  const routeStepReady = Boolean(origin && destination && route) && !routeLoading && !routeError;
+  const scheduleStepReady = Boolean(date && time && vehicleId)
+    && !contributionError
+    && ownVehicles.length > 0
+    && (!recurring.enabled || recurringPlan?.tone === "ok");
+  const stepReady = [routeStepReady, scheduleStepReady, true];
+  const canPublish = routeStepReady && scheduleStepReady && !publishing;
+
+  /** Only ever moves forward one step, and only past a step that is satisfied. */
+  const goForward = () => {
+    if (stepReady[step]) setStep((current) => Math.min(OFFER_STEPS.length - 1, current + 1) as OfferStep);
+  };
+  const goBack = () => setStep((current) => Math.max(0, current - 1) as OfferStep);
+
+  /**
+   * The stepper position is not part of the persisted draft, so it would survive
+   * a change that invalidates everything below it. Switching the active user or
+   * the ride being edited swaps the whole form out from under the current step,
+   * which would leave the host looking at an empty Schedule or Review step. Send
+   * them back to the route first, where the form can be refilled.
+   */
+  useEffect(() => {
+    setStep(0);
+  }, [activeUserId, editingRide?.id]);
 
   useEffect(() => {
     if (!editingRide) return;
@@ -519,10 +758,36 @@ export default function OfferRidePage() {
       setPublishError("Choose a departure date and time.");
       return;
     }
-    const departureTimestamp = new Date(`${date}T${time}`).getTime();
-    if (!Number.isFinite(departureTimestamp) || departureTimestamp <= Date.now()) {
-      setPublishError("Choose a departure time in the future.");
-      return;
+
+    /**
+     * A schedule has its own departure rules, so it is checked before the
+     * single-ride ones below. Those require the date field's departure to be in the
+     * future, which is not the right test for a schedule: what matters is that the
+     * *range* contains at least one future occurrence on a chosen day. A host who
+     * ticks "repeat" and leaves today's date alone is describing a commute that
+     * starts on the next matching weekday, not one that departs today.
+     */
+    if (recurring.enabled) {
+      if (recurring.daysOfWeek.length === 0) {
+        setPublishError("Choose at least one day of the week for the schedule.");
+        return;
+      }
+      if (!recurring.validFrom) {
+        setPublishError("Choose the date the schedule starts from.");
+        return;
+      }
+      // `recurringPlan` already refused an empty or oversized range, and it was
+      // built from the repository's own enumeration.
+      if (recurringPlan?.tone === "error") {
+        setPublishError(recurringPlan.message);
+        return;
+      }
+    } else {
+      const departureTimestamp = new Date(`${date}T${time}`).getTime();
+      if (!Number.isFinite(departureTimestamp) || departureTimestamp <= Date.now()) {
+        setPublishError("Choose a departure time in the future.");
+        return;
+      }
     }
      const minimumAvailableSeats = isEditing ? 0 : 1;
      if (
@@ -574,14 +839,44 @@ export default function OfferRidePage() {
         await updateRide(editingRide.id, input);
         setPublished(true);
         navigate(`/rides/${editingRide.id}`);
-      } else {
-        await createRide(input);
+        return;
+      }
+
+      if (recurring.enabled) {
+        /**
+         * A schedule publishes a different set of rows, so it goes through its own
+         * repository rather than `createRide` called N times. That matters beyond
+         * tidiness: the schedule row and all of its occurrences are written and
+         * rolled back together, so a range that partly fails leaves nothing behind
+         * rather than a half-published commute that looks real on Find Ride.
+         */
+        await createSeries({
+          vehicleId: selectedVehicle.id,
+          origin,
+          destination,
+          waypoints: stops,
+          departureTime: time,
+          daysOfWeek: recurring.daysOfWeek,
+          validFrom: recurring.validFrom,
+          validUntil: recurring.validUntil,
+          totalSeats: selectedVehicle.seats,
+          contribution,
+          distanceKm: route.distanceKm,
+          durationMinutes: route.durationMinutes,
+          routeGeometry: route.geometry,
+        });
         setPublished(true);
-        // The ride is in Supabase now, so the unfinished form has served its
-        // purpose. Only a successful publish may delete the draft.
         offerDraft.complete();
         navigate("/rides");
+        return;
       }
+
+      await createRide(input);
+      setPublished(true);
+      // The ride is in Supabase now, so the unfinished form has served its
+      // purpose. Only a successful publish may delete the draft.
+      offerDraft.complete();
+      navigate("/rides");
     } catch (error: unknown) {
       setPublishError(errorMessage(error, "We could not publish your ride. Please try again."));
       setPublishing(false);
@@ -615,6 +910,14 @@ export default function OfferRidePage() {
           <div className="page-heading-icon">{isEditing ? <Edit3 size={25} /> : <CarFront size={25} />}</div>
         </div>
 
+        <nav className="rt-offer-steps" aria-label="Offer a ride progress">
+          <StepIndicator
+            steps={OFFER_STEPS.map((entry) => ({ id: entry.id, title: entry.title, description: entry.description }))}
+            activeIndex={step}
+            orientation="horizontal"
+          />
+        </nav>
+
         <form className="offer-layout" onSubmit={handlePublish}>
           <div className="offer-form-column">
             {offerDraft.restored ? (
@@ -625,7 +928,9 @@ export default function OfferRidePage() {
                 onDismiss={offerDraft.dismissBanner}
               />
             ) : null}
-            <section className="card form-card">
+
+            {step === 0 ? (
+            <section className="card form-card" data-testid="offer-step-route">
               <div className="form-section-title"><MapPin size={19} /><div><h2>Route details</h2><p>Add the places you will pass through.</p></div></div>
               <div className="location-fields">
                 <div className="field-group">
@@ -709,8 +1014,11 @@ export default function OfferRidePage() {
                 </div>
               )}
             </section>
+            ) : null}
 
-            <section className="card form-card">
+            {step === 1 ? (
+            <>
+            <section className="card form-card" data-testid="offer-step-schedule">
               <div className="form-section-title"><CalendarDays size={19} /><div><h2>Trip logistics</h2><p>Set the departure and how many seats you can share.</p></div></div>
               <div className="form-grid form-grid-three">
                 <div className="field-group">
@@ -766,12 +1074,216 @@ export default function OfferRidePage() {
               )}
             </section>
 
-            {publishError && <p className="form-message error-message" role="alert" data-testid="offer-error"><AlertCircle size={16} />{publishError}</p>}
-            {published && <p className="form-message success-message" role="status" data-testid="offer-success"><Check size={16} />Your ride was published successfully.</p>}
-            <button className="btn btn-primary btn-lg btn-block" data-testid="offer-submit" type="submit" disabled={publishing || routeLoading || !route || ownVehicles.length === 0 || Boolean(contributionError)}>
-             {publishing ? <LoaderCircle className="spin" size={19} /> : <ArrowRight size={19} />}
-               {publishing ? "Saving your ride…" : isEditing ? "Save changes" : "Publish ride"}
-            </button>
+            {/* A recurring commute is a first-class way to offer a ride, not a
+                repository nobody can reach. Hidden while editing, because a single
+                occurrence cannot become a schedule after the fact without silently
+                changing what the host already published. */}
+            {!isEditing ? (
+              <section className="card form-card" data-testid="recurring-section">
+                <div className="form-section-title"><Repeat2 size={19} /><div><h2>Make it a regular commute</h2><p>Publish this same trip on the days you choose. Each date becomes its own ride, so seats and riders are tracked per trip.</p></div></div>
+                <label className="checkbox-row" htmlFor="offer-recurring">
+                  <input
+                    id="offer-recurring"
+                    data-testid="offer-recurring"
+                    type="checkbox"
+                    checked={recurring.enabled}
+                    onChange={(event) => setRecurring((current) => ({ ...current, enabled: event.target.checked }))}
+                  />
+                  <span>Repeat this ride</span>
+                </label>
+
+                {recurring.enabled ? (
+                  <>
+                    <fieldset className="recurring-days" aria-describedby="recurring-days-hint">
+                      <legend>Repeat on</legend>
+                      <div className="recurring-day-buttons">
+                        {WEEKDAY_CHOICES.map((choice) => {
+                          const selected = recurring.daysOfWeek.includes(choice.value);
+                          return (
+                            <button
+                              key={choice.value}
+                              className={`recurring-day${selected ? " is-selected" : ""}`}
+                              type="button"
+                              aria-pressed={selected}
+                              aria-label={choice.full}
+                              title={choice.full}
+                              data-testid={`recurring-day-${choice.value}`}
+                              onClick={() => setRecurring((current) => {
+                                const days = current.daysOfWeek.includes(choice.value)
+                                  ? current.daysOfWeek.filter((day) => day !== choice.value)
+                                  : [...current.daysOfWeek, choice.value].sort((first, second) => first - second);
+                                return { ...current, daysOfWeek: days };
+                              })}
+                            >
+                              {choice.short}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <span id="recurring-days-hint" className="field-hint">
+                        {recurring.daysOfWeek.length === 0
+                          ? "Choose at least one day."
+                          : `${recurring.daysOfWeek.length} ${recurring.daysOfWeek.length === 1 ? "day" : "days"} a week.`}
+                      </span>
+                    </fieldset>
+
+                    <div className="form-grid form-grid-two">
+                      <div className="field-group">
+                        <label htmlFor="offer-valid-from">Repeat from</label>
+                        <input
+                          id="offer-valid-from"
+                          data-testid="offer-valid-from"
+                          type="date"
+                          min={localDateKey(new Date())}
+                          value={recurring.validFrom}
+                          onChange={(event) => setRecurring((current) => ({ ...current, validFrom: event.target.value }))}
+                        />
+                        <span className="field-hint">The first date this schedule covers.</span>
+                      </div>
+                      <div className="field-group">
+                        <label htmlFor="offer-valid-until">Repeat until</label>
+                        <input
+                          id="offer-valid-until"
+                          data-testid="offer-valid-until"
+                          type="date"
+                          min={recurring.validFrom || localDateKey(new Date())}
+                          max={latestSchedulableDate}
+                          value={recurring.validUntil}
+                          onChange={(event) => setRecurring((current) => ({ ...current, validUntil: event.target.value }))}
+                        />
+                        <span className="field-hint">Leave blank to run for the start date only.</span>
+                      </div>
+                    </div>
+
+                    <p
+                      className={`recurring-summary${recurringPlan?.tone === "error" ? " is-error" : ""}`}
+                      data-testid="recurring-summary"
+                    >
+                      {recurringPlan?.message
+                        ?? "Choose at least one day and a valid date range."}
+                    </p>
+                    <p className="field-hint">
+                      Up to {MAX_OCCURRENCES} rides per schedule, over at most {MAX_SERIES_DAYS} days. Dates that have already passed are left out.
+                    </p>
+                  </>
+                ) : (
+                  <p className="field-hint">Leave this off to publish a single ride on the date above.</p>
+                )}
+              </section>
+            ) : null}
+            </>
+            ) : null}
+
+            {step === 2 ? (
+              <section className="card form-card" data-testid="offer-step-review">
+                <div className="form-section-title">
+                  <Gauge size={19} />
+                  <div>
+                    <h2>Before you publish</h2>
+                    <p>Everything that will be shared with riders, in one place.</p>
+                  </div>
+                </div>
+
+                <ul className="check-list rt-offer-review-list">
+                  <li className={routeStepReady ? "done" : ""}>
+                    <span>{routeStepReady ? <Check size={14} /> : "1"}</span>Set both endpoints
+                  </li>
+                  <li className={route ? "done" : ""}>
+                    <span>{route ? <Check size={14} /> : "2"}</span>Verify the real route
+                  </li>
+                  <li className={selectedVehicle ? "done" : ""}>
+                    <span>{selectedVehicle ? <Check size={14} /> : "3"}</span>Select your vehicle
+                  </li>
+                  <li className={date && time ? "done" : ""}>
+                    <span>{date && time ? <Check size={14} /> : "4"}</span>Add departure details
+                  </li>
+                  {recurring.enabled ? (
+                    <li className={recurringPlan?.tone === "ok" ? "done" : ""}>
+                      <span>{recurringPlan?.tone === "ok" ? <Check size={14} /> : "5"}</span>Fix the repeat schedule
+                    </li>
+                  ) : null}
+                </ul>
+
+                <dl className="rt-offer-summary">
+                  <div>
+                    <dt>Route</dt>
+                    <dd>
+                      {origin?.label ?? "Not set"} to {destination?.label ?? "Not set"}
+                      {stops.length > 0 ? ` · ${stops.length} ${stops.length === 1 ? "stop" : "stops"}` : ""}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Distance</dt>
+                    <dd>{route ? `${route.distanceKm.toFixed(1)} km · ${formatDuration(route.durationMinutes)}` : "Not calculated"}</dd>
+                  </div>
+                  <div>
+                    <dt>Departs</dt>
+                    <dd>{date && time ? `${date} at ${time}` : "Not set"}</dd>
+                  </div>
+                  <div>
+                    <dt>Seats</dt>
+                    <dd>{availableSeats} available{selectedVehicle ? ` of ${selectedVehicle.seats} in ${selectedVehicle.name}` : ""}</dd>
+                  </div>
+                  <div>
+                    <dt>Contribution</dt>
+                    <dd>{formatRupees(contribution)} per seat</dd>
+                  </div>
+                  <div>
+                    <dt>Publishes</dt>
+                    <dd>
+                      {recurring.enabled
+                        ? recurringPlan?.message ?? "A repeat schedule"
+                        : "One ride"}
+                    </dd>
+                  </div>
+                </dl>
+
+                <div className="route-note">
+                  <Users size={17} />
+                  <span>Riders can request seats. You decide whether to confirm each request.</span>
+                </div>
+              </section>
+            ) : null}
+
+            {publishError ? <p className="form-message error-message" role="alert" data-testid="offer-error"><AlertCircle size={16} />{publishError}</p> : null}
+            {published ? <p className="form-message success-message" role="status" data-testid="offer-success"><Check size={16} />Your ride was published successfully.</p> : null}
+
+            <div className="rt-offer-nav">
+              {step > 0 ? (
+                <button className="btn btn-outline btn-lg" type="button" data-testid="offer-back" onClick={goBack}>
+                  Back
+                </button>
+              ) : <span />}
+
+              {step < OFFER_STEPS.length - 1 ? (
+                <button
+                  className="btn btn-primary btn-lg"
+                  type="button"
+                  data-testid="offer-continue"
+                  disabled={!stepReady[step]}
+                  onClick={goForward}
+                >
+                  Continue to {OFFER_STEPS[step + 1].title}
+                  <ArrowRight size={18} />
+                </button>
+              ) : (
+                <button
+                  className="btn btn-primary btn-lg"
+                  data-testid="offer-submit"
+                  type="submit"
+                  disabled={!canPublish}
+                >
+                  {publishing ? <LoaderCircle className="spin" size={19} /> : <ArrowRight size={19} />}
+                  {publishing
+                    ? "Saving your ride…"
+                    : isEditing
+                      ? "Save changes"
+                      : recurring.enabled
+                        ? `Publish ${recurringCount} ${recurringCount === 1 ? "ride" : "rides"}`
+                        : "Publish ride"}
+                </button>
+              )}
+            </div>
           </div>
 
           <aside className="offer-map-column">
@@ -807,16 +1319,6 @@ export default function OfferRidePage() {
               </div>
               {routeError && <div className="map-error" role="alert" data-testid="offer-route-error"><AlertCircle size={17} /><span>{routeError} Your markers remain visible; publishing stays disabled until routing works.</span></div>}
             </section>
-            <div className="card route-checklist">
-              <div className="form-section-title"><Gauge size={19} /><h2>Before you publish</h2></div>
-              <ul className="check-list">
-                <li className={origin && destination ? "done" : ""}><span>{origin && destination ? <Check size={14} /> : "1"}</span>Set both endpoints</li>
-                <li className={route ? "done" : ""}><span>{route ? <Check size={14} /> : "2"}</span>Verify the real route</li>
-                <li className={selectedVehicle ? "done" : ""}><span>{selectedVehicle ? <Check size={14} /> : "3"}</span>Select your vehicle</li>
-                <li className={date && time ? "done" : ""}><span>{date && time ? <Check size={14} /> : "4"}</span>Add departure details</li>
-              </ul>
-              <div className="route-note"><Users size={17} /><span>Riders can request seats. You decide whether to confirm each request.</span></div>
-            </div>
           </aside>
         </form>
       </div>

@@ -4,20 +4,20 @@ import {
   Armchair,
   CarFront,
   Check,
-  CheckCircle2,
   Gauge,
-  LoaderCircle,
   Palette,
   Pencil,
   Plus,
   ShieldCheck,
   Trash2,
-  UserRound,
 } from "lucide-react";
-import { EmptyState } from "../components/EmptyState";
 import { DraftBanner } from "../components/DraftBanner";
 import { Modal } from "../components/Modal";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader } from "../components/ui/PageHeader";
+import { Badge, IconButton } from "../components/ui/Badge";
+import { Button } from "../components/ui/Button";
+import { Group } from "../components/ui/Group";
+import { SkeletonList, State } from "../components/ui/State";
 import { useApp, type VehicleFormValues } from "../context/AppContext";
 import { useDraft, type DraftScope } from "../services/drafts";
 import type { Vehicle } from "../types";
@@ -35,248 +35,167 @@ const emptyDraft: VehicleDraft = {
   plate: "",
   seats: 4,
 };
-
 const vehicleStyles = `
-.rt-vehicles-page {
-  min-height: 100%;
-  padding: 28px 20px 60px;
-  color: var(--rt-text, #17231c);
-  background: var(--rt-surface-subtle, #f6faf7);
-}
-.rt-vehicles-shell { max-width: 1160px; margin: 0 auto; }
-.rt-vehicles-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  margin: 22px 0 18px;
-}
-.rt-vehicles-summary { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.rt-vehicles-page { min-height: 100%; background: var(--rt-surface-subtle); color: var(--rt-text); padding: 26px 20px calc(56px + var(--rt-safe-bottom)); }
+.rt-vehicles-shell { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+/* ---- summary + primary action ---- */
+.rt-vehicles-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.rt-vehicles-summary { display: flex; align-items: center; gap: 13px; min-width: 0; }
 .rt-vehicles-summary-icon {
-  width: 45px;
-  height: 45px;
-  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 14px;
-  color: #148542;
-  background: #dff4e6;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  border-radius: 15px;
+  color: var(--rt-primary-strong);
+  background: var(--rt-primary-soft);
 }
-.rt-vehicles-summary-copy strong { display: block; font-size: .92rem; }
-.rt-vehicles-summary-copy span { display: block; margin-top: 3px; color: #708077; font-size: .78rem; }
-.rt-vehicles-add {
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 0 17px;
-  border: 0;
-  border-radius: 12px;
-  color: #fff;
-  background: #159447;
-  box-shadow: 0 8px 20px rgba(21, 148, 71, .2);
-  font: inherit;
-  font-size: .84rem;
-  font-weight: 760;
-  cursor: pointer;
-}
-.rt-vehicles-add:hover { background: #10813b; }
+.rt-vehicles-summary-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rt-vehicles-summary-copy strong { color: var(--rt-text-strong); font-size: 1.02rem; font-weight: 780; letter-spacing: -0.02em; }
+.rt-vehicles-summary-copy span { color: var(--rt-muted); font-size: 0.8rem; line-height: 1.45; }
+
+/* ---- feedback ---- */
 .rt-vehicles-alert {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 9px;
   padding: 13px 15px;
-  border: 1px solid #f1b7b7;
-  border-radius: 13px;
-  color: #9c2f2f;
-  background: #fff1f1;
-  font-size: .81rem;
-  line-height: 1.45;
+  border-radius: var(--rt-radius-md);
+  border: 1px solid var(--rt-danger-border);
+  background: var(--rt-danger-soft);
+  color: var(--rt-danger);
+  font-size: 0.82rem;
+  font-weight: 620;
+  line-height: 1.5;
 }
 .rt-vehicles-alert svg { flex: 0 0 auto; margin-top: 1px; }
-.rt-vehicles-alert-success { color: #116f38; border-color: #bde6ca; background: #ecf9f0; }
-.rt-vehicles-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.rt-vehicles-alert-success { border-color: var(--rt-success-border); background: var(--rt-success-soft); color: var(--rt-primary-strong); }
+
+/* ---- list ---- */
+.rt-vehicles-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(324px, 1fr)); gap: 15px; }
+
+/* ---- vehicle card ---- */
 .rt-vehicle-card {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+  box-shadow: var(--rt-shadow-card);
   overflow: hidden;
-  border: 1px solid var(--rt-border, #dce7df);
-  border-radius: 21px;
-  background: var(--rt-card, #fff);
-  box-shadow: 0 10px 30px rgba(29, 64, 42, .06);
-  transition: transform .2s ease, box-shadow .2s ease;
+  transition: transform var(--rt-dur-base) var(--rt-ease), box-shadow var(--rt-dur-base) var(--rt-ease), border-color var(--rt-dur-base) var(--rt-ease);
 }
-.rt-vehicle-card:hover { transform: translateY(-2px); box-shadow: 0 16px 36px rgba(29, 64, 42, .09); }
-.rt-vehicle-card-default { border-color: rgba(21, 148, 71, .42); }
+.rt-vehicle-card:hover { transform: translateY(-2px); box-shadow: var(--rt-shadow-md); }
+/* The default vehicle gets a brand edge rather than a different layout, so the
+   cards stay comparable when they are side by side. */
+.rt-vehicle-card-default { border-color: var(--rt-primary); box-shadow: var(--rt-shadow-md); }
+
 .rt-vehicle-visual {
   position: relative;
-  min-height: 128px;
   display: flex;
   align-items: center;
-  padding: 22px;
-  overflow: hidden;
-  background: linear-gradient(135deg, #e9f8ee 0%, #f8fcf9 72%);
+  justify-content: space-between;
+  gap: 10px;
+  padding: 17px 19px;
+  background: var(--rt-surface-subtle);
+  border-bottom: 1px solid var(--rt-border);
 }
-.rt-vehicle-visual::before, .rt-vehicle-visual::after {
-  content: "";
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(21, 148, 71, .07);
-}
-.rt-vehicle-visual::before { width: 190px; height: 190px; right: -70px; top: -100px; }
-.rt-vehicle-visual::after { width: 110px; height: 110px; left: -50px; bottom: -75px; }
 .rt-vehicle-car-icon {
-  position: relative;
-  z-index: 1;
-  width: 72px;
-  height: 72px;
   display: grid;
   place-items: center;
-  border-radius: 22px;
-  color: #fff;
-  background: linear-gradient(145deg, #1aa14e, #0d7637);
-  box-shadow: 0 12px 24px rgba(21, 148, 71, .23);
+  width: 62px;
+  height: 62px;
+  border-radius: 19px;
+  color: var(--rt-primary-strong);
+  background: var(--rt-primary-soft);
 }
-.rt-vehicle-badges { position: absolute; z-index: 1; top: 16px; right: 16px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
-.rt-vehicle-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 9px;
-  border-radius: 999px;
-  color: #425249;
-  background: rgba(255,255,255,.84);
-  font-size: .68rem;
-  font-weight: 750;
-  backdrop-filter: blur(8px);
-}
-.rt-vehicle-badge-default { color: #0e7437; background: #dff5e7; }
-.rt-vehicle-body { padding: 20px; }
+.rt-vehicle-card-default .rt-vehicle-car-icon { color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-vehicle-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+.rt-vehicle-body { display: flex; flex-direction: column; gap: 14px; padding: 17px 19px 19px; flex: 1 1 auto; }
 .rt-vehicle-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.rt-vehicle-name { margin: 0; font-size: 1.15rem; letter-spacing: -.02em; }
-.rt-vehicle-subtitle { margin: 5px 0 0; color: #6c7a72; font-size: .8rem; }
-.rt-vehicle-actions { display: flex; gap: 6px; }
-.rt-vehicle-icon-button {
-  width: 37px;
-  height: 37px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #dfe7e1;
-  border-radius: 11px;
-  color: #58675f;
-  background: #fff;
-  cursor: pointer;
-  transition: color .18s ease, background .18s ease, border-color .18s ease;
-}
-.rt-vehicle-icon-button:hover { color: #12833e; border-color: #b8ddc4; background: #f0faf3; }
-.rt-vehicle-icon-button-danger:hover { color: #c23d3d; border-color: #efb9b9; background: #fff1f1; }
-.rt-vehicle-icon-button:disabled { opacity: .45; cursor: not-allowed; }
-.rt-vehicle-specs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 18px 0; }
+.rt-vehicle-name { margin: 0; color: var(--rt-text-strong); font-size: 1.08rem; font-weight: 780; letter-spacing: -0.02em; line-height: 1.25; }
+.rt-vehicle-subtitle { margin: 3px 0 0; color: var(--rt-muted); font-size: 0.8rem; }
+.rt-vehicle-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+
+.rt-vehicle-specs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .rt-vehicle-spec {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 11px;
+  border-radius: 13px;
+  background: var(--rt-surface-subtle);
+  border: 1px solid var(--rt-border);
   min-width: 0;
-  padding: 10px;
-  border-radius: 12px;
-  background: #f5f8f6;
 }
-.rt-vehicle-spec-label { display: flex; align-items: center; gap: 5px; color: #7a877f; font-size: .65rem; text-transform: uppercase; letter-spacing: .035em; }
-.rt-vehicle-spec-value { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; font-weight: 730; }
-.rt-vehicle-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 16px; border-top: 1px solid #edf2ee; }
-.rt-vehicle-seat-note { color: #6e7c73; font-size: .73rem; }
-.rt-vehicle-default-button {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 11px;
-  border: 1px solid #cce5d5;
-  border-radius: 10px;
-  color: #137b3d;
-  background: #f0faf4;
-  font: inherit;
-  font-size: .74rem;
-  font-weight: 750;
-  cursor: pointer;
+.rt-vehicle-spec-label { display: flex; align-items: center; gap: 5px; color: var(--rt-muted); font-size: 0.68rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+.rt-vehicle-spec-label svg { flex: 0 0 auto; }
+/* A plate is the one spec that is a fixed-width code, so it gets its own
+   monospace treatment - it is read character by character, not as a word. */
+.rt-vehicle-spec-value { color: var(--rt-text); font-size: 0.85rem; font-weight: 720; overflow-wrap: anywhere; }
+.rt-vehicle-spec-value--plate { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.04em; }
+
+.rt-vehicle-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: auto; padding-top: 13px; border-top: 1px solid var(--rt-border); }
+.rt-vehicle-seat-note { color: var(--rt-muted); font-size: 0.73rem; }
+
+/* ---- empty ---- */
+.rt-vehicles-empty {
+  grid-column: 1 / -1;
+  padding: 46px 24px;
+  border: 1px dashed var(--rt-border-strong);
+  border-radius: var(--rt-radius-card);
+  background: var(--rt-card);
 }
-.rt-vehicle-default-button:hover:not(:disabled) { background: #ddf4e5; }
-.rt-vehicle-default-button:disabled { color: #5f6f65; border-color: #dfe5e1; background: #f4f6f5; cursor: default; }
-.rt-vehicles-empty { grid-column: 1 / -1; min-height: 330px; display: grid; place-items: center; border: 1px dashed #cddbd2; border-radius: 21px; background: rgba(255,255,255,.58); }
-.rt-vehicles-loading { display: grid; justify-items: center; gap: 12px; color: #6d7c73; font-size: .82rem; }
-.rt-vehicles-spin { color: #159447; animation: rt-vehicles-spin .8s linear infinite; }
-@keyframes rt-vehicles-spin { to { transform: rotate(360deg); } }
-.rt-vehicle-form { display: grid; gap: 18px; }
-.rt-vehicle-form-intro { display: flex; align-items: flex-start; gap: 11px; margin: 0; padding: 12px 13px; border-radius: 12px; color: #496056; background: #f1f8f3; font-size: .78rem; line-height: 1.5; }
-.rt-vehicle-form-intro svg { flex: 0 0 auto; color: #159447; margin-top: 1px; }
-.rt-vehicle-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
-.rt-vehicle-field { display: grid; gap: 6px; min-width: 0; }
+
+/* ---- form ---- */
+.rt-vehicle-form { display: flex; flex-direction: column; gap: 15px; }
+.rt-vehicle-form-intro { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 11px 13px; border-radius: 13px; background: var(--rt-surface-subtle); color: var(--rt-muted); font-size: 0.78rem; line-height: 1.5; }
+.rt-vehicle-form-intro svg { flex: 0 0 auto; margin-top: 1px; color: var(--rt-primary-strong); }
+.rt-vehicle-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.rt-vehicle-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .rt-vehicle-field-full { grid-column: 1 / -1; }
-.rt-vehicle-label { color: #34473b; font-size: .78rem; font-weight: 750; }
-.rt-vehicle-label span { color: #849087; font-weight: 500; }
+.rt-vehicle-label { display: flex; align-items: center; gap: 6px; color: var(--rt-text); font-size: 0.78rem; font-weight: 700; }
+.rt-vehicle-label span { color: var(--rt-muted); font-weight: 500; }
 .rt-vehicle-input {
   width: 100%;
-  min-height: 44px;
-  padding: 9px 11px;
-  border: 1px solid #d8e2db;
-  border-radius: 11px;
-  color: var(--rt-text, #17231c);
-  background: #fff;
+  padding: 10px 12px;
+  border: 1px solid var(--rt-border-strong);
+  border-radius: var(--rt-radius-sm);
+  background: var(--rt-surface);
+  color: var(--rt-text);
+  font: inherit;
+  font-size: 0.875rem;
+  transition: border-color var(--rt-dur-base) var(--rt-ease), box-shadow var(--rt-dur-base) var(--rt-ease);
+}
+.rt-vehicle-input:focus-visible {
   outline: none;
-  font: inherit;
-  font-size: .86rem;
-  transition: border-color .18s ease, box-shadow .18s ease;
+  border-color: var(--rt-primary-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 20%, transparent);
 }
-.rt-vehicle-input:focus { border-color: #159447; box-shadow: 0 0 0 3px rgba(21, 148, 71, .11); }
-.rt-vehicle-input[aria-invalid="true"] { border-color: #d94c4c; }
-.rt-vehicle-field-error { display: flex; align-items: center; gap: 5px; color: #b93434; font-size: .72rem; }
-.rt-vehicle-form-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 3px; }
-.rt-vehicle-secondary, .rt-vehicle-primary, .rt-vehicle-danger {
-  min-height: 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 0 15px;
-  border-radius: 11px;
-  font: inherit;
-  font-size: .8rem;
-  font-weight: 750;
-  cursor: pointer;
-}
-.rt-vehicle-secondary { border: 1px solid #d8e2db; color: #536159; background: #fff; }
-.rt-vehicle-secondary:hover:not(:disabled) { background: #f6f8f7; }
-.rt-vehicle-primary { border: 0; color: #fff; background: #159447; }
-.rt-vehicle-primary:hover:not(:disabled) { background: #10813b; }
-.rt-vehicle-danger { border: 0; color: #fff; background: #cf4343; }
-.rt-vehicle-danger:hover:not(:disabled) { background: #b73737; }
-.rt-vehicle-secondary:disabled, .rt-vehicle-primary:disabled, .rt-vehicle-danger:disabled { opacity: .58; cursor: not-allowed; }
-.rt-vehicle-delete-copy { margin: 0; color: #66746c; font-size: .86rem; line-height: 1.6; }
-.rt-vehicle-delete-warning { display: flex; gap: 9px; margin: 14px 0 0; padding: 11px 12px; border-radius: 11px; color: #8c3434; background: #fff0f0; font-size: .76rem; line-height: 1.45; }
-.rt-vehicle-delete-warning svg { flex: 0 0 auto; }
-[data-theme="dark"] .rt-vehicles-page { --rt-surface-subtle: #101712; --rt-card: #17211a; --rt-border: #2b3a30; --rt-text: #eef7f1; }
-[data-theme="dark"] .rt-vehicle-body, [data-theme="dark"] .rt-vehicle-icon-button, [data-theme="dark"] .rt-vehicle-input, [data-theme="dark"] .rt-vehicle-secondary { color: #eef7f1; background: #17211a; border-color: #34463a; }
-[data-theme="dark"] .rt-vehicle-subtitle, [data-theme="dark"] .rt-vehicle-seat-note, [data-theme="dark"] .rt-vehicle-spec-label, [data-theme="dark"] .rt-vehicle-label { color: #a6b5ac; }
-[data-theme="dark"] .rt-vehicle-visual { background: linear-gradient(135deg, #183321 0%, #17251b 72%); }
-[data-theme="dark"] .rt-vehicle-spec { background: #1c2820; }
-[data-theme="dark"] .rt-vehicle-footer { border-color: #2b3a30; }
-[data-theme="dark"] .rt-vehicles-alert-success { color: #a7e7ba; background: #17351f; border-color: #315a3c; }
-@media (max-width: 780px) {
-  .rt-vehicles-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 560px) {
-  .rt-vehicles-page { padding: 18px 14px 42px; }
-  .rt-vehicles-toolbar { align-items: stretch; flex-direction: column; }
-  .rt-vehicles-add { width: 100%; }
+.rt-vehicle-input[aria-invalid="true"] { border-color: var(--rt-danger); }
+.rt-vehicle-input--plate { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.05em; text-transform: uppercase; }
+.rt-vehicle-field-error { display: inline-flex; align-items: center; gap: 5px; color: var(--rt-danger); font-size: 0.74rem; font-weight: 620; }
+.rt-vehicle-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+.rt-vehicle-delete-copy { margin: 0 0 13px; color: var(--rt-muted); font-size: 0.86rem; line-height: 1.6; }
+.rt-vehicle-delete-copy strong { color: var(--rt-text); }
+.rt-vehicle-delete-warning { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px; border-radius: 13px; background: var(--rt-warning-soft); color: var(--rt-warning-text); font-size: 0.78rem; font-weight: 620; line-height: 1.5; }
+.rt-vehicle-delete-warning svg { flex: 0 0 auto; margin-top: 1px; }
+
+@media (max-width: 620px) {
+  .rt-vehicles-page { padding: 18px 14px calc(44px + var(--rt-safe-bottom)); }
+  .rt-vehicles-toolbar { flex-direction: column; align-items: stretch; }
+  .rt-vehicles-toolbar .ds-button { width: 100%; }
+  .rt-vehicles-list { grid-template-columns: 1fr; }
   .rt-vehicle-form-grid { grid-template-columns: 1fr; }
-  .rt-vehicle-field-full { grid-column: auto; }
   .rt-vehicle-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .rt-vehicle-visual { min-height: 116px; }
-  .rt-vehicle-body { padding: 17px; }
-  .rt-vehicle-footer { align-items: flex-start; flex-direction: column; }
-  .rt-vehicle-default-button { width: 100%; }
-  .rt-vehicle-form-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rt-vehicle-form-actions { flex-direction: column-reverse; align-items: stretch; }
+  .rt-vehicle-form-actions .ds-button { width: 100%; }
+  .rt-vehicles-empty { padding: 34px 18px; }
 }
 `;
-
 export function VehiclesPage() {
   const { loading, activeUserId, vehicles, rides, saveVehicle, updateVehicle, setDefaultVehicle, deleteVehicle } = useApp();
   const [formOpen, setFormOpen] = useState(false);
@@ -452,106 +371,147 @@ export function VehiclesPage() {
       <style>{vehicleStyles}</style>
       <div className="rt-vehicles-shell">
         <PageHeader
+          eyebrow="Account"
           title="My vehicles"
-          subtitle="Manage the vehicles available for your offered rides and choose a preferred default."
+          description="Manage the vehicles available for your offered rides and choose a preferred default."
+          actions={
+            <Button data-testid="vehicle-add" onClick={openAdd}>
+              <Plus size={17} aria-hidden="true" />
+              Add vehicle
+            </Button>
+          }
         />
 
         <div className="rt-vehicles-toolbar">
           <div className="rt-vehicles-summary">
             <span className="rt-vehicles-summary-icon"><CarFront size={22} /></span>
             <span className="rt-vehicles-summary-copy">
-              <strong>{loading ? "Loading…" : `${ownedVehicles.length} ${ownedVehicles.length === 1 ? "vehicle" : "vehicles"}`}</strong>
-              <span>{loading ? "Getting your vehicles." : ownedVehicles.length ? "Only you can edit or remove these vehicles." : "Add a vehicle before offering a ride."}</span>
+              <strong>
+                {loading
+                  ? "Loading�"
+                  : `${ownedVehicles.length} ${ownedVehicles.length === 1 ? "vehicle" : "vehicles"} saved`}
+              </strong>
+              <span>
+                {loading
+                  ? "Getting your vehicles."
+                  : ownedVehicles.length
+                    ? "Only you can edit or remove these vehicles."
+                    : "Add a vehicle before offering a ride."}
+              </span>
             </span>
           </div>
-          <button className="rt-vehicles-add" data-testid="vehicle-add" type="button" onClick={openAdd}>
-            <Plus size={17} /> Add vehicle
-          </button>
         </div>
 
-        {feedback && (
+        {feedback ? (
           <div
             className={`rt-vehicles-alert${feedback.type === "success" ? " rt-vehicles-alert-success" : ""}`}
             role={feedback.type === "error" ? "alert" : "status"}
           >
-            {feedback.type === "success" ? <CheckCircle2 size={17} /> : <AlertCircle size={17} />}
+            {feedback.type === "success" ? <Check size={17} /> : <AlertCircle size={17} />}
             <span>{feedback.text}</span>
           </div>
-        )}
+        ) : null}
 
-        <div className="rt-vehicles-grid">
+        <Group
+          id="vehicles-list"
+          title={loading ? "Your vehicles" : ownedVehicles.length ? "Your vehicles" : "Get started"}
+          description={
+            loading
+              ? undefined
+              : ownedVehicles.length
+                ? "Tap a vehicle to edit it, or make it your default for faster ride posting."
+                : "Vehicles are private to your profile and are only shown on the rides you offer."
+          }
+        >
           {loading ? (
-            <div className="rt-vehicles-empty">
-              <div className="rt-vehicles-loading" role="status">
-                <LoaderCircle className="rt-vehicles-spin" size={24} aria-hidden="true" />
-                <span className="sr-only">Loading your vehicles</span>
-              </div>
+            <div className="rt-vehicles-list">
+              <SkeletonList count={2} />
             </div>
           ) : ownedVehicles.length === 0 ? (
             <div className="rt-vehicles-empty">
-              <EmptyState
+              <State
+                icon={<CarFront size={26} />}
                 title="No vehicles yet"
-                description="Add the car you use for carpooling, then set it as your default for faster ride posting."
+                body="Add the car you use for carpooling, then set it as your default for faster ride posting."
+                actionLabel="Add your first vehicle"
+                onAction={openAdd}
+                testId="vehicles-empty"
               />
             </div>
-          ) : ownedVehicles.map((vehicle) => (
-            <article className={`rt-vehicle-card${vehicle.isDefault ? " rt-vehicle-card-default" : ""}`} key={vehicle.id}>
-              <div className="rt-vehicle-visual">
-                <span className="rt-vehicle-car-icon"><CarFront size={38} /></span>
-                <div className="rt-vehicle-badges">
-                  {vehicle.isDefault && <span className="rt-vehicle-badge rt-vehicle-badge-default"><Check size={12} /> Default</span>}
-                  <span className="rt-vehicle-badge"><ShieldCheck size={12} /> Saved vehicle</span>
-                </div>
-              </div>
-              <div className="rt-vehicle-body">
-                <div className="rt-vehicle-title-row">
-                  <div>
-                    <h2 className="rt-vehicle-name">{vehicle.name}</h2>
-                    <p className="rt-vehicle-subtitle">{vehicle.make} {vehicle.model}</p>
+          ) : (
+            <div className="rt-vehicles-list">
+              {ownedVehicles.map((vehicle) => (
+                <article
+                  className={`rt-vehicle-card${vehicle.isDefault ? " rt-vehicle-card-default" : ""}`}
+                  key={vehicle.id}
+                >
+                  <div className="rt-vehicle-visual">
+                    <span className="rt-vehicle-car-icon"><CarFront size={30} /></span>
+                    <div className="rt-vehicle-badges">
+                      {vehicle.isDefault
+                        ? <Badge tone="brand" icon={Check}>Default</Badge>
+                        : <Badge tone="neutral" icon={ShieldCheck}>Saved</Badge>}
+                    </div>
                   </div>
-                  <div className="rt-vehicle-actions">
-                    <button className="rt-vehicle-icon-button" data-testid={`vehicle-edit-${vehicle.id}`} type="button" onClick={() => openEdit(vehicle)} aria-label={`Edit ${vehicle.name}`}>
-                      <Pencil size={16} />
-                    </button>
-                    <button
-                      className="rt-vehicle-icon-button rt-vehicle-icon-button-danger"
-                      type="button"
-                      onClick={() => requestDelete(vehicle)}
-                      aria-label={`Delete ${vehicle.name}`}
-                    >
-                      <Trash2 size={16} />
-                    </button>
+
+                  <div className="rt-vehicle-body">
+                    <div className="rt-vehicle-title-row">
+                      <div>
+                        <h2 className="rt-vehicle-name">{vehicle.name}</h2>
+                        <p className="rt-vehicle-subtitle">{vehicle.make} {vehicle.model}</p>
+                      </div>
+                      <div className="rt-vehicle-actions">
+                        <IconButton
+                          bordered
+                          icon={Pencil}
+                          label={`Edit ${vehicle.name}`}
+                          data-testid={`vehicle-edit-${vehicle.id}`}
+                          onClick={() => openEdit(vehicle)}
+                        />
+                        <IconButton
+                          bordered
+                          tone="danger"
+                          icon={Trash2}
+                          label={`Delete ${vehicle.name}`}
+                          onClick={() => requestDelete(vehicle)}
+                        />
+                      </div>
+
+                    </div>
+
+                    <div className="rt-vehicle-specs">
+                      <div className="rt-vehicle-spec">
+                        <span className="rt-vehicle-spec-label"><ShieldCheck size={12} /> Plate</span>
+                        <strong className="rt-vehicle-spec-value rt-vehicle-spec-value--plate">{vehicle.plate}</strong>
+                      </div>
+                      <div className="rt-vehicle-spec">
+                        <span className="rt-vehicle-spec-label"><Palette size={12} /> Color</span>
+                        <strong className="rt-vehicle-spec-value">{vehicle.color}</strong>
+                      </div>
+                      <div className="rt-vehicle-spec">
+                        <span className="rt-vehicle-spec-label"><Armchair size={12} /> Seats</span>
+                        <strong className="rt-vehicle-spec-value">{vehicle.seats}</strong>
+                      </div>
+                    </div>
+
+                    <div className="rt-vehicle-footer">
+                      <span className="rt-vehicle-seat-note">Rider seats exclude the driver</span>
+                      <Button
+                        variant={vehicle.isDefault ? "subtle" : "secondary"}
+                        size="sm"
+                        onClick={() => void chooseDefault(vehicle)}
+                        disabled={vehicle.isDefault}
+                      >
+                        <Check size={14} aria-hidden="true" />
+                        {vehicle.isDefault ? "Default" : "Set as default"}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <div className="rt-vehicle-specs">
-                  <div className="rt-vehicle-spec">
-                    <span className="rt-vehicle-spec-label"><Gauge size={12} /> Plate</span>
-                    <strong className="rt-vehicle-spec-value">{vehicle.plate}</strong>
-                  </div>
-                  <div className="rt-vehicle-spec">
-                    <span className="rt-vehicle-spec-label"><Palette size={12} /> Color</span>
-                    <strong className="rt-vehicle-spec-value">{vehicle.color}</strong>
-                  </div>
-                  <div className="rt-vehicle-spec">
-                    <span className="rt-vehicle-spec-label"><Armchair size={12} /> Rider seats</span>
-                    <strong className="rt-vehicle-spec-value">{vehicle.seats}</strong>
-                  </div>
-                </div>
-                <div className="rt-vehicle-footer">
-                  <span className="rt-vehicle-seat-note">Rider seats exclude the driver</span>
-                  <button
-                    className="rt-vehicle-default-button"
-                    type="button"
-                    onClick={() => void chooseDefault(vehicle)}
-                    disabled={vehicle.isDefault}
-                  >
-                    <Check size={14} /> {vehicle.isDefault ? "Default vehicle" : "Set as default"}
-                  </button>
-                </div>
-              </div>
-            </article>
-          ))}
-        </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </Group>
       </div>
 
       <Modal
@@ -569,58 +529,129 @@ export function VehiclesPage() {
               onDismiss={vehicleDraft.dismissBanner}
             />
           ) : null}
-          <p className="rt-vehicle-form-intro"><UserRound size={17} /> Vehicle details are private and can only be managed by the active profile.</p>
+
+          <p className="rt-vehicle-form-intro">
+            <ShieldCheck size={17} aria-hidden="true" />
+            Vehicle details are private and can only be managed by the active profile.
+          </p>
+
           <div className="rt-vehicle-form-grid">
             <label className="rt-vehicle-field rt-vehicle-field-full">
               <span className="rt-vehicle-label">Vehicle nickname</span>
-              <input className="rt-vehicle-input" data-testid="vehicle-name" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} placeholder="e.g. Green City Car" aria-invalid={Boolean(errors.name)} />
+              <input
+                className="rt-vehicle-input"
+                data-testid="vehicle-name"
+                value={draft.name}
+                onChange={(event) => updateDraft("name", event.target.value)}
+                placeholder="e.g. Green City Car"
+                aria-invalid={Boolean(errors.name)}
+              />
               {errors.name && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.name}</span>}
             </label>
+
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Make</span>
-              <input className="rt-vehicle-input" data-testid="vehicle-make" value={draft.make} onChange={(event) => updateDraft("make", event.target.value)} placeholder="e.g. Toyota" autoComplete="off" aria-invalid={Boolean(errors.make)} />
+              <input
+                className="rt-vehicle-input"
+                data-testid="vehicle-make"
+                value={draft.make}
+                onChange={(event) => updateDraft("make", event.target.value)}
+                placeholder="e.g. Toyota"
+                autoComplete="off"
+                aria-invalid={Boolean(errors.make)}
+              />
               {errors.make && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.make}</span>}
             </label>
+
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Model</span>
-              <input className="rt-vehicle-input" data-testid="vehicle-model" value={draft.model} onChange={(event) => updateDraft("model", event.target.value)} placeholder="e.g. Corolla" autoComplete="off" aria-invalid={Boolean(errors.model)} />
+              <input
+                className="rt-vehicle-input"
+                data-testid="vehicle-model"
+                value={draft.model}
+                onChange={(event) => updateDraft("model", event.target.value)}
+                placeholder="e.g. Corolla"
+                autoComplete="off"
+                aria-invalid={Boolean(errors.model)}
+              />
               {errors.model && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.model}</span>}
             </label>
+
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Color</span>
-              <input className="rt-vehicle-input" data-testid="vehicle-color" value={draft.color} onChange={(event) => updateDraft("color", event.target.value)} placeholder="e.g. Green" autoComplete="off" aria-invalid={Boolean(errors.color)} />
+              <input
+                className="rt-vehicle-input"
+                data-testid="vehicle-color"
+                value={draft.color}
+                onChange={(event) => updateDraft("color", event.target.value)}
+                placeholder="e.g. Green"
+                autoComplete="off"
+                aria-invalid={Boolean(errors.color)}
+              />
               {errors.color && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.color}</span>}
             </label>
+
             <label className="rt-vehicle-field">
               <span className="rt-vehicle-label">Registration plate</span>
-              <input className="rt-vehicle-input" data-testid="vehicle-plate" value={draft.plate} onChange={(event) => updateDraft("plate", event.target.value.toUpperCase())} placeholder="e.g. WB 12 AB 1234" autoCapitalize="characters" aria-invalid={Boolean(errors.plate)} />
+              <input
+                className="rt-vehicle-input rt-vehicle-input--plate"
+                data-testid="vehicle-plate"
+                value={draft.plate}
+                onChange={(event) => updateDraft("plate", event.target.value.toUpperCase())}
+                placeholder="e.g. WB 12 AB 1234"
+                autoCapitalize="characters"
+                spellCheck={false}
+                aria-invalid={Boolean(errors.plate)}
+              />
               {errors.plate && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.plate}</span>}
             </label>
+
             <label className="rt-vehicle-field rt-vehicle-field-full">
-               <span className="rt-vehicle-label">Available rider seats <span>(1–12, excluding the driver)</span></span>
-               <input className="rt-vehicle-input" data-testid="vehicle-seats" type="number" min={1} max={12} step={1} value={draft.seats} onChange={(event) => updateDraft("seats", Number(event.target.value))} aria-invalid={Boolean(errors.seats)} />
+              <span className="rt-vehicle-label">Available rider seats <span>(1�12, excluding the driver)</span></span>
+              <input
+                className="rt-vehicle-input"
+                data-testid="vehicle-seats"
+                type="number"
+                min={1}
+                max={12}
+                step={1}
+                value={draft.seats}
+                onChange={(event) => updateDraft("seats", Number(event.target.value))}
+                aria-invalid={Boolean(errors.seats)}
+              />
               {errors.seats && <span className="rt-vehicle-field-error"><AlertCircle size={12} />{errors.seats}</span>}
             </label>
           </div>
+
           <div className="rt-vehicle-form-actions">
-            <button className="rt-vehicle-secondary" type="button" onClick={closeForm} disabled={saving}>Cancel</button>
-            <button className="rt-vehicle-primary" data-testid="vehicle-save" type="submit" disabled={saving}>
-              <Check size={15} /> {saving ? "Saving…" : editingVehicle ? "Save changes" : "Add vehicle"}
-            </button>
+            <Button variant="ghost" onClick={closeForm} disabled={saving}>Cancel</Button>
+            <Button type="submit" data-testid="vehicle-save" loading={saving} loadingLabel="Saving">
+              {saving ? null : <Check size={15} aria-hidden="true" />}
+              {editingVehicle ? "Save changes" : "Add vehicle"}
+            </Button>
           </div>
         </form>
       </Modal>
 
-      <Modal isOpen={Boolean(pendingDelete)} onClose={() => !deleting && setPendingDelete(null)} title="Delete vehicle?" size="sm">
+      <Modal
+        isOpen={Boolean(pendingDelete)}
+        onClose={() => !deleting && setPendingDelete(null)}
+        title="Delete vehicle?"
+        size="sm"
+      >
         <p className="rt-vehicle-delete-copy">
           This removes <strong>{pendingDelete?.name}</strong> from your active profile. This action cannot be undone.
         </p>
-        <div className="rt-vehicle-delete-warning"><AlertCircle size={16} /> Vehicles linked to active or completed rides cannot be deleted.</div>
-        <div className="rt-vehicle-form-actions" style={{ marginTop: 20 }}>
-          <button className="rt-vehicle-secondary" type="button" onClick={() => setPendingDelete(null)} disabled={deleting}>Keep vehicle</button>
-          <button className="rt-vehicle-danger" type="button" onClick={() => void confirmDelete()} disabled={deleting}>
-            <Trash2 size={15} /> {deleting ? "Deleting…" : "Delete"}
-          </button>
+        <div className="rt-vehicle-delete-warning">
+          <AlertCircle size={16} aria-hidden="true" />
+          Vehicles linked to active or completed rides cannot be deleted.
+        </div>
+        <div className="rt-vehicle-form-actions" style={{ marginTop: 18 }}>
+          <Button variant="ghost" onClick={() => setPendingDelete(null)} disabled={deleting}>Keep vehicle</Button>
+          <Button variant="danger" onClick={() => void confirmDelete()} loading={deleting} loadingLabel="Deleting">
+            <Trash2 size={15} aria-hidden="true" />
+            Delete
+          </Button>
         </div>
       </Modal>
     </div>

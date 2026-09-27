@@ -24,7 +24,7 @@ test.describe("boot and routing", () => {
   });
 
   test("protected routes redirect to login and remember the destination", async ({ page }) => {
-    for (const route of ["/find", "/offer", "/rides", "/bookings", "/notifications", "/profile", "/vehicles", "/safety", "/settings"]) {
+    for (const route of ["/find", "/offer", "/rides", "/bookings", "/chat", "/chat/some-ride", "/notifications", "/profile", "/vehicles", "/safety", "/settings"]) {
       await page.goto(route);
       await expect(page).toHaveURL(/\/login/);
     }

@@ -1,58 +1,65 @@
 import { useEffect, useRef, useState } from "react";
-import type { LucideIcon } from "lucide-react";
-import {
-  Bell,
-  Car,
-  CarFront,
-  CircleUserRound,
-  CloudOff,
-  Ellipsis,
-  Home,
-  PlusCircle,
-  Route,
-  Search,
-  Settings,
-  ShieldCheck,
-  TicketCheck,
-} from "lucide-react";
+import { Bell, CarFront, CloudOff, Ellipsis } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { UserMenu } from "./UserMenu";
+import { GlobalSearch } from "./GlobalSearch";
 import { AppLoadingScreen, InlineRefreshIndicator } from "./LoadingScreen";
 import { useApp } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
+import { navigationItems } from "../config/navigation";
 import type { AppNotification } from "../types";
-
-interface NavigationItem {
-  label: string;
-  to: string;
-  icon: LucideIcon;
-  end?: boolean;
-  /**
-   * Rendered as the raised, filled action in the mobile bottom bar.
-   *
-   * Offering a ride is the one thing a member came here to do that does not
-   * start from a search, so it gets the same weight in the navigation that it
-   * gets on the home page. Only honoured on mobile - the desktop sidebar is a
-   * flat list and would read as an error there.
-   */
-  emphasis?: boolean;
-}
-
-const navigationItems: NavigationItem[] = [
-  { label: "Home", to: "/", icon: Home, end: true },
-  { label: "Find a ride", to: "/find", icon: Search },
-  { label: "Offer a ride", to: "/offer", icon: PlusCircle, emphasis: true },
-  { label: "My rides", to: "/rides", icon: Route },
-  { label: "My bookings", to: "/bookings", icon: TicketCheck },
-  { label: "Notifications", to: "/notifications", icon: Bell },
-  { label: "Profile", to: "/profile", icon: CircleUserRound },
-  { label: "Vehicles", to: "/vehicles", icon: Car },
-  { label: "Safety", to: "/safety", icon: ShieldCheck },
-  { label: "Settings", to: "/settings", icon: Settings },
-];
 
 const primaryMobileItems = navigationItems.slice(0, 5);
 const moreMobileItems = navigationItems.slice(5);
+
+/**
+ * Where the member is, as a trail.
+ *
+ * A breadcrumb is only honest if the ancestors are real places to go back to, so
+ * only the top-level section is a link; the current page is the leaf. A route
+ * with no known label falls back to the section it sits under rather than
+ * showing a raw path segment to the member.
+ */
+function Breadcrumbs() {
+  const location = useLocation();
+  const { pathname } = location;
+
+  const section = navigationItems.find(
+    (item) => item.to !== "/" && pathname.startsWith(item.to),
+  );
+
+  if (!section) {
+    // Home, or an unknown path. Home needs no trail of its own.
+    return null;
+  }
+
+  const isSectionRoot = pathname === section.to;
+  const isRideDetail = section.to === "/rides" && pathname !== "/rides";
+  const currentLabel = isRideDetail ? "Ride details" : section.label;
+
+  return (
+    <nav aria-label="Breadcrumb">
+      <ol className="app-breadcrumbs">
+        <li className="app-breadcrumbs__item">
+          <NavLink className="app-breadcrumbs__link" to="/">
+            Home
+          </NavLink>
+        </li>
+        <li className="app-breadcrumbs__item">
+          {isRideDetail ? (
+            <NavLink className="app-breadcrumbs__link" to={section.to}>
+              {section.label}
+            </NavLink>
+          ) : null}
+          {isRideDetail ? <span aria-hidden="true">/</span> : null}
+          <span className="app-breadcrumbs__current" aria-current="page">
+            {currentLabel}
+          </span>
+        </li>
+      </ol>
+    </nav>
+  );
+}
 
 function getUnreadCount(notifications: AppNotification[], userId?: string): number {
   if (!userId) return 0;
@@ -142,12 +149,16 @@ export function Layout() {
 
       <div className="app-shell__content">
         <header className="app-topbar">
-          <NavLink className="app-topbar__brand" to="/" aria-label="RideTogether home">
-            <span className="app-brand__mark" aria-hidden="true">
-              <CarFront size={22} />
-            </span>
-            <strong>RideTogether</strong>
-          </NavLink>
+          <div className="app-topbar__context">
+            <NavLink className="app-topbar__brand" to="/" aria-label="RideTogether home">
+              <span className="app-brand__mark" aria-hidden="true">
+                <CarFront size={22} />
+              </span>
+              <strong>RideTogether</strong>
+            </NavLink>
+            <Breadcrumbs />
+          </div>
+          <GlobalSearch />
           <div className="app-topbar__actions">
             <NavLink
               className={({ isActive }) => `app-icon-button${isActive ? " is-active" : ""}`}

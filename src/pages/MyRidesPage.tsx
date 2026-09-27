@@ -29,8 +29,10 @@ import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import RideCard from "../components/RideCard";
 import { BookingStatusBadge, isLiveRide, nextStepFor } from "../components/StatusBadge";
+import { Tabs } from "../components/ui/Tabs";
 import { useApp } from "../context/AppContext";
-import type { Booking, BookingStatus, Ride, User, Vehicle } from "../types";
+import { formatRupees } from "../services/fare";
+import type { Booking, BookingStatus, Payment, Ride, User, Vehicle } from "../types";
 
 /**
  * "Departed" is a published ride whose departure time has passed but which the
@@ -48,92 +50,84 @@ interface LifecycleDialog {
 }
 
 const myRidesStyles = `
-.rt-rides-page { min-height: 100%; padding: 28px 20px 60px; color: var(--rt-text, #17231c); background: var(--rt-surface-subtle, #f6faf7); }
+.rt-rides-page { min-height: 100%; padding: 28px 20px 60px; color: var(--rt-text, var(--rt-text-strong)); background: var(--rt-surface-subtle, var(--rt-surface-subtle)); }
 .rt-rides-shell { max-width: 1180px; margin: 0 auto; }
-.rt-rides-heading { display: flex; align-items: center; gap: 7px; color: #148642; font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.rt-rides-offer { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 17px; border: 0; border-radius: 12px; color: #fff; background: #159447; box-shadow: 0 8px 20px rgba(21,148,71,.2); font: inherit; font-size: .84rem; font-weight: 780; text-decoration: none; cursor: pointer; }
-.rt-rides-offer:hover { background: #10813b; }
+.rt-rides-heading { display: flex; align-items: center; gap: 7px; color: var(--rt-primary-strong); font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.rt-rides-offer { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 17px; border: 0; border-radius: 12px; color: var(--rt-text-inverse); background: var(--rt-primary); box-shadow: 0 8px 20px color-mix(in srgb, var(--rt-primary) 20%, transparent); font: inherit; font-size: .84rem; font-weight: 780; text-decoration: none; cursor: pointer; }
+.rt-rides-offer:hover { background: var(--rt-primary-strong); }
 .rt-rides-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 22px 0 20px; }
-.rt-rides-stat { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 15px; border: 1px solid var(--rt-border, #dce7df); border-radius: 17px; background: var(--rt-card, #fff); box-shadow: 0 8px 24px rgba(29,64,42,.045); }
-.rt-rides-stat-icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: #148642; background: #e2f5e8; }
-.rt-rides-stat:nth-child(2) .rt-rides-stat-icon { color: #2563a7; background: #eaf2fb; }
-.rt-rides-stat:nth-child(3) .rt-rides-stat-icon { color: #a56608; background: #fff4dd; }
-.rt-rides-stat:nth-child(4) .rt-rides-stat-icon { color: #7651a8; background: #f1eafb; }
+.rt-rides-stat { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 15px; border: 1px solid var(--rt-border, var(--rt-border)); border-radius: 17px; background: var(--rt-card, var(--rt-card)); box-shadow: 0 8px 24px color-mix(in srgb, var(--rt-primary) 5%, transparent); }
+.rt-rides-stat-icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-rides-stat:nth-child(2) .rt-rides-stat-icon { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-rides-stat:nth-child(3) .rt-rides-stat-icon { color: var(--rt-warning-text); background: var(--rt-warning-border); }
+.rt-rides-stat:nth-child(4) .rt-rides-stat-icon { color: var(--rt-info-text); background: var(--rt-info-soft); }
 .rt-rides-stat strong { display: block; font-size: 1.16rem; line-height: 1; }
-.rt-rides-stat span:last-child { display: block; margin-top: 5px; color: #748178; font-size: .72rem; }
-.rt-rides-alert { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid #efb9b9; border-radius: 13px; color: #a43131; background: #fff1f1; font-size: .81rem; line-height: 1.45; }
-.rt-rides-alert-success { border-color: #bce4c9; color: #116f38; background: #edf9f1; }
+.rt-rides-stat span:last-child { display: block; margin-top: 5px; color: var(--rt-muted); font-size: .72rem; }
+.rt-rides-alert { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--rt-danger-border); border-radius: 13px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .81rem; line-height: 1.45; }
+.rt-rides-alert-success { border-color: var(--rt-border); color: var(--rt-primary-strong); background: var(--rt-surface-subtle); }
 .rt-rides-alert svg { flex: 0 0 auto; margin-top: 1px; }
-.rt-rides-tabs { display: flex; gap: 7px; overflow-x: auto; margin-bottom: 23px; padding: 5px; border: 1px solid var(--rt-border, #dce7df); border-radius: 15px; background: var(--rt-card, #fff); scrollbar-width: none; }
-.rt-rides-tab { min-height: 39px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 1 0 auto; padding: 0 13px; border: 0; border-radius: 11px; color: #657269; background: transparent; font: inherit; font-size: .79rem; font-weight: 750; cursor: pointer; }
-.rt-rides-tab:hover { background: #f2f7f4; }
-.rt-rides-tab.is-active { color: #fff; background: #159447; box-shadow: 0 5px 13px rgba(21,148,71,.18); }
-.rt-rides-tab-count { min-width: 22px; padding: 3px 6px; border-radius: 999px; color: #4f5f56; background: #edf2ef; font-size: .65rem; line-height: 1; }
-.rt-rides-tab.is-active .rt-rides-tab-count { color: #116f38; background: #fff; }
+/* Layout wrapper only - the tab strip itself is the shared .rt-tabs component. */
+.rt-rides-tabs { margin-bottom: 23px; }
 .rt-rides-section { margin-top: 25px; }
 .rt-rides-section:first-of-type { margin-top: 0; }
 .rt-rides-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; margin-bottom: 13px; }
 .rt-rides-section-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.rt-rides-section-title > span { width: 35px; height: 35px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px; color: #148642; background: #e2f5e8; }
+.rt-rides-section-title > span { width: 35px; height: 35px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
 .rt-rides-section h2 { margin: 0; font-size: 1.06rem; letter-spacing: -.018em; }
-.rt-rides-section-head p { margin: 4px 0 0; color: #748178; font-size: .78rem; }
+.rt-rides-section-head p { margin: 4px 0 0; color: var(--rt-muted); font-size: .78rem; }
 .rt-rides-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px; align-items: start; }
 .rt-rides-grid .ride-card { height: 100%; }
 .rt-rides-context { display: flex; flex-wrap: wrap; gap: 7px; }
-.rt-rides-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 999px; color: #526259; background: #f1f5f2; font-size: .69rem; font-weight: 720; }
-.rt-rides-pill--warning { color: #925d08; background: #fff3da; }
-.rt-rides-pill--success { color: #126f39; background: #e3f5e9; }
-.rt-rides-pill--danger { color: #9e3636; background: #fdeaea; }
+.rt-rides-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 999px; color: var(--rt-text); background: var(--rt-surface-subtle); font-size: .69rem; font-weight: 720; }
+.rt-rides-pill--warning { color: var(--rt-warning-text); background: var(--rt-warning-border); }
+.rt-rides-pill--success { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-rides-pill--danger { color: var(--rt-danger-text); background: var(--rt-danger-soft); }
 .rt-rides-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; }
 .rt-rides-action { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border-radius: 11px; font: inherit; font-size: .78rem; font-weight: 760; text-decoration: none; cursor: pointer; }
-.rt-rides-action--primary { border: 0; color: #fff; background: #159447; }
-.rt-rides-action--primary:hover { background: #10813b; }
-.rt-rides-action--secondary { border: 1px solid #d8e3db; color: #4d5d54; background: #fff; }
-.rt-rides-action--secondary:hover { border-color: #b9d6c3; background: #f1f9f4; }
-.rt-rides-action--danger { border: 1px solid #edc2c2; color: #a63838; background: #fff7f7; }
-.rt-rides-action--danger:hover { background: #feecec; }
+.rt-rides-action--primary { border: 0; color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-rides-action--primary:hover { background: var(--rt-primary-strong); }
+.rt-rides-action--secondary { border: 1px solid var(--rt-border); color: var(--rt-text); background: var(--rt-card); }
+.rt-rides-action--secondary:hover { border-color: var(--rt-border); background: var(--rt-surface-subtle); }
+.rt-rides-action--danger { border: 1px solid var(--rt-danger-border); color: var(--rt-danger-text); background: var(--rt-danger-soft); }
+.rt-rides-action--danger:hover { background: var(--rt-danger-soft); }
 .rt-rides-action:disabled { opacity: .48; cursor: not-allowed; }
-.rt-rides-action-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: #7a877f; font-size: .69rem; line-height: 1.4; }
-.rt-rides-empty { min-height: 220px; display: grid; place-items: center; border: 1px dashed #cad8cf; border-radius: 20px; background: rgba(255,255,255,.55); }
-.rt-rides-requests { margin-bottom: 26px; border: 1px solid #cfe5d6; border-radius: 21px; background: linear-gradient(145deg, #f2faf5, #fff); box-shadow: 0 10px 30px rgba(29,64,42,.05); overflow: hidden; }
-.rt-rides-requests-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid #e1ece4; }
+.rt-rides-action-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: var(--rt-muted); font-size: .69rem; line-height: 1.4; }
+.rt-rides-empty { min-height: 220px; display: grid; place-items: center; border: 1px dashed var(--rt-border); border-radius: 20px; background: rgba(255,255,255,.55); }
+.rt-rides-requests { margin-bottom: 26px; border: 1px solid var(--rt-border); border-radius: 21px; background: linear-gradient(145deg, var(--rt-surface-subtle), var(--rt-card)); box-shadow: 0 10px 30px color-mix(in srgb, var(--rt-primary) 5%, transparent); overflow: hidden; }
+.rt-rides-requests-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--rt-surface-muted); }
 .rt-rides-requests-title { display: flex; align-items: center; gap: 10px; }
-.rt-rides-requests-title > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; color: #fff; background: #159447; }
+.rt-rides-requests-title > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; color: var(--rt-text-inverse); background: var(--rt-primary); }
 .rt-rides-requests h2 { margin: 0; font-size: 1rem; }
-.rt-rides-requests-head p { margin: 3px 0 0; color: #6d7b73; font-size: .75rem; }
-.rt-rides-request-count { min-width: 28px; padding: 5px 8px; border-radius: 999px; color: #116e38; background: #dff4e6; font-size: .72rem; font-weight: 800; text-align: center; }
+.rt-rides-requests-head p { margin: 3px 0 0; color: var(--rt-muted); font-size: .75rem; }
+.rt-rides-request-count { min-width: 28px; padding: 5px 8px; border-radius: 999px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); font-size: .72rem; font-weight: 800; text-align: center; }
 .rt-rides-request-list { display: grid; gap: 10px; padding: 14px; }
-.rt-rides-request { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 13px; border: 1px solid #e0e9e3; border-radius: 15px; background: #fff; }
+.rt-rides-request { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 13px; border: 1px solid var(--rt-border); border-radius: 15px; background: var(--rt-card); }
 .rt-rides-request-main { min-width: 0; }
 .rt-rides-request-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .rt-rides-request-title strong { font-size: .86rem; }
-.rt-rides-request-main p { margin: 5px 0 0; overflow: hidden; color: #68766e; font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
-.rt-rides-request-time { margin-top: 5px; color: #89958e; font-size: .69rem; }
+.rt-rides-request-main p { margin: 5px 0 0; overflow: hidden; color: var(--rt-text); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.rt-rides-request-time { margin-top: 5px; color: var(--rt-muted); font-size: .69rem; }
 .rt-rides-request-actions { display: flex; gap: 7px; }
 .rt-rides-request-button { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border-radius: 10px; font: inherit; font-size: .75rem; font-weight: 760; cursor: pointer; }
-.rt-rides-request-button--confirm { border: 0; color: #fff; background: #159447; }
-.rt-rides-request-button--reject { border: 1px solid #e1d5d5; color: #8a4545; background: #fff; }
+.rt-rides-request-button--confirm { border: 0; color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-rides-request-button--reject { border: 1px solid var(--rt-danger-border); color: var(--rt-danger-text); background: var(--rt-card); }
 .rt-rides-request-button:disabled { opacity: .48; cursor: not-allowed; }
-.rt-rides-modal-copy { display: grid; gap: 13px; color: #59675f; font-size: .86rem; line-height: 1.6; }
-.rt-rides-modal-warning { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: #8f3838; background: #fff0f0; font-size: .79rem; line-height: 1.5; }
+.rt-rides-modal-copy { display: grid; gap: 13px; color: var(--rt-text); font-size: .86rem; line-height: 1.6; }
+.rt-rides-modal-warning { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .79rem; line-height: 1.5; }
 .rt-rides-modal-warning svg { flex: 0 0 auto; margin-top: 2px; }
-.rt-rides-modal-note { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: #3f5c4a; background: #eef7f1; font-size: .79rem; line-height: 1.5; }
-.rt-rides-modal-note svg { flex: 0 0 auto; margin-top: 2px; color: #159447; }
-.rt-rides-pill--info { color: #1d5f9e; background: #e4f0fb; }
-.rt-rides-request-button--primary { border: 0; color: #fff; background: #159447; }
-.rt-rides-request-button--secondary { border: 1px solid #dbe6de; color: #3f5c4a; background: #fff; }
+.rt-rides-modal-note { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border-radius: 12px; color: var(--rt-text); background: var(--rt-text); font-size: .79rem; line-height: 1.5; }
+.rt-rides-modal-note svg { flex: 0 0 auto; margin-top: 2px; color: var(--rt-primary); }
+.rt-rides-pill--info { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-rides-request-button--primary { border: 0; color: var(--rt-text-inverse); background: var(--rt-primary); }
+.rt-rides-request-button--secondary { border: 1px solid var(--rt-border); color: var(--rt-text); background: var(--rt-card); }
 .rt-rides-modal-footer { display: flex; justify-content: flex-end; gap: 9px; width: 100%; }
 .rt-spin { animation: rt-rides-spin .8s linear infinite; }
 @keyframes rt-rides-spin { to { transform: rotate(360deg); } }
-[data-theme="dark"] .rt-rides-page { --rt-surface-subtle: #101712; --rt-card: #17211a; --rt-border: #2b3a30; --rt-text: #eef7f1; }
-[data-theme="dark"] .rt-rides-stat, [data-theme="dark"] .rt-rides-tabs, [data-theme="dark"] .rt-rides-empty { background: #17211a; border-color: #2b3a30; }
-[data-theme="dark"] .rt-rides-tab { color: #b2c0b7; }
-[data-theme="dark"] .rt-rides-tab:hover { background: #1d2a21; }
-[data-theme="dark"] .rt-rides-tab.is-active { color: #fff; background: #159447; }
-[data-theme="dark"] .rt-rides-tab-count { color: #eef7f1; background: #2b3930; }
-[data-theme="dark"] .rt-rides-section-head p, [data-theme="dark"] .rt-rides-requests-head p, [data-theme="dark"] .rt-rides-request-main p, [data-theme="dark"] .rt-rides-request-time { color: #a6b5ac; }
-[data-theme="dark"] .rt-rides-requests { background: #17211a; border-color: #31533d; }
-[data-theme="dark"] .rt-rides-requests-head { border-color: #2b3a30; }
+[data-theme="dark"] .rt-rides-page { --rt-surface-subtle: var(--rt-surface-subtle); --rt-card: var(--rt-surface); --rt-border: var(--rt-border); --rt-text: var(--rt-text); }
+[data-theme="dark"] .rt-rides-stat, [data-theme="dark"] .rt-rides-empty { background: var(--rt-surface); border-color: var(--rt-border); }
+[data-theme="dark"] .rt-rides-section-head p, [data-theme="dark"] .rt-rides-requests-head p, [data-theme="dark"] .rt-rides-request-main p, [data-theme="dark"] .rt-rides-request-time { color: var(--rt-muted); }
+[data-theme="dark"] .rt-rides-requests { background: var(--rt-surface); border-color: #31533d; }
+[data-theme="dark"] .rt-rides-requests-head { border-color: var(--rt-border); }
 [data-theme="dark"] .rt-rides-request { background: #1a251e; border-color: #304037; }
 [data-theme="dark"] .rt-rides-pill { color: #c7d2cb; background: #243128; }
 /*
@@ -143,22 +137,21 @@ const myRidesStyles = `
  * a hand-maintained dark theme falls apart.
  */
 [data-theme="dark"] .rt-rides-pill--info { color: #bcd8f0; background: #1d2c3a; }
-[data-theme="dark"] .rt-rides-pill--warning { color: #f0d199; background: #33290f; }
-[data-theme="dark"] .rt-rides-pill--success { color: #a9e0c1; background: #16301f; }
-[data-theme="dark"] .rt-rides-pill--danger { color: #f0b4b4; background: #341c1c; }
+[data-theme="dark"] .rt-rides-pill--warning { color: var(--rt-warning-text); background: #33290f; }
+[data-theme="dark"] .rt-rides-pill--success { color: var(--rt-success-text); background: #16301f; }
+[data-theme="dark"] .rt-rides-pill--danger { color: var(--rt-danger-text); background: #341c1c; }
 [data-theme="dark"] .rt-rides-action--primary { background: #1fae55; }
-[data-theme="dark"] .rt-rides-action--danger { color: #f0b4b4; background: #2a1717; border-color: #5c3232; }
-[data-theme="dark"] .rt-rides-action-note { color: #a6b5ac; }
+[data-theme="dark"] .rt-rides-action--danger { color: var(--rt-danger-text); background: #2a1717; border-color: #5c3232; }
+[data-theme="dark"] .rt-rides-action-note { color: var(--rt-muted); }
 [data-theme="dark"] .rt-rides-action-note svg { color: #8be0a6; }
 [data-theme="dark"] .rt-rides-modal-copy { color: #c2d0c8; }
 [data-theme="dark"] .rt-rides-modal-note { color: #bcd8c6; background: #17281d; }
-[data-theme="dark"] .rt-rides-modal-warning { color: #f0b4b4; background: #2a1717; }
-[data-theme="dark"] .rt-rides-tab:hover { background: #1d2a21; }
+[data-theme="dark"] .rt-rides-modal-warning { color: var(--rt-danger-text); background: #2a1717; }
 [data-theme="dark"] .rt-rides-action--secondary, [data-theme="dark"] .rt-rides-request-button--reject { color: #dce7df; background: #1a251e; border-color: #3a4a40; }
 [data-theme="dark"] .rt-rides-request-button--primary { background: #1fae55; }
 [data-theme="dark"] .rt-rides-request-button--secondary { color: #dce7df; background: #1a251e; border-color: #3a4a40; }
-[data-theme="dark"] .rt-rides-alert { border-color: #5c3232; color: #f0b4b4; background: #2a1717; }
-[data-theme="dark"] .rt-rides-alert-success { border-color: #2f6b45; color: #a9e0c1; background: #16291d; }
+[data-theme="dark"] .rt-rides-alert { border-color: #5c3232; color: var(--rt-danger-text); background: #2a1717; }
+[data-theme="dark"] .rt-rides-alert-success { border-color: #2f6b45; color: var(--rt-success-text); background: #16291d; }
 @media (max-width: 900px) { .rt-rides-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) {
   .rt-rides-page { padding: 18px 14px 44px; }
@@ -262,23 +255,30 @@ interface RosterAction {
  * Which controls a host may use on one booking, given the state of both the
  * booking and its ride.
  *
+ * Accepting a request does not confirm it: it moves the seat to
+ * `payment_pending`, which is the state the rider pays from. Confirming is the
+ * host resolving that payment, and it is a different button in a different state
+ * for a reason - a seat the rider has not paid for must not look like a seat
+ * they have.
+ *
  * Seats are already held from `payment_pending`, so a payment the rider has
  * already opened must be resolvable on a departed ride. Pickup is only
  * meaningful once the trip is actually running: recording a boarding on a ride
- * that has not left yet would let a host claim a seat on a cancelled trip.
+ * that has not left yet would let a host claim a seat on a cancelled trip, which
+ * is also what the database now refuses.
  */
 function rosterActionsFor(booking: Booking, ride: Ride): RosterAction[] {
   if (booking.status === "pending") {
     if (ride.status !== "active") return [];
     return [
-      { kind: "accept", label: "Confirm", status: "confirmed", icon: Check, tone: "primary" },
+      { kind: "accept", label: "Accept", status: "payment_pending", icon: Check, tone: "primary" },
       { kind: "accept", label: "Reject", status: "rejected", icon: X, tone: "danger" },
     ];
   }
   if (booking.status === "payment_pending") {
     if (!isLiveRide(ride.status)) return [];
     return [
-      { kind: "payment", label: "Payment failed", status: "rejected", icon: X, tone: "danger" },
+      { kind: "payment", label: "Payment not received", status: "rejected", icon: X, tone: "danger" },
       { kind: "payment", label: "Payment received", status: "confirmed", icon: CreditCard, tone: "primary" },
     ];
   }
@@ -299,7 +299,6 @@ interface RideRosterProps {
   onBookingStatus: (booking: Booking, status: BookingStatus) => void;
   onPayment: (booking: Booking, outcome: PaymentOutcome) => void;
 }
-
 function RideRoster({ rows, users, busyKey, onBookingStatus, onPayment }: RideRosterProps) {
   const locked = Boolean(busyKey);
   if (rows.length === 0) return null;
@@ -324,7 +323,7 @@ function RideRoster({ rows, users, busyKey, onBookingStatus, onPayment }: RideRo
           const hasCapacity = ride.availableSeats >= booking.seats;
           const next = nextStepFor(booking.status, true);
           const actions = rosterActionsFor(booking, ride).map((action) => (
-            action.kind === "accept" && action.status === "confirmed" && !hasCapacity
+            action.kind === "accept" && action.status === "payment_pending" && !hasCapacity
               ? { ...action, reason: "There are not enough available seats." }
               : action
           ));
@@ -367,6 +366,106 @@ function RideRoster({ rows, users, busyKey, onBookingStatus, onPayment }: RideRo
             </article>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+interface PayoutsPanelProps {
+  /** Every payment row visible to this member, both owed and owing. */
+  payments: Payment[];
+  /** The rides this member hosts, used to tell their earnings from their costs. */
+  rides: Ride[];
+  busy: boolean;
+  onSettle: () => void;
+}
+
+/**
+ * The third leg of the placeholder payment lifecycle.
+ *
+ * Resolving a rider's payment moves the row to `success` and its `settlement` to
+ * `pending`, which is the point at which the host is notionally owed money. Until
+ * now nothing in the app could finish that story: `settlement_complete` was
+ * unreachable, so a host's earnings stayed visibly unsettled forever.
+ *
+ * This deliberately does not move money and does not claim to. There is no
+ * gateway behind these rows, so the button is worded as an acknowledgement the
+ * host makes, not a transfer the app performs.
+ */
+function PayoutsPanel({ payments, rides, busy, onSettle }: PayoutsPanelProps) {
+  /**
+   * `payments` is every row this member can see, which includes the fees they have
+   * *paid* as a rider. Those are their own costs, not earnings, so they must not be
+   * totalled as a payout or they would show up as money this host had earned. The
+   * panel is scoped to the rides on this page, which are exactly the ones they host.
+   */
+  const hostedRideIds = new Set(rides.map((ride) => ride.id));
+  const earned = payments.filter(
+    (payment) => payment.status === "success" && hostedRideIds.has(payment.rideId),
+  );
+  const awaiting = earned.filter((payment) => payment.settlement === "pending");
+  const settled = earned.filter((payment) => payment.settlement === "complete");
+
+  const totalAwaiting = awaiting.reduce((sum, payment) => sum + payment.amount, 0);
+  const totalSettled = settled.reduce((sum, payment) => sum + payment.amount, 0);
+  const routeLabel = (rideId: string): string => {
+    const ride = rides.find((candidate) => candidate.id === rideId);
+    return ride ? `${ride.origin.label} → ${ride.destination.label}` : "A finished trip";
+  };
+
+  if (earned.length === 0) return null;
+
+  return (
+    <section className="rt-rides-requests" aria-labelledby="payouts-title">
+      <div className="rt-rides-requests-head">
+        <div className="rt-rides-requests-title">
+          <span aria-hidden="true"><CreditCard size={19} /></span>
+          <div>
+            <h2 id="payouts-title">Trip payouts</h2>
+            <p>Placeholder records only. No money has moved and no gateway is connected.</p>
+          </div>
+        </div>
+        <span className="rt-rides-request-count" aria-label={`${awaiting.length} awaiting acknowledgement`}>
+          {awaiting.length}
+        </span>
+      </div>
+
+      <div className="rt-rides-request-list">
+        {awaiting.length > 0 ? awaiting.map((payment) => (
+          <article className="rt-rides-request" key={payment.id}>
+            <div className="rt-rides-request-main">
+              <div className="rt-rides-request-title">
+                <strong>{formatRupees(payment.amount)}</strong>
+                <span className="rt-rides-pill">Awaiting acknowledgement</span>
+              </div>
+              <p>{routeLabel(payment.rideId)}</p>
+            </div>
+          </article>
+        )) : (
+          <article className="rt-rides-request">
+            <div className="rt-rides-request-main">
+              <div className="rt-rides-request-title">
+                <strong>Nothing waiting</strong>
+                <span className="rt-rides-pill">{formatRupees(totalSettled)} acknowledged</span>
+              </div>
+              <p>Every payout from your finished trips has been acknowledged.</p>
+            </div>
+          </article>
+        )}
+      </div>
+
+      <div className="rt-rides-request-actions" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+        <button
+          className="rt-rides-request-button rt-rides-request-button--primary"
+          type="button"
+          disabled={busy || awaiting.length === 0}
+          onClick={onSettle}
+        >
+          {busy ? <LoaderCircle className="rt-spin" size={15} aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />}
+          {awaiting.length > 0
+            ? `Acknowledge ${formatRupees(totalAwaiting)} across ${awaiting.length} ${awaiting.length === 1 ? "trip" : "trips"}`
+            : "All payouts acknowledged"}
+        </button>
       </div>
     </section>
   );
@@ -535,10 +634,13 @@ export function MyRidesPage() {
     vehicles,
     rides,
     bookings,
-    updateBookingStatus,
+    payments,
+    acceptBooking,
+    rejectBooking,
     markPickedUp,
     markNoShow,
     resolvePayment,
+    recordPayoutPlaceholders,
     cancelRide,
     startRide,
     completeRide,
@@ -642,30 +744,41 @@ export function MyRidesPage() {
   const selectedOnBoardCount = selectedRide
     ? bookings.filter((booking) => booking.rideId === selectedRide.id && booking.status === "picked_up").length
     : 0;
+  /**
+   * Requests the host has not yet answered. Unlike the start dialog - where an
+   * unanswered request blocks the trip and must be resolved first - ending a trip
+   * cannot wait for a reply, so these are closed for the rider rather than left
+   * holding a seat on a journey that has already finished.
+   */
+  const selectedUnansweredCount = selectedRide
+    ? bookings.filter((booking) => (
+      booking.rideId === selectedRide.id
+      && (booking.status === "pending" || booking.status === "payment_pending")
+    )).length
+    : 0;
 
-   const handleBookingStatus = async (booking: Booking, status: BookingStatus) => {
+  const handleBookingStatus = async (booking: Booking, status: BookingStatus) => {
     const key = `booking:${booking.id}`;
     if (busyKey) return;
     /**
      * `rosterActionsFor` only offers states this context can actually reach.
-     * Boarding and no-show go through their own calls because each also moves
-     * seat accounting and notifies the right side; a bare status write would
-     * skip all of that. The guard makes an unreachable state a visible bug
-     * rather than a silently malformed request.
+     * Accepting, boarding and no-show each go through their own call because each
+     * also moves seat accounting, prices the fare or notifies the right side; a
+     * bare status write would skip all of that and, for acceptance, would be
+     * refused outright - `pending` cannot become `confirmed` in one step. The
+     * guard makes an unreachable state a visible bug rather than a silently
+     * malformed request.
      */
-    if (status !== "confirmed" && status !== "rejected" && status !== "picked_up" && status !== "no_show") return;
+    if (status !== "payment_pending" && status !== "rejected" && status !== "picked_up" && status !== "no_show") return;
     setBusyKey(key);
     setError("");
     setSuccess("");
     try {
-      /**
-       * Boarding and no-show are separate repository calls rather than generic
-       * status writes: each one also moves the seat accounting and notifies the
-       * right side, which a bare status update would skip.
-       */
-      if (status === "picked_up") await markPickedUp(booking.id);
+      if (status === "payment_pending") await acceptBooking(booking.id);
+      else if (status === "picked_up") await markPickedUp(booking.id);
       else if (status === "no_show") await markNoShow(booking.id);
-      else await updateBookingStatus(booking.id, status);      setSuccess(BOOKING_SUCCESS[status]);
+      else await rejectBooking(booking.id);
+      setSuccess(BOOKING_SUCCESS[status]);
     } catch (caught) {
       setError(errorText(caught, BOOKING_ERROR[status]));
     } finally {
@@ -742,6 +855,23 @@ export function MyRidesPage() {
     }
   };
 
+  const handleSettlePayouts = async () => {
+    if (busyKey) return;
+    setBusyKey("payouts");
+    setError("");
+    setSuccess("");
+    try {
+      const settled = await recordPayoutPlaceholders();
+      setSuccess(settled > 0
+        ? `Acknowledged ${settled} ${settled === 1 ? "payout" : "payouts"} from your finished trips.`
+        : "There was nothing left to acknowledge.");
+    } catch (caught) {
+      setError(errorText(caught, "We could not acknowledge your payouts."));
+    } finally {
+      setBusyKey("");
+    }
+  };
+
   const categoryTabs: Array<{ id: RideCategory; label: string; count: number }> = [
     { id: "upcoming", label: "Upcoming", count: categories.upcoming.length },
     { id: "departed", label: "Departed", count: categories.departed.length },
@@ -779,19 +909,22 @@ export function MyRidesPage() {
           onPayment={(booking, outcome) => void handlePayment(booking, outcome)}
         />
 
-        <nav className="rt-rides-tabs" aria-label="Ride status">
-          {categoryTabs.map((tab) => (
-            <button
-              key={tab.id}
-              className={`rt-rides-tab${selectedCategory === tab.id ? " is-active" : ""}`}
-              type="button"
-              aria-pressed={selectedCategory === tab.id}
-              onClick={() => setSelectedCategory(tab.id)}
-            >
-              {tab.label}<span className="rt-rides-tab-count">{tab.count}</span>
-            </button>
-          ))}
-        </nav>
+        <PayoutsPanel
+          payments={payments}
+          rides={rides}
+          busy={busyKey === "payouts"}
+          onSettle={() => void handleSettlePayouts()}
+        />
+
+        <div className="rt-rides-tabs">
+          <Tabs
+            items={categoryTabs}
+            activeId={selectedCategory}
+            onChange={(id) => setSelectedCategory(id as RideCategory)}
+            label="Ride status"
+            idPrefix="ride-category"
+          />
+        </div>
 
         <RideCategorySection
           category={selectedCategory}
@@ -848,6 +981,9 @@ export function MyRidesPage() {
             {lifecycleDialog.action === "complete" ? (
               <>
                 <div className="rt-rides-modal-note"><ShieldCheck size={17} /><span>Riders still marked confirmed are recorded as no-shows, and everyone can now rate this trip.</span></div>
+                {selectedUnansweredCount > 0 ? (
+                  <div className="rt-rides-modal-warning"><AlertCircle size={17} /><span>{selectedUnansweredCount} {selectedUnansweredCount === 1 ? "request is" : "requests are"} still unanswered and will be closed as declined. Riders are notified either way.</span></div>
+                ) : null}
                 {selectedOnBoardCount > 0 ? (
                   <div className="rt-rides-modal-note"><UsersRound size={17} /><span>{selectedOnBoardCount} {selectedOnBoardCount === 1 ? "rider is" : "riders are"} still on board and will be marked as completed.</span></div>
                 ) : null}

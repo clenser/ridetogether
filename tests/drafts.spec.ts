@@ -3,6 +3,7 @@ import {
   collectErrors,
   assertNoErrors,
   expectNoHorizontalOverflow,
+  gotoOfferStep,
   riderCredentials,
   signIn,
   waitForApp,
@@ -40,6 +41,8 @@ test.describe("draft storage contract", () => {
     await signIn(page, creds!);
     await waitForApp(page);
     await page.goto("/offer");
+    // The contribution field is on step 2 of the offer wizard.
+    await gotoOfferStep(page, 1, { force: true });
 
     // Fill fields and let the debounced writer run.
     const contribution = page.locator("#offer-contribution");

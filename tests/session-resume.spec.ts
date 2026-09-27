@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { assertNoErrors, collectErrors, driverCredentials, signIn, signOut, waitForApp } from "./helpers";
+import { assertNoErrors, collectErrors, driverCredentials, gotoOfferStep, signIn, signOut, waitForApp } from "./helpers";
 
 /**
  * Regression coverage for the "stuck on Restoring your session..." report.
@@ -120,6 +120,8 @@ test.describe("session continuity across tab switches", () => {
     await signIn(page, creds!);
     await page.goto("/offer");
     await waitForApp(page);
+    // The schedule fields live on step 2 of the offer wizard.
+    await gotoOfferStep(page, 1, { force: true });
 
     // A date/time is inert, requires no routing and no geocoding, so the
     // assertion is about React state surviving, not about the network.

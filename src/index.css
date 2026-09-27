@@ -1,31 +1,178 @@
+/* ---------------------------------------------------------------------------
+   DESIGN TOKENS
+
+   Every colour, size and duration in the product resolves through a token here.
+   Nothing below this block hard-codes a brand value, so the whole application
+   re-themes by editing this file alone.
+
+   Layering, lightest to heaviest:
+     ramp        raw brand + status values, never used for surfaces directly
+     semantic    the role a colour plays, referenced by every component
+     component   the few one-off values a specific control needs
+
+   The two themes are the same product language in two palettes. Dark is not an
+   inversion: it uses layered green-blacks for depth and keeps the brand green
+   bright and saturated, because a desaturated green on a dark surface reads as
+   disabled.
+   --------------------------------------------------------------------------- */
+
 :root {
   color-scheme: light;
-  --rt-primary: #159447;
-  --rt-primary-strong: #10813b;
-  --rt-primary-deep: #0b6e32;
-  --rt-primary-soft: #e3f5e9;
-  --rt-primary-softer: #f0faf3;
-  --rt-accent: #e88743;
-  --rt-danger: #c93f3f;
-  --rt-danger-soft: #fff0f0;
-  --rt-warning: #a4690b;
-  --rt-warning-soft: #fff6df;
-  --rt-info: #2f69a4;
-  --rt-info-soft: #eaf2fb;
-  --rt-text: #17231c;
-  --rt-text-strong: #102017;
-  --rt-muted: #65736b;
-  --rt-subtle: #849087;
+
+  /* ---- Brand ramp ------------------------------------------------------ */
+  --rt-green-100: #dcfce7;
+  --rt-green-200: #bbf7d0;
+  --rt-green-300: #16c968;
+  --rt-green-400: #16a34a;
+  --rt-green-600: #08783b;
+  --rt-green-700: #065f2e;
+  --rt-green-800: #0a3d21;
+
+  /* ---- Status ---------------------------------------------------------- */
+  --rt-success: #22c55e;
+  --rt-warning: #f59e0b;
+  --rt-danger: #ef4444;
+  --rt-info: #3b82f6;
+
+  /* ---- Brand semantics ------------------------------------------------- */
+  /* Filled primary action. */
+  --rt-primary: #16a34a;
+  --rt-primary-strong: #08783b;
+  --rt-primary-deep: #065f2e;
+  /* The brighter green, reserved for the "action" affordance such as the
+     mobile Offer button, so it can be tinted independently of the base. */
+  --rt-primary-bright: #16c968;
+  /* Tinted surfaces behind brand text. */
+  --rt-primary-soft: #dcfce7;
+  --rt-primary-softer: #effaf3;
+  --rt-accent: #f59e0b;
+
+  /* ---- Route endpoints --------------------------------------------------
+     Origin and destination are a pair, not two arbitrary colours: a member
+     scanning a route needs to tell "where I get in" from "where I get out"
+     at a glance, in every surface that draws a journey - the map, the route
+     summary, the live trip banner. Kept here so those surfaces agree. */
+  --rt-destination: #ea7317;
+  --rt-destination-soft: #ffefe2;
+  --rt-destination-text: #b45309;
+
+  /* ---- Status semantics ------------------------------------------------ */
+  /* Light theme status text is the darkened ramp, not the raw value: #16a34a
+     and #ef4444 both fail contrast on white at 12-13px. */
+  --rt-success-text: #15803d;
+  --rt-warning-text: #a16207;
+  --rt-danger-text: #b91c1c;
+  --rt-info-text: #1d4ed8;
+  --rt-danger: #ef4444;
+  --rt-danger-soft: #fef2f2;
+  --rt-danger-border: #f3c9c9;
+  --rt-warning-soft: #fffbeb;
+  --rt-warning-border: #f0dcb4;
+  --rt-info-soft: #eff6ff;
+  --rt-success-soft: #f0fdf4;
+  --rt-success-border: #c3e9d1;
+
+  /* ---- Surfaces -------------------------------------------------------- */
+  /* The page sits on a subtle green-white; cards lift off it. */
+  --rt-surface-subtle: #f5f8f5;
   --rt-surface: #ffffff;
   --rt-surface-raised: #ffffff;
-  --rt-surface-subtle: #f6faf7;
-  --rt-surface-muted: #eef4f0;
+  --rt-surface-muted: #eef3ef;
+  --rt-surface-sunken: #f0f5f1;
+  /* Interactive rest state for rows and inputs. */
+  --rt-surface-hover: #f2f7f4;
+  --rt-surface-active: #e9f2ec;
+  /* Global card token. Pages used to redeclare this locally, which is how the
+     two themes drifted apart. */
+  --rt-card: #ffffff;
+
+  /* ---- Lines ----------------------------------------------------------- */
   --rt-border: #dce7df;
-  --rt-border-strong: #c7d8cd;
-  --rt-ring: rgba(21, 148, 71, 0.24);
-  --rt-danger-ring: rgba(201, 63, 63, 0.24);
-  --rt-sidebar-width: 264px;
-  --rt-topbar-height: 72px;
+  --rt-border-strong: #c2d4c8;
+  --rt-border-subtle: #e8f0ea;
+
+  /* ---- Text ------------------------------------------------------------ */
+  --rt-text: #102019;
+  --rt-text-strong: #06120c;
+  --rt-muted: #617069;
+  --rt-subtle: #8a978f;
+  --rt-text-inverse: #ffffff;
+
+  /* ---- Overlays -------------------------------------------------------- */
+  --rt-overlay: rgba(6, 18, 12, 0.46);
+  --rt-scrim: rgba(6, 18, 12, 0.32);
+
+  /* ---- Focus + rings --------------------------------------------------- */
+  --rt-ring: rgba(22, 163, 74, 0.28);
+  --rt-danger-ring: rgba(239, 68, 68, 0.28);
+  --rt-focus-ring: 0 0 0 3px rgba(22, 163, 74, 0.34);
+
+  /* ---- Radii ----------------------------------------------------------- */
+  --rt-radius-xs: 7px;
+  --rt-radius-sm: 10px;
+  --rt-radius-md: 14px;
+  --rt-radius-lg: 18px;
+  --rt-radius-xl: 24px;
+  --rt-radius-2xl: 30px;
+  /* Pills and circular controls. */
+  --rt-radius-pill: 999px;
+  --rt-radius-card: var(--rt-radius-lg);
+
+  /* ---- Type scale ------------------------------------------------------ */
+  --rt-font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --rt-text-hero: 800 clamp(2.1rem, 1.35rem + 3vw, 3.75rem) / 1.04 var(--rt-font-sans);
+  --rt-text-title: 700 clamp(1.6rem, 1.28rem + 1.4vw, 2.25rem) / 1.15 var(--rt-font-sans);
+  --rt-text-section: 700 1.25rem / 1.25 var(--rt-font-sans);
+  --rt-text-card: 600 1.0625rem / 1.3 var(--rt-font-sans);
+  --rt-text-body: 400 0.9375rem / 1.6 var(--rt-font-sans);
+  --rt-text-meta: 500 0.8125rem / 1.45 var(--rt-font-sans);
+  --rt-text-button: 600 0.9375rem / 1.2 var(--rt-font-sans);
+  --rt-tracking-tight: -0.02em;
+  --rt-tracking-wide: 0.04em;
+
+  /* ---- Space ----------------------------------------------------------- */
+  --rt-space-1: 4px;
+  --rt-space-2: 8px;
+  --rt-space-3: 12px;
+  --rt-space-4: 16px;
+  --rt-space-5: 20px;
+  --rt-space-6: 24px;
+  --rt-space-8: 32px;
+  --rt-space-10: 40px;
+  --rt-space-12: 48px;
+  --rt-space-16: 64px;
+  /* Consistent page gutters, widened on large screens. */
+  --rt-gutter: 16px;
+  /* Content is capped so text lines stay readable on a 1920px display. */
+  --rt-content-max: 1440px;
+  --rt-content-max-narrow: 820px;
+  --rt-content-max-text: 68ch;
+
+  /* ---- Shadows --------------------------------------------------------- */
+  /* Light theme shadows are soft and neutral. The green tint is barely
+     perceptible but stops them looking grey against the green-white page. */
+  --rt-shadow-sm: 0 1px 2px rgba(10, 45, 25, 0.05), 0 2px 8px rgba(10, 45, 25, 0.04);
+  --rt-shadow-md: 0 4px 12px rgba(10, 45, 25, 0.06), 0 12px 28px rgba(10, 45, 25, 0.06);
+  --rt-shadow-lg: 0 12px 28px rgba(10, 45, 25, 0.1), 0 28px 64px rgba(10, 45, 25, 0.1);
+  --rt-shadow-card: 0 1px 2px rgba(10, 45, 25, 0.04), 0 4px 16px rgba(10, 45, 25, 0.05);
+  --rt-shadow-raised: 0 6px 20px rgba(10, 45, 25, 0.1);
+  --rt-shadow-float: 0 10px 34px rgba(10, 45, 25, 0.16);
+  /* The one glow allowed, and only on a primary CTA. */
+  --rt-shadow-glow: 0 6px 18px rgba(22, 163, 74, 0.28);
+  --rt-shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  /* ---- Motion ---------------------------------------------------------- */
+  --rt-ease: cubic-bezier(0.2, 0.6, 0.3, 1);
+  --rt-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --rt-dur-fast: 120ms;
+  --rt-dur-base: 180ms;
+  --rt-dur-slow: 280ms;
+  --rt-dur-sheet: 340ms;
+  --rt-transition: var(--rt-dur-base) var(--rt-ease);
+
+  /* ---- Layout metrics -------------------------------------------------- */
+  --rt-sidebar-width: 240px;
+  --rt-topbar-height: 64px;
   /* Space the OS status bar / notch occupies above the app. Zero in a browser, and
      zero on desktop. The native shell is edge-to-edge, so without this the sticky
      top bar sits underneath the status bar and its icons collide with the clock. */
@@ -35,51 +182,92 @@
      that reserves room for the top bar must subtract this, not --rt-topbar-height,
      or the page is one status bar taller than the bar above it. */
   --rt-topbar-total: calc(var(--rt-topbar-height) + var(--rt-safe-top));
-  --rt-mobile-nav-height: 72px;
+  --rt-mobile-nav-height: 68px;
   /* Vertical space the fixed bottom nav occupies at the foot of the page. Zero on
      desktop, where the nav is not rendered. A page that fills the viewport - the
      chat panel - subtracts this so it ends above the nav instead of behind it,
      rather than guessing the nav's height a second time. */
   --rt-mobile-nav-inset: 0px;
-  --rt-radius-sm: 10px;
-  --rt-radius-md: 14px;
-  --rt-radius-lg: 20px;
-  --rt-radius-xl: 26px;
-  --rt-shadow-sm: 0 4px 14px rgba(25, 66, 40, 0.06);
-  --rt-shadow-md: 0 12px 32px rgba(25, 66, 40, 0.08);
-  --rt-shadow-lg: 0 24px 64px rgba(17, 52, 29, 0.14);
-  --rt-transition: 180ms ease;
-  --rt-font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Minimum comfortable touch target, used by every control on touch. */
+  --rt-touch-target: 44px;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --rt-primary: #25a958;
-  --rt-primary-strong: #32b965;
-  --rt-primary-deep: #8be0a6;
-  --rt-primary-soft: #183c26;
-  --rt-primary-softer: #152b1d;
-  --rt-danger: #ef6a6a;
-  --rt-danger-soft: #351d1d;
-  --rt-warning: #f0bc58;
-  --rt-warning-soft: #372b17;
-  --rt-info: #7fb5ea;
-  --rt-info-soft: #1b3046;
-  --rt-text: #eef7f1;
+
+  /* The brand green is brightened rather than reused: the light-theme value loses
+     contrast against a green-black card. */
+  --rt-primary: #22c55e;
+  --rt-primary-strong: #16c968;
+  --rt-primary-deep: #8ce9ac;
+  --rt-primary-bright: #16c968;
+  --rt-primary-soft: #14321f;
+  --rt-primary-softer: #102818;
+  /* The light-theme green-200 is a pale mint used for borders and chips; on a
+     green-black surface it needs a muted mid green to stay a border. */
+  --rt-green-200: #2f6b46;
+  --rt-accent: #fbbf24;
+  --rt-destination: #fb923c;
+  --rt-destination-soft: #3a2411;
+  --rt-destination-text: #fdba74;
+
+  --rt-success: #22c55e;
+  --rt-warning: #f59e0b;
+  --rt-danger: #f87171;
+  --rt-info: #60a5fa;
+
+  /* Status text is the light value, not darkened, because a dark ramp value on a
+     dark card is unreadable. */
+  --rt-success-text: #6ee7a0;
+  --rt-warning-text: #fcd34d;
+  --rt-danger-text: #fca5a5;
+  --rt-info-text: #93c5fd;
+  --rt-danger-soft: #2c1618;
+  --rt-danger-border: #4b2226;
+  --rt-warning-soft: #2e2510;
+  --rt-warning-border: #4a3c1c;
+  --rt-info-soft: #10233c;
+  --rt-success-soft: #102a1b;
+  --rt-success-border: #1d4430;
+
+  /* Layered green-blacks. The page is darkest, cards lift off it, and the
+     borders are low-alpha white so surfaces separate without heavy strokes. */
+  --rt-surface-subtle: #071510;
+  --rt-surface: #10241b;
+  --rt-surface-raised: #122a20;
+  --rt-surface-muted: #0d2118;
+  --rt-surface-sunken: #0a1b14;
+  --rt-surface-hover: #16301f;
+  --rt-surface-active: #1c3a27;
+  --rt-card: #10241b;
+
+  --rt-border: rgba(255, 255, 255, 0.08);
+  --rt-border-strong: rgba(255, 255, 255, 0.16);
+  --rt-border-subtle: rgba(255, 255, 255, 0.05);
+
+  --rt-text: #f5f7f6;
   --rt-text-strong: #ffffff;
-  --rt-muted: #acbbb2;
-  --rt-subtle: #87978e;
-  --rt-surface: #17211a;
-  --rt-surface-raised: #1b271f;
-  --rt-surface-subtle: #101712;
-  --rt-surface-muted: #1d2a21;
-  --rt-border: #2b3a30;
-  --rt-border-strong: #3b5043;
-  --rt-ring: rgba(82, 211, 126, 0.3);
-  --rt-danger-ring: rgba(239, 106, 106, 0.28);
-  --rt-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.18);
-  --rt-shadow-md: 0 14px 36px rgba(0, 0, 0, 0.24);
-  --rt-shadow-lg: 0 28px 72px rgba(0, 0, 0, 0.36);
+  --rt-muted: #a9b7b0;
+  --rt-subtle: #7f8f87;
+  --rt-text-inverse: #06120c;
+
+  --rt-overlay: rgba(2, 8, 5, 0.68);
+  --rt-scrim: rgba(2, 8, 5, 0.5);
+
+  --rt-ring: rgba(34, 197, 94, 0.4);
+  --rt-danger-ring: rgba(248, 113, 113, 0.36);
+  --rt-focus-ring: 0 0 0 3px rgba(34, 197, 94, 0.45);
+
+  /* Dark shadows are near-black and paired with the border, so depth comes from
+     layering rather than a heavy drop shadow. */
+  --rt-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --rt-shadow-md: 0 6px 18px rgba(0, 0, 0, 0.4);
+  --rt-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --rt-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.34);
+  --rt-shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.44);
+  --rt-shadow-float: 0 14px 40px rgba(0, 0, 0, 0.56);
+  --rt-shadow-glow: 0 6px 20px rgba(34, 197, 94, 0.3);
+  --rt-shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 *,
@@ -343,7 +531,7 @@ tbody tr:hover {
 }
 
 .container {
-  width: min(1180px, calc(100% - 40px));
+  width: min(var(--rt-content-max), calc(100% - 2 * var(--rt-gutter)));
   margin-inline: auto;
 }
 
@@ -510,7 +698,7 @@ tbody tr:hover {
 .btn-danger {
   border-color: rgba(201, 63, 63, 0.28);
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
 }
 
 .button--ghost:hover:not(:disabled),
@@ -613,7 +801,7 @@ tbody tr:hover {
 .status-cancelled,
 .status-danger {
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
 }
 
 .status-completed,
@@ -688,7 +876,7 @@ tbody tr:hover {
 .error-message,
 .form-message--error {
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
 }
 
 .success-message,
@@ -861,7 +1049,7 @@ tbody tr:hover {
   place-items: center;
   flex: 0 0 auto;
   border-radius: 13px;
-  background: linear-gradient(145deg, #1aaa51, #0e7b39);
+  background: linear-gradient(145deg, var(--rt-primary), var(--rt-primary-strong));
   box-shadow: 0 8px 18px rgba(21, 148, 71, 0.22);
   color: #ffffff;
 }
@@ -946,7 +1134,7 @@ tbody tr:hover {
   padding: 3px 6px;
   border-radius: 999px;
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
   font-size: 0.62rem;
   font-weight: 800;
   line-height: 1.2;
@@ -1108,12 +1296,12 @@ tbody tr:hover {
 }
 
 .user-menu__item--danger {
-  color: var(--rt-danger, #c23c3c);
+  color: var(--rt-danger-text);
 }
 
 .user-menu__item--danger:hover {
   background: rgba(194, 60, 60, 0.09);
-  color: var(--rt-danger, #c23c3c);
+  color: var(--rt-danger-text);
 }
 
 .user-menu__item:disabled {
@@ -1180,6 +1368,183 @@ tbody tr:hover {
 
 .app-topbar__brand {
   min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Breadcrumbs + global search
+
+   The bar holds three things: where the member is, a way to get anywhere, and
+   their account. On a narrow viewport the search collapses away entirely
+   rather than being squeezed, because the bottom nav is the primary way to move
+   around on a phone.
+   --------------------------------------------------------------------------- */
+
+.app-topbar__context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--rt-muted);
+}
+
+.app-breadcrumbs__item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.app-breadcrumbs__item + .app-breadcrumbs__item::before {
+  content: "/";
+  color: var(--rt-subtle);
+}
+
+.app-breadcrumbs__current {
+  color: var(--rt-text);
+  font-weight: 650;
+  /* The leaf is what can be dropped first when the bar runs out of room. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-breadcrumbs__link {
+  color: var(--rt-muted);
+  text-decoration: none;
+  border-radius: 5px;
+}
+
+.app-breadcrumbs__link:hover {
+  color: var(--rt-text);
+}
+
+/* --- Search -------------------------------------------------------------- */
+
+.app-global-search {
+  position: relative;
+  flex: 0 1 auto;
+  display: flex;
+  min-width: 0;
+}
+
+.app-global-search__field .ds-input {
+  width: clamp(200px, 30vw, 380px);
+}
+
+.app-global-search__panel {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: min(460px, 70vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-lg);
+  box-shadow: var(--rt-shadow-float);
+  animation: rt-menu-in var(--rt-dur-base) var(--rt-ease-out);
+}
+
+.app-global-search__group + .app-global-search__group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--rt-border-subtle);
+}
+
+.app-global-search__heading {
+  margin: 0;
+  padding: 7px 10px 5px;
+  color: var(--rt-subtle);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: var(--rt-tracking-wide);
+  text-transform: uppercase;
+}
+
+.app-global-search__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-global-search__result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--rt-text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--rt-radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-global-search__result.is-active {
+  background: var(--rt-primary-softer);
+}
+
+.app-global-search__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: var(--rt-radius-sm);
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.app-global-search__text {
+  min-width: 0;
+}
+
+.app-global-search__label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+  /* Long place names are the common case; they must not push the panel wide. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-global-search__meta {
+  display: block;
+  margin-top: 1px;
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-global-search__empty {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--rt-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .app-topbar__brand .app-brand__mark {
@@ -1296,6 +1661,22 @@ tbody tr:hover {
   background: var(--rt-surface-subtle);
 }
 
+/* Wider gutters on a large display, where the capped content column would
+   otherwise sit in a sea of background. */
+@media (min-width: 1280px) {
+  :root {
+    --rt-gutter: 28px;
+  }
+}
+
+@media (min-width: 1600px) {
+  :root {
+    --rt-gutter: 40px;
+  }
+}
+
+/* The bottom bar is the mobile navigation. It is hidden on desktop, where the
+   sidebar is the navigation, so the two are never both present. */
 .app-mobile-navigation {
   display: none;
 }
@@ -1437,7 +1818,7 @@ tbody tr:hover {
   padding: 3px 6px;
   border-radius: 999px;
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
   font-size: 0.62rem;
   font-weight: 800;
   text-align: center;
@@ -1544,7 +1925,7 @@ tbody tr:hover {
   place-items: center;
   margin-bottom: 5px;
   border-radius: 19px;
-  background: linear-gradient(145deg, #1aaa51, #0d7738);
+  background: linear-gradient(145deg, var(--rt-primary), var(--rt-primary-strong));
   box-shadow: 0 16px 34px rgba(21, 148, 71, 0.24);
   color: #ffffff;
 }
@@ -1715,7 +2096,7 @@ tbody tr:hover {
 }
 
 .location-search__state--error {
-  color: #b33333;
+  color: var(--rt-danger-text);
 }
 
 .location-search__state button {
@@ -1811,7 +2192,7 @@ tbody tr:hover {
 }
 
 .ride-map-marker {
-  --rt-marker-color: #159447;
+  --rt-marker-color: var(--rt-primary);
   position: relative;
   width: 32px;
   height: 32px;
@@ -1840,15 +2221,15 @@ tbody tr:hover {
 }
 
 .ride-map-marker--origin {
-  --rt-marker-color: #159447;
+  --rt-marker-color: var(--rt-primary);
 }
 
 .ride-map-marker--destination {
-  --rt-marker-color: #e88743;
+  --rt-marker-color: var(--rt-accent);
 }
 
 .ride-map-marker--waypoint {
-  --rt-marker-color: #2e6d45;
+  --rt-marker-color: var(--rt-primary-deep);
   width: 29px;
   height: 29px;
 }
@@ -1920,14 +2301,14 @@ tbody tr:hover {
 }
 
 :root[data-theme="dark"] .ride-map .maplibregl-ctrl-group {
-  border-color: #3a4c40;
+  border-color: var(--rt-border-strong);
   background: rgba(23, 33, 26, 0.94);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
 }
 
 :root[data-theme="dark"] .ride-map .maplibregl-ctrl-group button {
-  border-color: #3a4c40;
-  color: #eef7f1;
+  border-color: var(--rt-border-strong);
+  color: var(--rt-text);
 }
 
 :root[data-theme="dark"] .ride-map .maplibregl-ctrl-group button:hover {
@@ -1936,7 +2317,7 @@ tbody tr:hover {
 
 :root[data-theme="dark"] .ride-map .maplibregl-ctrl-attrib {
   background: rgba(23, 33, 26, 0.86);
-  color: #b7c4bc;
+  color: var(--rt-muted);
 }
 
 :root[data-theme="dark"] .ride-map .maplibregl-ctrl-attrib a {
@@ -2050,7 +2431,7 @@ tbody tr:hover {
 .ride-card__status--cancelled,
 .ride-card__status--rejected {
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
 }
 
 .ride-card__route {
@@ -2540,7 +2921,7 @@ tbody tr:hover {
   gap: 8px;
   padding: 12px 16px;
   background: var(--rt-danger-soft);
-  color: #a62f2f;
+  color: var(--rt-danger-text);
   font-size: 0.75rem;
   line-height: 1.45;
 }
@@ -2625,7 +3006,7 @@ tbody tr:hover {
 }
 
 :root[data-theme="dark"] .app-loading strong {
-  color: #eef7f1;
+  color: var(--rt-text);
 }
 
 :root[data-theme="dark"] .app-loading__spinner {
@@ -2748,7 +3129,7 @@ tbody tr:hover {
 :root[data-theme="dark"] .rt-details-page .map-panel-header h2,
 :root[data-theme="dark"] .rt-details-page .card-title-row h2,
 :root[data-theme="dark"] .rt-details-page .empty-state h1 {
-  color: #eef7f1;
+  color: var(--rt-text);
 }
 
 :root[data-theme="dark"] .rt-home-page .hero-panel::before,
@@ -2820,7 +3201,7 @@ tbody tr:hover {
 }
 
 :root[data-theme="dark"] .rt-home-page .cta-card {
-  background: linear-gradient(120deg, #107e3c, #159447 52%, #0c6c32);
+  background: linear-gradient(120deg, #107e3c, var(--rt-primary) 52%, #0c6c32);
 }
 
 :root[data-theme="dark"] .rt-home-page .hero-panel,
@@ -2877,7 +3258,7 @@ tbody tr:hover {
 :root[data-theme="dark"] .rt-details-page .request-person strong,
 :root[data-theme="dark"] .rt-details-page .current-booking strong,
 :root[data-theme="dark"] .rt-details-page .empty-state h1 {
-  color: #eef7f1;
+  color: var(--rt-text);
 }
 
 :root[data-theme="dark"] .rt-find-page input,
@@ -2892,7 +3273,7 @@ tbody tr:hover {
 :root[data-theme="dark"] .location-search__input {
   border-color: #3a4b40;
   background: #111a14;
-  color: #eef7f1;
+  color: var(--rt-text);
 }
 
 :root[data-theme="dark"] .rt-find-page input:focus,
@@ -2972,11 +3353,11 @@ tbody tr:hover {
 
 @media (max-width: 1200px) {
   .app-sidebar {
-    width: 246px;
+    width: 228px;
   }
 
   .app-shell__content {
-    margin-left: 246px;
+    margin-left: 228px;
   }
 
   .app-nav-link {
@@ -2985,6 +3366,13 @@ tbody tr:hover {
 
   .ride-card {
     padding: 18px;
+  }
+
+  /* The search is the first thing to go when the bar gets tight: the sidebar and
+     the bottom nav both already provide navigation, so losing the field costs
+     less than losing the page title next to it. */
+  .app-global-search__field .ds-input {
+    width: clamp(160px, 24vw, 260px);
   }
 }
 
@@ -3060,12 +3448,24 @@ tbody tr:hover {
   .grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  /* Below the sidebar breakpoint the bar is brand + notifications + avatar only.
+     A global search here would be a third navigation system competing with the
+     bottom bar, and there is no room for it next to the account controls. */
+  .app-global-search {
+    display: none;
+  }
+
+  /* The trail is replaced by the page's own title on a narrow bar. */
+  .app-breadcrumbs {
+    display: none;
+  }
 }
 
 @media (max-width: 720px) {
   :root {
-    --rt-topbar-height: 64px;
-    --rt-mobile-nav-height: 66px;
+    --rt-topbar-height: 60px;
+    --rt-mobile-nav-height: 64px;
   }
 
   .container {

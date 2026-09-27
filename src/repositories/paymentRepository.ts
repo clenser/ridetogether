@@ -257,4 +257,30 @@ export const resolvePayment = async (
   return rowToPayment(data as PaymentRow);
 };
 
+/**
+ * The host acknowledges the placeholder payouts owed to them for a trip they
+ * have finished driving.
+ *
+ * This is the third leg of the placeholder lifecycle
+ * (`payment_success -> settlement_pending -> settlement_complete`) and it moves
+ * no money. It is a single call to the `record_payout_placeholders` RPC, which
+ * is the only place a settlement status is ever written, and it is host-scoped
+ * in the database - a caller cannot settle somebody else's payout.
+ *
+ * The RPC updates rows rather than returning them, so the rows are re-read
+ * afterwards. Refreshing regardless of the count means a host who taps twice sees
+ * the same settled state rather than a second unexplained press.
+ */
+export const recordPayoutPlaceholders = async (): Promise<number> => {
+  const client = getSupabaseClient();
+  const { data, error } = await client.rpc("record_payout_placeholders");
+  if (error) {
+    if (error.code === "42501" || /permission|denied/i.test(error.message ?? "")) {
+      throw new DataError("Only the driver can settle their own payouts.", "forbidden", error);
+    }
+    throw toDataError(error, "update");
+  }
+  return toNumber(data, 0);
+};
+
 export { PAYMENT_COLUMNS, PAYMENT_TABLE };

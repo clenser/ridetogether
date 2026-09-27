@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -15,8 +24,9 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { EmptyState } from "../components/EmptyState";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader } from "../components/ui/PageHeader";
+import { useComposerInset } from "../components/chat/useComposerInset";
+import { chatPageStyles } from "./chatPageStyles";
 import { useApp } from "../context/AppContext";
 import { MESSAGE_MAX_LENGTH } from "../repositories/messageRepository";
 import { useDraft, type DraftScope } from "../services/drafts";
@@ -27,133 +37,14 @@ interface MessageGroup {
   messages: Message[];
 }
 
-const chatStyles = `
-.rt-chat-page { min-height: 100%; display: flex; flex-direction: column; padding: 28px 20px 48px; color: var(--rt-text, #17231c); background: var(--rt-surface-subtle, #f6faf7); }
-.rt-chat-shell { width: 100%; max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; }
-.rt-chat-heading { display: flex; align-items: center; gap: 7px; color: #148642; font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.rt-chat-details { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid #d7e2da; border-radius: 11px; color: #4d5d54; background: var(--rt-card, #fff); font-size: .78rem; font-weight: 750; text-decoration: none; }
-.rt-chat-details:hover { border-color: #b9d6c3; background: #f1f9f4; }
-.rt-chat-state { min-height: 540px; display: grid; place-items: center; border: 1px solid var(--rt-border, #dce7df); border-radius: 22px; background: var(--rt-card, #fff); box-shadow: 0 12px 34px rgba(29,64,42,.055); overflow: hidden; }
-.rt-chat-state .empty-state { max-width: 540px; padding: 30px; text-align: center; }
-.rt-chat-panel { min-height: 560px; height: min(72vh, 720px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border: 1px solid var(--rt-border, #dce7df); border-radius: 22px; background: var(--rt-card, #fff); box-shadow: 0 14px 38px rgba(29,64,42,.07); overflow: hidden; }
-.rt-chat-route { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 17px 19px; border-bottom: 1px solid #e5ece7; background: linear-gradient(135deg, #f3faf5, #fff); }
-.rt-chat-route-copy { min-width: 0; }
-.rt-chat-route-kicker { display: flex; align-items: center; gap: 6px; color: #148642; font-size: .68rem; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
-.rt-chat-route h2 { margin: 5px 0 0; overflow: hidden; font-size: .96rem; letter-spacing: -.012em; text-overflow: ellipsis; white-space: nowrap; }
-.rt-chat-meta { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; color: #6d7b73; font-size: .72rem; }
-.rt-chat-meta span { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: 999px; background: #edf4ef; white-space: nowrap; }
-.rt-chat-conversation { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 22px; background: #f8faf9; scroll-behavior: smooth; }
-.rt-chat-day { display: flex; align-items: center; gap: 10px; margin: 3px 0 20px; color: #8a968f; font-size: .66rem; font-weight: 750; }
-.rt-chat-day::before, .rt-chat-day::after { content: ""; height: 1px; flex: 1; background: #e1e8e3; }
-.rt-chat-group { display: flex; align-items: flex-end; gap: 9px; margin: 0 0 15px; }
-.rt-chat-group--own { flex-direction: row-reverse; }
-.rt-chat-avatar { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; overflow: hidden; border: 2px solid #fff; border-radius: 11px; color: #147a3e; background: #dff3e5; box-shadow: 0 4px 10px rgba(29,64,42,.08); font-size: .73rem; font-weight: 800; }
-.rt-chat-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.rt-chat-group-content { display: grid; gap: 4px; max-width: min(76%, 620px); }
-.rt-chat-group--own .rt-chat-group-content { justify-items: end; }
-.rt-chat-sender { display: flex; align-items: center; gap: 6px; padding: 0 3px; color: #728078; font-size: .66rem; font-weight: 700; }
-.rt-chat-sender strong { color: #4c5b52; }
-.rt-chat-bubble { display: flex; align-items: flex-end; gap: 7px; }
-.rt-chat-message { max-width: 100%; padding: 10px 12px; border: 1px solid #dfe7e2; border-radius: 5px 15px 15px 15px; color: #27362e; background: #fff; box-shadow: 0 4px 12px rgba(29,64,42,.045); font-size: .83rem; line-height: 1.52; overflow-wrap: anywhere; white-space: pre-wrap; }
-.rt-chat-group--own .rt-chat-message { border-color: #159447; border-radius: 15px 5px 15px 15px; color: #fff; background: #159447; box-shadow: 0 7px 16px rgba(21,148,71,.16); }
-.rt-chat-time { flex: 0 0 auto; color: #8b9790; font-size: .6rem; white-space: nowrap; }
-.rt-chat-group--own .rt-chat-time { color: rgba(255,255,255,.72); }
-.rt-chat-consecutive .rt-chat-message { margin-top: -8px; }
-.rt-chat-empty { min-height: 100%; display: grid; place-content: center; justify-items: center; padding: 30px; text-align: center; }
-.rt-chat-empty-icon { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 21px; color: #148642; background: #dff4e6; box-shadow: 0 10px 25px rgba(21,148,71,.12); }
-.rt-chat-empty h3 { margin: 16px 0 6px; font-size: 1rem; }
-.rt-chat-empty p { max-width: 380px; margin: 0; color: #748178; font-size: .8rem; line-height: 1.55; }
-.rt-chat-privacy { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border-bottom: 1px solid #edf2ef; color: #6d7b73; background: #fbfcfb; font-size: .66rem; }
-.rt-chat-composer { padding: 13px 15px 15px; border-top: 1px solid #e4ebe6; background: #fff; }
-.rt-chat-readonly { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid #dce6df; border-radius: 12px; color: #5e6d64; background: #f4f8f5; font-size: .74rem; line-height: 1.5; }
-.rt-chat-readonly svg { flex: 0 0 auto; margin-top: 1px; color: #68786e; }
-.rt-chat-readonly strong { display: block; color: #425248; font-size: .78rem; }
-.rt-chat-form { display: grid; gap: 8px; }
-.rt-chat-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 9px; }
-.rt-chat-field { position: relative; }
-.rt-chat-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-.rt-chat-textarea { width: 100%; min-height: 47px; max-height: 140px; padding: 12px 42px 10px 13px; resize: none; border: 1px solid #d5e1d8; border-radius: 13px; color: var(--rt-text, #17231c); background: #fbfcfb; outline: none; font: inherit; font-size: .84rem; line-height: 1.45; }
-.rt-chat-textarea:focus { border-color: #159447; background: #fff; box-shadow: 0 0 0 3px rgba(21,148,71,.11); }
-.rt-chat-textarea:disabled { opacity: .6; cursor: not-allowed; }
-.rt-chat-count { position: absolute; right: 11px; bottom: 8px; color: #98a29c; font-size: .61rem; }
-.rt-chat-send { width: 47px; height: 47px; display: grid; place-items: center; border: 0; border-radius: 13px; color: #fff; background: #159447; box-shadow: 0 8px 18px rgba(21,148,71,.2); cursor: pointer; }
-.rt-chat-send:hover:not(:disabled) { background: #10813b; }
-.rt-chat-send:disabled { opacity: .48; cursor: not-allowed; }
-.rt-chat-spin { animation: rt-chat-spin .8s linear infinite; }
-@keyframes rt-chat-spin { to { transform: rotate(360deg); } }
-.rt-chat-error { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: #a63838; font-size: .72rem; line-height: 1.4; }
-[data-theme="dark"] .rt-chat-page { --rt-surface-subtle: #101712; --rt-card: #17211a; --rt-border: #2b3a30; --rt-text: #eef7f1; }
-[data-theme="dark"] .rt-chat-details, [data-theme="dark"] .rt-chat-state, [data-theme="dark"] .rt-chat-panel { background: #17211a; border-color: #2b3a30; }
-[data-theme="dark"] .rt-chat-details:hover { background: #1d2a21; }
-[data-theme="dark"] .rt-chat-route { background: linear-gradient(135deg, #19301f, #17211a); border-color: #2b3a30; }
-[data-theme="dark"] .rt-chat-meta span { color: #b3c0b8; background: #243229; }
-[data-theme="dark"] .rt-chat-conversation { background: #111a14; }
-[data-theme="dark"] .rt-chat-day { color: #8f9e95; }
-[data-theme="dark"] .rt-chat-day::before, [data-theme="dark"] .rt-chat-day::after { background: #2b3a30; }
-[data-theme="dark"] .rt-chat-message { color: #e8f1eb; background: #202c24; border-color: #35453b; }
-[data-theme="dark"] .rt-chat-readonly { color: #b4c0b8; background: #1c2820; border-color: #34463a; }
-[data-theme="dark"] .rt-chat-readonly strong { color: #eef7f1; }
-[data-theme="dark"] .rt-chat-privacy, [data-theme="dark"] .rt-chat-composer { background: #17211a; border-color: #2b3a30; }
-[data-theme="dark"] .rt-chat-privacy { color: #a6b5ac; }
-[data-theme="dark"] .rt-chat-textarea { color: #eef7f1; background: #111a14; border-color: #3a4b40; }
-[data-theme="dark"] .rt-chat-textarea:focus { background: #18231b; }
-[data-theme="dark"] .rt-chat-empty p { color: #a6b5ac; }
-@media (max-width: 1024px) {
-  /*
-   * The breakpoint where the fixed bottom nav appears, so this is the range where
-   * the panel has to be sized from the space the shell actually leaves over: the
-   * sticky topbar above and the bottom nav below.
-   *
-   * It used to subtract a hard-coded 210px from 100dvh and then carry a 480px
-   * min-height. Both are wrong. 210px counted the topbar a second time (the page
-   * already starts below it) while missing the real page header, which is a stacked
-   * column with a full-width button under 720px; and a 480px floor overrode the
-   * viewport-derived height outright on a 568-640px phone. The panel then ended
-   * below the fold, where the fixed nav sat on top of the composer and only
-   * scrolling the page - not the message list - could reach it.
-   *
-   * A definite height rather than a min-height is what makes the fix hold: the
-   * message list is a 1fr grid row, so an indefinite container lets that row take
-   * its max-content height, the page grow past the viewport and the document scroll.
-   * Bounding the page, letting the panel shrink and giving the list the
-   * minmax(0, 1fr) row is what keeps the composer on screen and makes the list the
-   * only scroller.
-   */
-  .rt-chat-page {
-    /* --rt-topbar-total, not --rt-topbar-height: in the native shell the top bar
-       also covers the status bar, so subtracting the bare height would push the
-       composer under it. */
-    height: calc(100vh - var(--rt-topbar-total, 72px) - var(--rt-mobile-nav-inset, 0px));
-    height: calc(100dvh - var(--rt-topbar-total, 72px) - var(--rt-mobile-nav-inset, 0px));
-  }
-  .rt-chat-shell { flex: 1 1 auto; min-height: 0; }
-  .rt-chat-panel { flex: 1 1 auto; height: auto; min-height: 0; }
-  .rt-chat-state { flex: 1 1 auto; min-height: 0; }
+/** One row in the conversation list, with the details needed to sort and label it. */
+interface Conversation {
+  ride: Ride;
+  isDriver: boolean;
+  /** The newest message in this conversation, if any. */
+  latest: Message | null;
+  unread: number;
 }
-@media (max-width: 680px) {
-  .rt-chat-page { padding: 18px 12px 24px; }
-  .rt-chat-details { width: 100%; }
-  .rt-chat-panel { border-radius: 18px; }
-  /*
-   * The ride title is the one line here that is allowed to be long, and the row
-   * layout left it only what the meta chips did not claim. The chips are
-   * white-space:nowrap inside a max-width:115px box, so a full departure label is
-   * wider than the box holding it: it overflowed to the right, ate into the title
-   * column, and the title - already nowrap with an ellipsis - was cut off
-   * mid-word. Stacking the two and letting the title wrap removes both clips
-   * without touching the desktop row, and stretch keeps the title inside the
-   * panel's padding instead of letting it size to its own content.
-   */
-  .rt-chat-route { flex-direction: column; align-items: stretch; gap: 9px; padding: 14px; }
-  .rt-chat-route h2 { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
-  .rt-chat-meta { max-width: none; justify-content: flex-start; }
-  .rt-chat-meta span:nth-child(2) { display: none; }
-  .rt-chat-conversation { padding: 16px 12px; }
-  .rt-chat-group-content { max-width: 84%; }
-  .rt-chat-composer { padding: 10px; }
-  .rt-chat-privacy { display: none; }
-}
-`;
 
 const getDeparture = (ride: Ride | null) => {
   if (!ride) return null;
@@ -192,6 +83,18 @@ const formatDay = (value: string) => {
   return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(parsed);
 };
 
+/** "Just now", "12m", "3h", then a date. Short enough for a list row. */
+const formatListTime = (value: string) => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const minutes = Math.floor((Date.now() - parsed.getTime()) / 60_000);
+  if (minutes < 1) return "Now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short" }).format(parsed);
+};
+
 const groupMessages = (messages: Message[]): MessageGroup[] => messages.reduce<MessageGroup[]>((groups, message) => {
   const lastGroup = groups[groups.length - 1];
   if (lastGroup?.senderId === message.senderId) {
@@ -218,21 +121,65 @@ export function ChatPage() {
   /**
    * The unsent message is kept per ride, so switching conversations (or a
    * reload) does not discard half-typed text. Sent messages are never drafted -
-   * they live in Supabase.
+   * they live in the database.
    */
-  const chatDraftScope: DraftScope = `chat:${rideId}`;
+  const chatDraftScope: DraftScope = `chat:${rideId ?? "list"}`;
   const chatDraft = useDraft<{ text: string }>(chatDraftScope, { text: "" }, activeUserId);
   const { value: chatDraftValue, setValue: setChatDraftValue } = chatDraft;
   const draft = chatDraftValue.text;
   const setDraft = (value: string) => setChatDraftValue((current) => ({ ...current, text: value }));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [unread, setUnread] = useState<Record<string, number>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const composerInset = useComposerInset();
 
   const ride = useMemo(
     () => rides.find((item) => item.id === rideId) ?? null,
     [rideId, rides],
   );
+
+  /**
+   * The same access rule as the single-conversation view, applied to every ride:
+   * a conversation exists only for the driver and for riders whose booking is
+   * still live. Applying it in one place means the list can never offer a chat
+   * the detail view would then refuse.
+   */
+  const conversations = useMemo<Conversation[]>(() => {
+    if (!activeUserId) return [];
+    const bookedRideIds = new Set(
+      bookings
+        .filter((booking) => (
+          booking.riderId === activeUserId
+          && (booking.status === "pending" || booking.status === "confirmed" || booking.status === "completed")
+        ))
+        .map((booking) => booking.rideId),
+    );
+    return rides
+      .filter((item) => item.driverId === activeUserId || bookedRideIds.has(item.id))
+      .map((item) => {
+        const thread = messages
+          .filter((message) => message.rideId === item.id)
+          .sort((first, second) => {
+            const firstTime = new Date(first.createdAt).getTime();
+            const secondTime = new Date(second.createdAt).getTime();
+            return (Number.isFinite(firstTime) ? firstTime : 0) - (Number.isFinite(secondTime) ? secondTime : 0);
+          });
+        return {
+          ride: item,
+          isDriver: item.driverId === activeUserId,
+          latest: thread[thread.length - 1] ?? null,
+          unread: unread[item.id] ?? 0,
+        };
+      })
+      .sort((first, second) => {
+        const firstTime = first.latest ? new Date(first.latest.createdAt).getTime() : getDeparture(first.ride)?.getTime() ?? 0;
+        const secondTime = second.latest ? new Date(second.latest.createdAt).getTime() : getDeparture(second.ride)?.getTime() ?? 0;
+        return (Number.isFinite(secondTime) ? secondTime : 0) - (Number.isFinite(firstTime) ? firstTime : 0);
+      });
+  }, [activeUserId, bookings, messages, rides, unread]);
+
   const riderBookings = useMemo(
     () => bookings.filter((booking) => (
       booking.rideId === rideId
@@ -240,17 +187,17 @@ export function ChatPage() {
     )),
     [activeUserId, bookings, rideId],
   );
-   const riderBooking = [...riderBookings]
-     .filter((booking) => booking.status === "pending" || booking.status === "confirmed" || booking.status === "completed")
-     .sort((first, second) => {
-       const firstTime = new Date(first.updatedAt || first.createdAt).getTime();
-       const secondTime = new Date(second.updatedAt || second.createdAt).getTime();
-       return (Number.isFinite(secondTime) ? secondTime : 0) - (Number.isFinite(firstTime) ? firstTime : 0);
-     })[0] ?? null;
-   const isDriver = Boolean(ride && activeUserId && ride.driverId === activeUserId);
-   const isRider = Boolean(riderBooking);
-   const hasAccess = Boolean(activeUserId && ride && (isDriver || isRider));
-   const canSend = ride?.status === "active" && (isDriver || riderBooking?.status === "pending" || riderBooking?.status === "confirmed");
+  const riderBooking = [...riderBookings]
+    .filter((booking) => booking.status === "pending" || booking.status === "confirmed" || booking.status === "completed")
+    .sort((first, second) => {
+      const firstTime = new Date(first.updatedAt || first.createdAt).getTime();
+      const secondTime = new Date(second.updatedAt || second.createdAt).getTime();
+      return (Number.isFinite(secondTime) ? secondTime : 0) - (Number.isFinite(firstTime) ? firstTime : 0);
+    })[0] ?? null;
+  const isDriver = Boolean(ride && activeUserId && ride.driverId === activeUserId);
+  const isRider = Boolean(riderBooking);
+  const hasAccess = Boolean(activeUserId && ride && (isDriver || isRider));
+  const canSend = ride?.status === "active" && (isDriver || riderBooking?.status === "pending" || riderBooking?.status === "confirmed");
 
   const rideMessages = useMemo(() => messages
     .filter((message) => message.rideId === rideId)
@@ -265,9 +212,42 @@ export function ChatPage() {
     setError("");
   }, [activeUserId, rideId]);
 
+  /**
+   * A conversation counts as read once it has been on screen, so the badge is
+   * cleared by looking at it rather than by a separate "mark read" request.
+   */
+  const markRead = useCallback((id: string | undefined) => {
+    if (!id) return;
+    setUnread((current) => (current[id] ? { ...current, [id]: 0 } : current));
+  }, []);
+
   useEffect(() => {
+    if (!rideId) return;
+    markRead(rideId);
+  }, [rideId, markRead]);
+
+  // Count a new message from someone else only while the chat is not on screen,
+  // so opening a conversation does not immediately light its own badge up.
+  useEffect(() => {
+    if (!rideId || !activeUserId) return;
+    setUnread((current) => {
+      const latest = rideMessages[rideMessages.length - 1];
+      if (!latest || latest.senderId === activeUserId) return current;
+      return { ...current, [rideId]: (current[rideId] ?? 0) + 1 };
+    });
+    // Only the newest message should trigger a count, not every re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rideMessages[rideMessages.length - 1]?.id]);
+
+  const scrollToLatest = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [rideId, rideMessages.length]);
+  }, []);
+
+  // layoutEffect so the thread is already at the bottom before it paints. With
+  // useEffect there is a visible jump every time a message arrives.
+  useLayoutEffect(() => {
+    scrollToLatest();
+  }, [rideId, rideMessages.length, scrollToLatest]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -286,8 +266,9 @@ export function ChatPage() {
     try {
       await sendMessage(ride.id, text);
       setDraft("");
-      // Delivered to Supabase, so the unsent-text draft is no longer needed.
+      // Delivered to the database, so the unsent-text draft is no longer needed.
       chatDraft.complete();
+      scrollToLatest();
     } catch (caught) {
       setError(errorText(caught, "Your message could not be saved. Please try again."));
     } finally {
@@ -301,34 +282,131 @@ export function ChatPage() {
     event.currentTarget.form?.requestSubmit();
   };
 
-  const renderHeader = (showRide = true) => ride && showRide ? (
-    <PageHeader
-      title="Ride chat"
-      description={`${ride.origin.label} to ${ride.destination.label}`}
-      eyebrow={<span className="rt-chat-heading"><MessagesSquare size={15} /> Ride conversation</span>}
-      actions={<Link className="rt-chat-details" to={`/rides/${ride.id}`}><ArrowLeft size={16} /> Ride details</Link>}
-    />
-  ) : (
-    <PageHeader
-      title="Ride chat"
-       description="Open a conversation with the driver and riders who have a booking for this journey."
-      eyebrow={<span className="rt-chat-heading"><MessagesSquare size={15} /> Ride conversation</span>}
-    />
-  );
+  const departure = ride ? getDeparture(ride) : null;
+  const departureLabel = ride ? formatDeparture(departure, ride.departureDate, ride.departureTime) : "";
+  const ownAvatar = activeUser?.avatar || "";
+  const initials = activeUser?.name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "RT";
+  const senderLabel = (senderId: string) => {
+    if (senderId === activeUserId) return "You";
+    if (senderId === ride?.driverId) return "Driver";
+    return "Passenger";
+  };
 
-  if (!rideId || !ride) {
+  /* ---------------- conversation list ---------------- */
+
+  const renderConversationList = () => {
+    if (conversations.length === 0) {
+      return (
+        <div className="rt-chat-conversations">
+          <div className="rt-chat-state" style={{ border: 0, borderRadius: 0, minHeight: 320 }}>
+            <div className="rt-chat-state-inner">
+              <span className="rt-chat-state-icon"><MessageCircle size={24} /></span>
+              <h2>No conversations yet</h2>
+              <p>
+                A chat opens once you share a ride. Book a seat in Find Ride, or offer one of your own,
+                and the conversation appears here.
+              </p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                <Link className="rt-chat-details" to="/find">Find a ride</Link>
+                <Link className="rt-chat-details" to="/offer">Offer a ride</Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <nav className="rt-chat-conversations" aria-label="Ride conversations">
+        <div className="rt-chat-conversations-head">
+          <h2 className="rt-chat-conversations-title"><MessagesSquare size={15} /> Conversations</h2>
+          <span className="rt-chat-conversations-time">{conversations.length} total</span>
+        </div>
+        <div className="rt-chat-conversations-list">
+          {conversations.map((conversation) => {
+            const current = conversation.ride.id === rideId;
+            return (
+              <Link
+                className="rt-chat-conversation-item"
+                key={conversation.ride.id}
+                to={`/chat/${conversation.ride.id}`}
+                aria-current={current ? "true" : undefined}
+              >
+                <span className="rt-chat-conversation-avatar" aria-hidden="true">
+                  {conversation.isDriver ? <CarFront size={18} /> : <MessagesSquare size={18} />}
+                </span>
+                <span className="rt-chat-conversation-copy">
+                  <span className="rt-chat-conversation-route">
+                    {conversation.ride.origin.label} <span aria-hidden="true">→</span> {conversation.ride.destination.label}
+                  </span>
+                  <span className="rt-chat-conversation-meta">
+                    <span className={`rt-chat-conversation-role${conversation.isDriver ? " rt-chat-conversation-role--driver" : ""}`}>
+                      {conversation.isDriver ? "Driving" : "Riding"}
+                    </span>
+                    {conversation.latest
+                      ? <span className="rt-chat-conversation-preview">
+                          {conversation.latest.senderId === activeUserId ? "You: " : ""}
+                          {conversation.latest.text}
+                        </span>
+                      : <span className="rt-chat-conversation-preview">No messages yet</span>}
+                  </span>
+                </span>
+                <span className="rt-chat-conversation-time">
+                  {conversation.latest ? formatListTime(conversation.latest.createdAt) : ""}
+                  {conversation.unread > 0 ? (
+                    <span className="rt-chat-unread" aria-label={`${conversation.unread} unread`}>{conversation.unread}</span>
+                  ) : null}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+    );
+  };
+
+  /* ---------------- list only: /chat ---------------- */
+
+  if (!rideId) {
     return (
       <div className="rt-chat-page">
-        <style>{chatStyles}</style>
+        <style>{chatPageStyles}</style>
         <div className="rt-chat-shell">
-          {renderHeader()}
+          <PageHeader
+            eyebrow="Ride conversations"
+            title="Chat"
+            description="Every ride you are driving or booked on, with the driver and the other riders."
+          />
+          {renderConversationList()}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- detail ---------------- */
+
+  if (!ride) {
+    return (
+      <div className="rt-chat-page">
+        <style>{chatPageStyles}</style>
+        <div className="rt-chat-shell">
+          <PageHeader
+            eyebrow="Ride conversations"
+            title="Chat"
+            actions={<Link className="rt-chat-details" to="/chat"><ArrowLeft size={16} /> All chats</Link>}
+          />
           <div className="rt-chat-state">
-            <EmptyState
-              icon={MessageCircle}
-              title="Conversation not found"
-              description="This chat link does not match a saved ride. It may have been removed or the route may be incorrect."
-              action={<Link className="rt-chat-details" to="/rides"><ArrowLeft size={16} /> Back to my rides</Link>}
-            />
+            <div className="rt-chat-state-inner">
+              <span className="rt-chat-state-icon"><MessageCircle size={24} /></span>
+              <h2>Conversation not found</h2>
+              <p>This chat link does not match a saved ride. It may have been removed, or the link may be out of date.</p>
+              <Link className="rt-chat-details" to="/chat"><ArrowLeft size={16} /> Back to conversations</Link>
+            </div>
           </div>
         </div>
       </div>
@@ -339,144 +417,189 @@ export function ChatPage() {
     const destination = isDriver ? `/rides/${ride.id}` : "/bookings";
     return (
       <div className="rt-chat-page">
-        <style>{chatStyles}</style>
+        <style>{chatPageStyles}</style>
         <div className="rt-chat-shell">
-          {renderHeader(false)}
+          <PageHeader
+            eyebrow="Ride conversations"
+            title="Chat"
+            actions={<Link className="rt-chat-details" to="/chat"><ArrowLeft size={16} /> All chats</Link>}
+          />
           <div className="rt-chat-state">
-            <EmptyState
-              icon={LockKeyhole}
-              title="This conversation is private"
-              description="Only the driver and riders with a booking on this ride can open its chat. Rejected and unrelated bookings cannot access these messages."
-              action={<Link className="rt-chat-details" to={destination}><ArrowLeft size={16} /> {isDriver ? "View ride" : "My bookings"}</Link>}
-            />
+            <div className="rt-chat-state-inner">
+              <span className="rt-chat-state-icon"><LockKeyhole size={24} /></span>
+              <h2>This conversation is private</h2>
+              <p>Only the driver and riders with a booking on this ride can open its chat. Rejected and unrelated bookings cannot read these messages.</p>
+              <Link className="rt-chat-details" to={destination}><ArrowLeft size={16} /> {isDriver ? "View ride" : "My bookings"}</Link>
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  const departure = getDeparture(ride);
-  const departureLabel = formatDeparture(departure, ride.departureDate, ride.departureTime);
-  const ownAvatar = activeUser?.avatar || "";
-  const initials = activeUser?.name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("") || "RT";
-  const senderLabel = (senderId: string) => {
-    if (senderId === activeUserId) return "You";
-    if (senderId === ride.driverId) return "Driver";
-    return "Passenger";
-  };
-
   return (
     <div className="rt-chat-page">
-      <style>{chatStyles}</style>
+      <style>{chatPageStyles}</style>
       <div className="rt-chat-shell">
-        {renderHeader()}
-        <section className="rt-chat-panel" aria-label={`Chat for ${ride.origin.label} to ${ride.destination.label}`}>
-          <header className="rt-chat-route">
-            <div className="rt-chat-route-copy">
-              <span className="rt-chat-route-kicker"><RouteIcon size={14} /> Shared journey</span>
-              <h2>{ride.origin.label} <span aria-hidden="true">→</span> {ride.destination.label}</h2>
-            </div>
-            <div className="rt-chat-meta">
-              <span><CalendarDays size={13} /> {departureLabel}</span>
-              <span><CarFront size={13} /> {isDriver ? "You are driving" : "With the driver"}</span>
-            </div>
-          </header>
+        <PageHeader
+          eyebrow="Ride conversation"
+          title={ride.origin.label}
+          description={ride.destination.label}
+          actions={
+            <>
+              {/* Shown only on a phone, where the list is a separate screen. */}
+              <Link className="rt-chat-details rt-chat-back" to="/chat"><ArrowLeft size={16} /> All chats</Link>
+              <Link className="rt-chat-details" to={`/rides/${ride.id}`}>Ride details</Link>
+            </>
+          }
+        />
 
-          <div className="rt-chat-conversation" role="log" aria-label="Ride messages" aria-live="polite" aria-relevant="additions">
-            {rideMessages.length === 0 ? (
-              <div className="rt-chat-empty">
-                <span className="rt-chat-empty-icon"><MessagesSquare size={29} /></span>
-                <h3>Start the conversation</h3>
-                <p>Share pickup details, arrival timing, or anything else that helps everyone travel smoothly.</p>
+        <div className="rt-chat-split">
+          {/* Hidden on a phone, where it is the screen you came from. */}
+          <div className="rt-chat-rail" data-testid="chat-rail">
+            {renderConversationList()}
+          </div>
+
+          <section className="rt-chat-panel" aria-label={`Chat for ${ride.origin.label} to ${ride.destination.label}`}>
+            <header className="rt-chat-journey">
+              <div className="rt-chat-journey-copy">
+                <span className="rt-chat-journey-kicker"><RouteIcon size={14} /> Shared journey</span>
+                <h2 className="rt-chat-journey-title">
+                  {ride.origin.label} <span aria-hidden="true">→</span> {ride.destination.label}
+                </h2>
               </div>
-            ) : (
-              <>
-                {rideMessages.map((message, index) => (
-                  index === 0 || new Date(rideMessages[index - 1].createdAt).toDateString() !== new Date(message.createdAt).toDateString()
-                    ? <div className="rt-chat-day" key={`day-${message.id}`}>{formatDay(message.createdAt)}</div>
-                    : null
-                ))}
-                {messageGroups.map((group) => {
-                  const own = group.senderId === activeUserId;
-                  return (
-                    <article
-                      className={`rt-chat-group${own ? " rt-chat-group--own" : ""}`}
-                      key={`${group.senderId}-${group.messages[0].id}`}
-                      aria-label={`${own ? "Your" : senderLabel(group.senderId)} messages`}
-                    >
-                      <span className="rt-chat-avatar" aria-hidden="true">
-                        {own && ownAvatar ? <img src={ownAvatar} alt="" /> : own ? initials : <UserRound size={16} />}
-                      </span>
-                      <div className="rt-chat-group-content">
-                        <div className="rt-chat-sender">
-                          <strong>{senderLabel(group.senderId)}</strong>
-                          {own ? <span>· Sent</span> : null}
-                        </div>
-                        {group.messages.map((message, messageIndex) => (
-                          <div className={`rt-chat-bubble${messageIndex > 0 ? " rt-chat-consecutive" : ""}`} key={message.id}>
-                            <div className="rt-chat-message">{message.text}</div>
-                            <time className="rt-chat-time" dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString("en-IN")}>
-                              {formatMessageTime(message.createdAt)}
-                            </time>
+              <div className="rt-chat-journey-meta">
+                <span><CalendarDays size={13} aria-hidden="true" /> {departureLabel}</span>
+                <span><CarFront size={13} aria-hidden="true" /> {isDriver ? "You are driving" : "With the driver"}</span>
+              </div>
+            </header>
+
+            <div
+              className="rt-chat-thread"
+              ref={threadRef}
+              role="log"
+              aria-label="Ride messages"
+              aria-live="polite"
+              aria-relevant="additions"
+            >
+              {rideMessages.length === 0 ? (
+                <div className="rt-chat-empty">
+                  <span className="rt-chat-empty-icon"><MessagesSquare size={26} /></span>
+                  <h3>Start the conversation</h3>
+                  <p>Share pickup details, arrival timing, or anything else that helps everyone travel smoothly.</p>
+                </div>
+              ) : (
+                <>
+                  {rideMessages.map((message, index) => (
+                    index === 0 || new Date(rideMessages[index - 1].createdAt).toDateString() !== new Date(message.createdAt).toDateString()
+                      ? <div className="rt-chat-day" key={`day-${message.id}`}>{formatDay(message.createdAt)}</div>
+                      : null
+                  ))}
+                  {messageGroups.map((group) => {
+                    const own = group.senderId === activeUserId;
+                    return (
+                      <article
+                        className={`rt-chat-group${own ? " rt-chat-group--own" : ""}`}
+                        key={`${group.senderId}-${group.messages[0].id}`}
+                        aria-label={`${own ? "Your" : senderLabel(group.senderId)} messages`}
+                      >
+                        <span className="rt-chat-avatar" aria-hidden="true">
+                          {own && ownAvatar ? <img src={ownAvatar} alt="" /> : own ? initials : <UserRound size={16} />}
+                        </span>
+                        <div className="rt-chat-group-content">
+                          <div className="rt-chat-sender">
+                            <strong>{senderLabel(group.senderId)}</strong>
                           </div>
-                        ))}
+                          {group.messages.map((message, messageIndex) => (
+                            <div className={`rt-chat-bubble${messageIndex > 0 ? " rt-chat-consecutive" : ""}`} key={message.id}>
+                              <div className="rt-chat-message">{message.text}</div>
+                              <time className="rt-chat-time" dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString("en-IN")}>
+                                {formatMessageTime(message.createdAt)}
+                              </time>
+                            </div>
+                          ))}
+                        </div>
+                      </article>
+                    );
+                  })}
+                  <div ref={messagesEndRef} aria-hidden="true" />
+                </>
+              )}
+            </div>
+
+            {/*
+              The composer clears the app's bottom navigation and, when it is
+              present, the soft keyboard. It is a spacer rather than a padding
+              value so the extra space is not painted in the card's colour.
+            */}
+            <div className="rt-chat-composer">
+              <div
+                className="rt-chat-composer-inner"
+                style={{ paddingBottom: composerInset > 0 ? `calc(11px + ${composerInset}px)` : undefined }}
+              >
+                {canSend ? (
+                  <>
+                    <form className="rt-chat-form" onSubmit={handleSubmit}>
+                      <div className="rt-chat-input-row">
+                        <div className="rt-chat-field">
+                          <label className="rt-chat-label" htmlFor="ride-message">Message</label>
+                          <textarea
+                            id="ride-message"
+                            data-testid="chat-input"
+                            className="rt-chat-textarea"
+                            value={draft}
+                            rows={1}
+                            maxLength={MESSAGE_MAX_LENGTH}
+                            placeholder="Write a message…"
+                            disabled={sending}
+                            aria-describedby={error ? "chat-send-error" : "chat-message-help"}
+                            onChange={(event) => {
+                              setDraft(event.target.value);
+                              if (error) setError("");
+                            }}
+                            onKeyDown={handleComposerKeyDown}
+                          />
+                          <span className="rt-chat-count" aria-hidden="true">{draft.length}/{MESSAGE_MAX_LENGTH}</span>
+                        </div>
+                        <button
+                          className="rt-chat-send"
+                          data-testid="chat-send"
+                          type="submit"
+                          disabled={sending || !draft.trim()}
+                          aria-label="Send message"
+                          title="Send message"
+                        >
+                          {sending ? <LoaderCircle className="rt-chat-spin" size={19} /> : <Send size={19} />}
+                        </button>
                       </div>
-                    </article>
-                  );
-                })}
-                <div ref={messagesEndRef} aria-hidden="true" />
-              </>
-            )}
-          </div>
-
-          <div className="rt-chat-composer">
-              <div className="rt-chat-privacy"><ShieldCheck size={13} /> Messages for this ride are visible only to its driver and confirmed riders.</div>
-
-            {canSend ? (
-              <>
-                <form className="rt-chat-form" onSubmit={handleSubmit}>
-                  <div className="rt-chat-input-row">
-                    <div className="rt-chat-field">
-                      <label className="rt-chat-label" htmlFor="ride-message">Message</label>
-                      <textarea
-                        id="ride-message"
-                        data-testid="chat-input"
-                        className="rt-chat-textarea"
-                        value={draft}
-                        rows={1}
-                        maxLength={1000}
-                        placeholder="Write a message…"
-                        disabled={sending}
-                        aria-describedby={error ? "chat-send-error" : "chat-message-help"}
-                        onChange={(event) => {
-                          setDraft(event.target.value);
-                          if (error) setError("");
-                        }}
-                        onKeyDown={handleComposerKeyDown}
-                      />
-                      <span className="rt-chat-count" aria-hidden="true">{draft.length}/1000</span>
-                    </div>
-                    <button className="rt-chat-send" data-testid="chat-send" type="submit" disabled={sending || !draft.trim()} aria-label="Send message" title="Send message">
-                      {sending ? <LoaderCircle className="rt-chat-spin" size={19} /> : <Send size={19} />}
-                    </button>
+                      {error ? (
+                        <p className="rt-chat-error" id="chat-send-error" role="alert" data-testid="chat-error">
+                          <AlertCircle size={14} aria-hidden="true" />
+                          {error}
+                        </p>
+                      ) : (
+                        <span id="chat-message-help" style={{ display: "none" }}>Press Enter to send or Shift plus Enter for a new line.</span>
+                      )}
+                    </form>
+                    <p className="rt-chat-privacy rt-chat-hint"><CornerDownLeft size={12} aria-hidden="true" /> Enter sends · Shift + Enter adds a line</p>
+                  </>
+                ) : (
+                  <div className="rt-chat-readonly">
+                    <LockKeyhole size={16} aria-hidden="true" />
+                    <span>
+                      <strong>Read-only conversation</strong>
+                      This ride is no longer active, so you can still read the messages but cannot add new ones.
+                    </span>
                   </div>
-                  {error ? <p className="rt-chat-error" id="chat-send-error" role="alert" data-testid="chat-error"><AlertCircle size={14} />{error}</p> : <span id="chat-message-help" style={{ display: "none" }}>Press Enter to send or Shift plus Enter for a new line.</span>}
-                </form>
-                <p className="rt-chat-privacy" style={{ padding: "6px 0 0", border: 0, background: "transparent" }}><CornerDownLeft size={12} /> Enter sends · Shift + Enter adds a line</p>
-              </>
-            ) : (
-              <div className="rt-chat-readonly">
-                <LockKeyhole size={16} />
-                <span><strong>Read-only conversation</strong>This booking is closed, so you can still review this ride’s messages but cannot add new ones.</span>
+                )}
+                <p className="rt-chat-privacy rt-chat-privacy--composer">
+                  <ShieldCheck size={13} aria-hidden="true" />
+                  Messages for this ride are visible only to its driver and riders with a booking.
+                </p>
               </div>
-            )}
-          </div>
-        </section>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

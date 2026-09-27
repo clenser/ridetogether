@@ -21,7 +21,6 @@ import {
   markPickedUp as supabaseMarkPickedUp,
   rejectBooking as supabaseRejectBooking,
   requestBooking as supabaseRequestBooking,
-  updateBookingStatus as supabaseUpdateBookingStatus,
 } from "../repositories/bookingRepository";
 import { describeDataFailure } from "../repositories/dataError";
 import {
@@ -63,6 +62,7 @@ import {
   listMyPayments,
   openPayment as supabaseOpenPayment,
   resolvePayment as supabaseResolvePayment,
+  recordPayoutPlaceholders as supabaseRecordPayoutPlaceholders,
 } from "../repositories/paymentRepository";
 import {
   clearMyUpiId as supabaseClearMyUpiId,
@@ -143,10 +143,6 @@ export interface AppContextValue {
     seats: number,
     options?: { pickup?: PickupPoint; dropoff?: PickupPoint; match?: MatchScore },
   ) => Promise<Booking>;
-  updateBookingStatus: (
-    bookingId: string,
-    status: "confirmed" | "rejected" | "cancelled",
-  ) => Promise<void>;
   /**
    * The host accepts a request. The seat is held from this moment, not from
    * confirmation, so an accepted request cannot be lost to a later booking.
@@ -166,12 +162,20 @@ export interface AppContextValue {
   completeRide: (rideId: string) => Promise<void>;
   /** Opens the placeholder payment for an accepted seat. */
   payBooking: (bookingId: string) => Promise<void>;
-  /** The host records that the money arrived, or that it did not. */
+  /**
+   * The host records that the money arrived, or that it did not.
+   */
   resolvePayment: (
     bookingId: string,
     outcome: Extract<PaymentStatus, "success" | "failed">,
     reason?: string,
   ) => Promise<void>;
+  /**
+   * The host marks the placeholder payouts for their finished trips as
+   * acknowledged. Moves no money; it is the last step of the placeholder
+   * lifecycle and the only way a `settlement` column ever leaves `pending`.
+   */
+  recordPayoutPlaceholders: () => Promise<number>;
   /**
    * Publishes the host's position for a running ride. Deliberately does not
    * trigger a snapshot refresh: this fires every few seconds while driving, and
@@ -599,24 +603,18 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     [mutateCloud],
   );
 
-  const updateBookingStatus = useCallback(
-    (bookingId: string, status: "confirmed" | "rejected" | "cancelled"): Promise<void> =>
-      mutateCloud(async () => {
-        // The database trigger performs the seat change; nothing is decremented
-        // or restored here. The follow-up refresh re-reads the real numbers.
-        await (status === "cancelled"
-          ? supabaseCancelBooking(bookingId)
-          : supabaseUpdateBookingStatus(bookingId, status));
-      }, status === "confirmed" ? "confirm" : status === "cancelled" ? "cancel" : "update"),
-    [mutateCloud],
-  );
-
   /**
    * Each of these is one database transition followed by a re-read. They are kept
    * separate rather than folded into a single `setBookingStatus` so that a page
    * cannot offer the host an action the workflow does not have - the ride's
    * acceptance path, the pickup path and the cancellation path are genuinely
    * different things to a host.
+   *
+   * There is deliberately no generic status setter. One existed, and it was the
+   * way My Rides ended up writing `status = 'confirmed'` straight onto a
+   * `pending` request: a transition the database refuses, so the host's primary
+   * accept button always failed and no seat was ever held. Every step is now a
+   * named call whose target state the database can actually reach.
    */
   const acceptBooking = useCallback(
     (bookingId: string, options: { pickup?: PickupPoint; dropoff?: PickupPoint } = {}): Promise<void> =>
@@ -733,6 +731,21 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     ): Promise<void> =>
       mutateCloud(async () => {
         await supabaseResolvePayment(bookingId, outcome, { reason });
+      }, "update"),
+    [mutateCloud],
+  );
+
+  /**
+   * Settles every payout this host is currently owed on trips they have already
+   * finished driving, then re-reads so the host sees the new state. The RPC is
+   * idempotent, so a host with nothing pending gets `0` back rather than an
+   * error - the button stays available instead of needing to know in advance
+   * whether there was anything to claim.
+   */
+  const recordPayoutPlaceholders = useCallback(
+    (): Promise<number> =>
+      mutateCloud(async () => {
+        return await supabaseRecordPayoutPlaceholders();
       }, "update"),
     [mutateCloud],
   );
@@ -995,7 +1008,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         createSeries,
         updateRide,
         requestBooking,
-        updateBookingStatus,
         acceptBooking,
         rejectBooking,
         markPickedUp,
@@ -1006,6 +1018,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         completeRide,
         payBooking,
         resolvePayment,
+        recordPayoutPlaceholders,
         reportRideLocation,
     saveUpiId,
     clearUpiId,

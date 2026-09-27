@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { collectErrors, assertNoErrors, driverCredentials, riderCredentials, signIn, waitForApp } from "./helpers";
+import { collectErrors, assertNoErrors, driverCredentials, riderCredentials, signIn, waitForApp, gotoOfferStep } from "./helpers";
 
 /**
  * Driver flow: offer a ride, then act on a rider's request.
@@ -23,11 +23,17 @@ test.describe("driver: offer a ride", () => {
     await waitForApp(page);
 
     await page.goto("/offer");
-    await expect(page.getByTestId("offer-submit")).toBeVisible();
 
-    // With no origin and destination there is no route, so publishing must stay
-    // disabled. This is the guard against publishing a ride with no geometry.
-    await expect(page.getByTestId("offer-submit")).toBeDisabled();
+    // Step 1 cannot be left without both endpoints and a resolved route, so
+    // Continue is disabled before anything can be published. This is the guard
+    // against publishing a ride with no geometry.
+    const continueButton = page.getByTestId("offer-continue");
+    await expect(continueButton).toBeVisible();
+    await expect(continueButton).toBeDisabled();
+
+    // The publish action lives on the final step and is out of reach while the
+    // route step is unsatisfied.
+    await expect(page.getByTestId("offer-submit")).toHaveCount(0);
     assertNoErrors(errors);
   });
 
@@ -48,7 +54,8 @@ test.describe("driver: offer a ride", () => {
     const routeError = page.getByTestId("offer-route-error");
     // Either the route resolves or a real error is shown. A blank map with no
     // message is the failure this guards against.
-    if (!(await page.getByTestId("offer-submit").isEnabled())) {
+    const continueButton = page.getByTestId("offer-continue");
+    if (!(await continueButton.isEnabled())) {
       await expect(routeError).toBeVisible();
     }
     assertNoErrors(errors);
@@ -59,6 +66,7 @@ test.describe("driver: offer a ride", () => {
     await signIn(page, creds!);
     await waitForApp(page);
     await page.goto("/offer");
+    await gotoOfferStep(page, 1, { force: true });
 
     const vehicle = page.getByTestId("offer-vehicle");
     await expect(vehicle).toBeVisible();
@@ -73,6 +81,7 @@ test.describe("driver: offer a ride", () => {
     await signIn(page, creds!);
     await waitForApp(page);
     await page.goto("/offer");
+    await gotoOfferStep(page, 1, { force: true });
 
     // Type into a plain text field that is part of the draft payload.
     const contribution = page.locator("#offer-contribution");
@@ -81,6 +90,9 @@ test.describe("driver: offer a ride", () => {
       // The draft is written on a debounce.
       await page.waitForTimeout(900);
       await page.reload();
+      // The wizard reopens on step 1, so step back onto the schedule to read the
+      // restored value.
+      await gotoOfferStep(page, 1, { force: true });
       await expect(page.locator("#offer-contribution")).toHaveValue("250", { timeout: 15_000 });
     }
     assertNoErrors(errors);

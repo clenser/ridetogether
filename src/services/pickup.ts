@@ -193,11 +193,25 @@ export const buildPickupProposal = (
   );
 
   if (pairs.length === 0) {
+    // A ride published without a route has no vertices to offer, so the reason
+    // nothing is proposed is the missing road, not the rider's address. Saying
+    // "no meeting point near that address sits on this driver's route" for a ride
+    // that has no route at all sends them off looking for a better search term.
+    if (!ride.routeGeometry?.length) {
+      return {
+        pickups,
+        dropoffs,
+        recommended: null,
+        basedOnCorridor: false,
+        notice:
+          "This ride was published without a stored road, so there is no route to propose meeting points from. The driver will agree a pickup with you directly.",
+      };
+    }
     return {
       pickups,
       dropoffs,
       recommended: null,
-      basedOnCorridor: Boolean(ride.routeGeometry?.length),
+      basedOnCorridor: true,
       notice: pickups.length === 0 || dropoffs.length === 0
         ? "No meeting point near that address sits on this driver's route. Try searching from a nearby landmark, or pick a different ride."
         : "No drop-off point near that address comes after any pickup point on this route.",

@@ -1,0 +1,2185 @@
+/* ---------------------------------------------------------------------------
+   DESIGN SYSTEM COMPONENTS
+
+   The shared vocabulary every page is built from: buttons, fields, cards,
+   badges, tabs, segmented controls, sheets, toasts, skeletons, avatars, stats,
+   steppers and timelines.
+
+   Everything here consumes the tokens in `index.css`. No value in this file is
+   theme-specific: both palettes come from swapping the token block, so there is
+   no dark-theme override section to fall out of date.
+
+   The class names are intentionally unprefixed but specific (`ds-`) so they
+   cannot collide with the page-scoped classes that already exist.
+   --------------------------------------------------------------------------- */
+
+/* Visible to a screen reader, invisible on screen. Used for a loading button's
+   label, a decorative icon next to real text, and the skip link. */
+.ds-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   1. BUTTONS
+   One implementation for every button in the product. `variant` picks the
+   treatment, `size` the height. There is no third axis for "looks slightly
+   different" - that is what caused the inconsistency this replaces.
+   --------------------------------------------------------------------------- */
+
+.ds-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--rt-space-2);
+  /* 48px on touch, 44px on pointer devices: the primary action is the single
+     most-tapped control on each page, so it gets the larger target. */
+  min-height: 44px;
+  padding: 0 var(--rt-space-5);
+  border: 1px solid transparent;
+  border-radius: var(--rt-radius-md);
+  font: var(--rt-text-button);
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--rt-dur-base) var(--rt-ease),
+    border-color var(--rt-dur-base) var(--rt-ease),
+    color var(--rt-dur-base) var(--rt-ease),
+    box-shadow var(--rt-dur-base) var(--rt-ease),
+    transform var(--rt-dur-fast) var(--rt-ease);
+}
+
+.ds-button--primary {
+  color: #fff;
+  background: linear-gradient(180deg, var(--rt-primary), var(--rt-primary-strong));
+  box-shadow: var(--rt-shadow-glow);
+}
+
+.ds-button--primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--rt-primary-strong), var(--rt-primary-deep));
+  box-shadow: 0 8px 22px rgba(8, 120, 59, 0.32);
+  transform: translateY(-1px);
+}
+
+.ds-button--secondary {
+  color: var(--rt-text);
+  background: var(--rt-surface);
+  border-color: var(--rt-border);
+  box-shadow: var(--rt-shadow-sm);
+}
+
+.ds-button--secondary:hover:not(:disabled) {
+  background: var(--rt-surface-hover);
+  border-color: var(--rt-border-strong);
+}
+
+.ds-button--subtle {
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-softer);
+  border-color: transparent;
+}
+
+.ds-button--subtle:hover:not(:disabled) {
+  background: var(--rt-primary-soft);
+}
+
+.ds-button--ghost {
+  color: var(--rt-muted);
+  background: transparent;
+}
+
+.ds-button--ghost:hover:not(:disabled) {
+  color: var(--rt-text);
+  background: var(--rt-surface-hover);
+}
+
+.ds-button--danger {
+  color: #fff;
+  background: var(--rt-danger);
+  box-shadow: 0 6px 18px rgba(239, 68, 68, 0.26);
+}
+
+.ds-button--danger:hover:not(:disabled) {
+  background: var(--rt-danger-text);
+}
+
+/* Destructive actions that should not shout. Used for "Cancel" beside a
+   primary action, where red fill would imply the whole card is an error. */
+.ds-button--danger-quiet {
+  color: var(--rt-danger-text);
+  background: var(--rt-danger-soft);
+  border-color: transparent;
+}
+
+.ds-button--danger-quiet:hover:not(:disabled) {
+  background: var(--rt-danger-soft);
+  border-color: var(--rt-danger-ring);
+}
+
+/* For a single action sitting on a brand-coloured surface, such as the closing
+   call to action. It is the only variant that carries its own shadow, because
+   it has to read as raised off the gradient behind it. */
+.ds-button--inverse {
+  color: var(--rt-primary-deep);
+  background: var(--rt-text-inverse);
+  border-color: transparent;
+  box-shadow: var(--rt-shadow-md);
+}
+
+.ds-button--inverse:hover:not(:disabled) {
+  background: var(--rt-primary-softer);
+}
+
+/* Press feedback is shared so every variant compresses the same amount. */
+.ds-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ds-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: none;
+  transform: none;
+}
+
+.ds-button--sm {
+  min-height: 36px;
+  padding: 0 var(--rt-space-4);
+  border-radius: var(--rt-radius-sm);
+  font-size: 0.8125rem;
+}
+
+.ds-button--lg {
+  min-height: 50px;
+  padding: 0 var(--rt-space-6);
+  border-radius: var(--rt-radius-md);
+  font-size: 1rem;
+}
+
+.ds-button--block {
+  display: flex;
+  width: 100%;
+}
+
+/* The busy state keeps the button's width so the layout does not jump when the
+   label is replaced by a spinner. */
+.ds-button__spinner {
+  animation: ds-spin 720ms linear infinite;
+}
+
+@keyframes ds-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ds-button:has(.ds-button__spinner) {
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   2. ICON BUTTON
+   Square, minimum 44px, with a tooltip-grade accessible name supplied by the
+   caller. Used in the top bar, card headers and modal corners.
+   --------------------------------------------------------------------------- */
+
+.ds-icon-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--rt-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--rt-radius-md);
+  cursor: pointer;
+  transition:
+    background-color var(--rt-dur-fast) var(--rt-ease),
+    color var(--rt-dur-fast) var(--rt-ease),
+    border-color var(--rt-dur-fast) var(--rt-ease);
+}
+
+.ds-icon-button:hover:not(:disabled) {
+  color: var(--rt-text);
+  background: var(--rt-surface-hover);
+  border-color: var(--rt-border);
+}
+
+.ds-icon-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.ds-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ds-icon-button--bordered {
+  background: var(--rt-surface);
+  border-color: var(--rt-border);
+  box-shadow: var(--rt-shadow-sm);
+}
+
+.ds-icon-button--danger:hover:not(:disabled) {
+  color: var(--rt-danger-text);
+  background: var(--rt-danger-soft);
+  border-color: var(--rt-danger-ring);
+}
+
+/* Count bubble. `pointer-events: none` so it never steals the click meant for
+   the button underneath. */
+.ds-icon-button__badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--rt-danger);
+  border: 2px solid var(--rt-surface);
+  border-radius: var(--rt-radius-pill);
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   3. FIELDS
+   Label, control, hint and error share one vertical rhythm so a form reads as
+   a single column of aligned rows.
+   --------------------------------------------------------------------------- */
+
+.ds-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ds-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--rt-text);
+  font: var(--rt-text-meta);
+  letter-spacing: -0.01em;
+}
+
+.ds-label__optional {
+  color: var(--rt-subtle);
+  font-weight: 500;
+  text-transform: none;
+}
+
+.ds-input,
+.ds-select,
+.ds-textarea {
+  width: 100%;
+  min-height: 46px;
+  padding: 11px 13px;
+  color: var(--rt-text);
+  background: var(--rt-surface);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-md);
+  font: var(--rt-text-body);
+  outline: none;
+  transition:
+    border-color var(--rt-dur-fast) var(--rt-ease),
+    box-shadow var(--rt-dur-fast) var(--rt-ease),
+    background-color var(--rt-dur-fast) var(--rt-ease);
+}
+
+.ds-select {
+  /* The native arrow is removed so the control matches the rest of the system;
+     the chevron is drawn by `.ds-field--select` when the caller supplies one. */
+  appearance: none;
+  padding-right: 38px;
+  cursor: pointer;
+}
+
+.ds-textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.ds-input::placeholder,
+.ds-textarea::placeholder {
+  color: var(--rt-subtle);
+}
+
+.ds-input:hover:not(:disabled),
+.ds-select:hover:not(:disabled),
+.ds-textarea:hover:not(:disabled) {
+  border-color: var(--rt-border-strong);
+}
+
+.ds-input:focus,
+.ds-select:focus,
+.ds-textarea:focus {
+  border-color: var(--rt-primary);
+  box-shadow: var(--rt-focus-ring);
+}
+
+.ds-input:disabled,
+.ds-select:disabled,
+.ds-textarea:disabled {
+  cursor: not-allowed;
+  color: var(--rt-subtle);
+  background: var(--rt-surface-muted);
+}
+
+.ds-input[aria-invalid="true"],
+.ds-select[aria-invalid="true"],
+.ds-textarea[aria-invalid="true"] {
+  border-color: var(--rt-danger);
+}
+
+.ds-input[aria-invalid="true"]:focus,
+.ds-select[aria-invalid="true"]:focus,
+.ds-textarea[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px var(--rt-danger-ring);
+}
+
+.ds-hint {
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.ds-field__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--rt-danger-text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.ds-field-grid {
+  display: grid;
+  gap: var(--rt-space-4);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+/* Input with a leading icon. The icon is decorative and hidden from the
+   accessibility tree; the label carries the meaning. */
+.ds-field--icon {
+  position: relative;
+}
+
+.ds-field--icon > svg {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  transform: translateY(-50%);
+  color: var(--rt-subtle);
+  pointer-events: none;
+  transition: color var(--rt-dur-fast) var(--rt-ease);
+}
+
+.ds-field--icon .ds-input {
+  padding-left: 40px;
+}
+
+.ds-field--icon:focus-within > svg {
+  color: var(--rt-primary);
+}
+
+/* ---------------------------------------------------------------------------
+   4. SEARCH INPUT
+   Compact rounded field for the desktop header. Clearing is a real button, not
+   a glyph, so it is reachable by keyboard.
+   --------------------------------------------------------------------------- */
+
+.ds-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.ds-search > svg {
+  position: absolute;
+  left: 12px;
+  color: var(--rt-subtle);
+  pointer-events: none;
+}
+
+.ds-search .ds-input {
+  height: 40px;
+  min-height: 40px;
+  padding-left: 38px;
+  padding-right: 36px;
+  background: var(--rt-surface-muted);
+  border-color: transparent;
+  border-radius: var(--rt-radius-pill);
+  font-size: 0.875rem;
+}
+
+.ds-search .ds-input:hover {
+  background: var(--rt-surface-hover);
+  border-color: var(--rt-border);
+}
+
+.ds-search .ds-input:focus {
+  background: var(--rt-surface);
+  border-color: var(--rt-primary);
+}
+
+.ds-search__clear {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--rt-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--rt-radius-pill);
+  cursor: pointer;
+}
+
+.ds-search__clear:hover {
+  color: var(--rt-text);
+  background: var(--rt-surface-active);
+}
+
+/* ---------------------------------------------------------------------------
+   5. CARDS
+   --------------------------------------------------------------------------- */
+
+.ds-card {
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+  box-shadow: var(--rt-shadow-card);
+}
+
+.ds-card--flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ds-card--interactive {
+  cursor: pointer;
+  transition:
+    transform var(--rt-dur-base) var(--rt-ease),
+    box-shadow var(--rt-dur-base) var(--rt-ease),
+    border-color var(--rt-dur-base) var(--rt-ease);
+}
+
+.ds-card--interactive:hover {
+  border-color: var(--rt-border-strong);
+  box-shadow: var(--rt-shadow-raised);
+  transform: translateY(-2px);
+}
+
+.ds-card--interactive:active {
+  transform: translateY(0);
+}
+
+.ds-card__body {
+  padding: var(--rt-space-5);
+}
+
+.ds-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-4) var(--rt-space-5);
+  border-bottom: 1px solid var(--rt-border-subtle);
+}
+
+.ds-card__title {
+  display: flex;
+  align-items: center;
+  gap: var(--rt-space-2);
+  margin: 0;
+  color: var(--rt-text);
+  font: var(--rt-text-card);
+}
+
+.ds-card__subtitle {
+  margin: 3px 0 0;
+  color: var(--rt-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+/* ---------------------------------------------------------------------------
+   6. BADGES AND PILLS
+   --------------------------------------------------------------------------- */
+
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--rt-radius-pill);
+  background: var(--rt-surface-muted);
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.ds-badge__dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.ds-badge--brand {
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.ds-badge--success {
+  color: var(--rt-success-text);
+  background: var(--rt-success-soft);
+}
+
+.ds-badge--warning {
+  color: var(--rt-warning-text);
+  background: var(--rt-warning-soft);
+}
+
+.ds-badge--danger {
+  color: var(--rt-danger-text);
+  background: var(--rt-danger-soft);
+}
+
+.ds-badge--info {
+  color: var(--rt-info-text);
+  background: var(--rt-info-soft);
+}
+
+/* A live indicator, for journeys in progress. */
+.ds-badge--live {
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.ds-badge--live .ds-badge__dot {
+  background: var(--rt-primary);
+  box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.55);
+  animation: ds-pulse 1.9s var(--rt-ease) infinite;
+}
+
+@keyframes ds-pulse {
+  70% {
+    box-shadow: 0 0 0 7px rgba(22, 163, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   7. AVATARS
+   A fallback is drawn from the initials when there is no image, so a member
+   without a photo is never represented by a broken image.
+   --------------------------------------------------------------------------- */
+
+.ds-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(145deg, var(--rt-primary), var(--rt-primary-deep));
+  font-weight: 700;
+  font-size: 0.875rem;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+  overflow: hidden;
+  user-select: none;
+}
+
+.ds-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ds-avatar--xs {
+  width: 26px;
+  height: 26px;
+  font-size: 0.625rem;
+}
+
+.ds-avatar--sm {
+  width: 32px;
+  height: 32px;
+  font-size: 0.75rem;
+}
+
+.ds-avatar--lg {
+  width: 56px;
+  height: 56px;
+  font-size: 1.125rem;
+}
+
+.ds-avatar--xl {
+  width: 88px;
+  height: 88px;
+  font-size: 1.75rem;
+}
+
+.ds-avatar-group {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ds-avatar-group > * + * {
+  margin-left: -10px;
+}
+
+.ds-avatar-group .ds-avatar {
+  border: 2px solid var(--rt-card);
+}
+
+.ds-avatar-group__more {
+  background: var(--rt-surface-active);
+  color: var(--rt-muted);
+}
+
+/* ---------------------------------------------------------------------------
+   8. TABS
+   A real tablist: arrow keys move between tabs, and the active tab is the only
+   one in the tab order. The indicator slides rather than jumping, which is the
+   one piece of motion worth spending on here.
+   --------------------------------------------------------------------------- */
+
+.ds-tabs {
+  display: flex;
+  gap: var(--rt-space-1);
+  padding: 4px;
+  background: var(--rt-surface-muted);
+  border-radius: var(--rt-radius-md);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ds-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.ds-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 var(--rt-space-4);
+  flex: 1 0 auto;
+  color: var(--rt-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--rt-radius-sm);
+  font: var(--rt-text-meta);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--rt-dur-base) var(--rt-ease),
+    background-color var(--rt-dur-base) var(--rt-ease),
+    box-shadow var(--rt-dur-base) var(--rt-ease);
+}
+
+.ds-tab:hover:not([aria-selected="true"]) {
+  color: var(--rt-text);
+}
+
+.ds-tab[aria-selected="true"] {
+  color: var(--rt-primary-deep);
+  background: var(--rt-card);
+  box-shadow: var(--rt-shadow-sm);
+}
+
+.ds-tab__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--rt-radius-pill);
+  background: var(--rt-surface-active);
+  color: var(--rt-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.ds-tab[aria-selected="true"] .ds-tab__count {
+  background: var(--rt-primary-soft);
+  color: var(--rt-primary-deep);
+}
+
+/* Underline variant, for pages that have their own card above the tabs and do
+   not want the segmented track. */
+.ds-tabs--underline {
+  gap: var(--rt-space-5);
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid var(--rt-border);
+}
+
+.ds-tabs--underline .ds-tab {
+  border-radius: 0;
+}
+
+.ds-tabs--underline .ds-tab[aria-selected="true"] {
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--rt-primary);
+}
+
+/* ---------------------------------------------------------------------------
+   9. SEGMENTED CONTROL
+   For a small set of mutually exclusive options that change what is shown
+   rather than what is submitted. Larger touch targets than the tab strip,
+   because the two primary uses (Find/Offer, filter chips) are the most-tapped
+   controls on their pages.
+   --------------------------------------------------------------------------- */
+
+.ds-segment {
+  display: inline-flex;
+  padding: 4px;
+  gap: 2px;
+  background: var(--rt-surface-muted);
+  border-radius: var(--rt-radius-md);
+}
+
+.ds-segment--block {
+  display: flex;
+  width: 100%;
+}
+
+.ds-segment__option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 var(--rt-space-5);
+  flex: 1 0 auto;
+  color: var(--rt-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--rt-radius-sm);
+  font: var(--rt-text-button);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--rt-dur-base) var(--rt-ease),
+    background-color var(--rt-dur-base) var(--rt-ease),
+    box-shadow var(--rt-dur-base) var(--rt-ease);
+}
+
+.ds-segment__option:hover:not([aria-pressed="true"]) {
+  color: var(--rt-text);
+}
+
+.ds-segment__option[aria-pressed="true"] {
+  color: var(--rt-primary-deep);
+  background: var(--rt-card);
+  box-shadow: var(--rt-shadow-sm);
+}
+
+/* ---------------------------------------------------------------------------
+   10. FILTER CHIPS
+   Horizontal scroller for mobile filter rows. Scrolls rather than wraps, so the
+   row height never changes between devices.
+   --------------------------------------------------------------------------- */
+
+.ds-chips {
+  display: flex;
+  gap: var(--rt-space-2);
+  margin: 0;
+  padding: 0 var(--rt-gutter);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ds-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 var(--rt-space-4);
+  flex: 0 0 auto;
+  color: var(--rt-muted);
+  background: var(--rt-surface);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-pill);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--rt-dur-fast) var(--rt-ease),
+    background-color var(--rt-dur-fast) var(--rt-ease),
+    border-color var(--rt-dur-fast) var(--rt-ease);
+}
+
+.ds-chip:hover {
+  border-color: var(--rt-border-strong);
+  color: var(--rt-text);
+}
+
+.ds-chip[aria-pressed="true"],
+.ds-chip.is-active {
+  color: #fff;
+  background: var(--rt-primary);
+  border-color: var(--rt-primary);
+}
+
+.ds-chip__value {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* ---------------------------------------------------------------------------
+   11. STAT CARDS
+   A single number with its label. Used for the at-a-glance row on Home, My
+   Rides and My Bookings.
+   --------------------------------------------------------------------------- */
+
+.ds-stat {
+  display: flex;
+  align-items: center;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-4);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+  box-shadow: var(--rt-shadow-sm);
+}
+
+.ds-stat__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: var(--rt-radius-md);
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.ds-stat__body {
+  min-width: 0;
+}
+
+.ds-stat__value {
+  display: block;
+  color: var(--rt-text);
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: var(--rt-tracking-tight);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-stat__label {
+  display: block;
+  margin-top: 2px;
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.ds-stat-grid {
+  display: grid;
+  gap: var(--rt-space-3);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+/* ---------------------------------------------------------------------------
+   12. STEP INDICATOR
+   Offer Ride is a five-step form, so the host needs to know how far in they are
+   and what is left. A vertical rail on mobile, a horizontal one on desktop.
+   --------------------------------------------------------------------------- */
+
+.ds-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: ds-step;
+}
+
+.ds-steps--horizontal {
+  flex-direction: row;
+  gap: var(--rt-space-2);
+}
+
+.ds-step {
+  position: relative;
+  display: flex;
+  gap: var(--rt-space-3);
+  padding-bottom: var(--rt-space-5);
+  color: var(--rt-muted);
+  counter-increment: ds-step;
+}
+
+.ds-step:last-child {
+  padding-bottom: 0;
+}
+
+/* The connector is drawn on the item rather than as a separate element so it
+   cannot be left behind when the last step is hidden. */
+.ds-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 30px;
+  left: 15px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--rt-border);
+}
+
+.ds-step--done:not(:last-child)::before {
+  background: var(--rt-primary);
+}
+
+.ds-step__marker {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--rt-surface-muted);
+  color: var(--rt-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-step--active .ds-step__marker {
+  background: var(--rt-primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--rt-primary-soft);
+}
+
+.ds-step--done .ds-step__marker {
+  background: var(--rt-primary-soft);
+  color: var(--rt-primary-deep);
+}
+
+.ds-step__text {
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.ds-step__title {
+  display: block;
+  color: var(--rt-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ds-step--active .ds-step__title,
+.ds-step--done .ds-step__title {
+  color: var(--rt-text);
+}
+
+.ds-step__description {
+  display: block;
+  margin-top: 2px;
+  color: var(--rt-subtle);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Horizontal: a compact rail, for desktop only. */
+.ds-steps--horizontal .ds-step {
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--rt-space-2);
+  padding-bottom: 0;
+  text-align: center;
+}
+
+.ds-steps--horizontal .ds-step:not(:last-child)::before {
+  top: 15px;
+  left: calc(50% + 22px);
+  right: calc(-50% + 22px);
+  bottom: auto;
+  width: auto;
+  height: 2px;
+}
+
+.ds-steps--horizontal .ds-step__text {
+  padding-top: 0;
+}
+
+.ds-steps--horizontal .ds-step__description {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   13. TIMELINE
+   A trip's progress: pickup, journey, arrival. The spine is drawn behind the
+   markers so a gap between items still reads as connected.
+   --------------------------------------------------------------------------- */
+
+.ds-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ds-timeline__item {
+  position: relative;
+  display: flex;
+  gap: var(--rt-space-3);
+  padding-bottom: var(--rt-space-5);
+}
+
+.ds-timeline__item:last-child {
+  padding-bottom: 0;
+}
+
+.ds-timeline__item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 24px;
+  left: 11px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--rt-border);
+}
+
+.ds-timeline__item--done:not(:last-child)::before {
+  background: var(--rt-primary);
+}
+
+.ds-timeline__marker {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--rt-surface-muted);
+  color: var(--rt-muted);
+  border: 2px solid var(--rt-card);
+}
+
+.ds-timeline__item--done .ds-timeline__marker {
+  background: var(--rt-primary);
+  color: #fff;
+}
+
+.ds-timeline__item--active .ds-timeline__marker {
+  background: var(--rt-primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--rt-primary-soft);
+}
+
+.ds-timeline__content {
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.ds-timeline__title {
+  display: block;
+  color: var(--rt-text);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ds-timeline__meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+/* ---------------------------------------------------------------------------
+   14. SKELETONS
+   A background refresh should not blank the page. These stand in for content
+   that is on its way, sized like the real thing so nothing shifts when it lands.
+   --------------------------------------------------------------------------- */
+
+.ds-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--rt-surface-muted) 0%,
+    var(--rt-surface-hover) 40%,
+    var(--rt-surface-muted) 80%
+  );
+  background-size: 220% 100%;
+  border-radius: var(--rt-radius-sm);
+  animation: ds-shimmer 1.5s var(--rt-ease) infinite;
+}
+
+@keyframes ds-shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+.ds-skeleton--text {
+  height: 0.75rem;
+  margin: 0;
+  border-radius: var(--rt-radius-pill);
+}
+
+.ds-skeleton--title {
+  height: 1.125rem;
+  width: 55%;
+}
+
+.ds-skeleton--circle {
+  border-radius: 50%;
+}
+
+.ds-skeleton-card {
+  padding: var(--rt-space-5);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+}
+
+.ds-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rt-space-3);
+}
+
+/* ---------------------------------------------------------------------------
+   15. EMPTY / ERROR STATES
+   One component covers both, because the shape is identical: an icon, a title,
+   an explanation and one action.
+   --------------------------------------------------------------------------- */
+
+.ds-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--rt-space-10) var(--rt-space-6);
+}
+
+.ds-state__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: var(--rt-space-4);
+  border-radius: 50%;
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.ds-state--error .ds-state__icon {
+  color: var(--rt-danger-text);
+  background: var(--rt-danger-soft);
+}
+
+.ds-state__title {
+  margin: 0;
+  color: var(--rt-text);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: var(--rt-tracking-tight);
+}
+
+.ds-state__body {
+  max-width: 42ch;
+  margin: var(--rt-space-2) 0 0;
+  color: var(--rt-muted);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.ds-state__action {
+  margin-top: var(--rt-space-5);
+}
+
+/* ---------------------------------------------------------------------------
+   16. TOASTS
+   Anchored bottom-centre on mobile, above the bottom nav; bottom-right on
+   desktop. `pointer-events: none` on the stack with `auto` on each toast so the
+   gap between stacked toasts does not swallow clicks on the page.
+   --------------------------------------------------------------------------- */
+
+.ds-toast-stack {
+  position: fixed;
+  z-index: 90;
+  left: 50%;
+  bottom: calc(var(--rt-mobile-nav-inset) + var(--rt-space-4));
+  display: flex;
+  flex-direction: column;
+  gap: var(--rt-space-2);
+  width: min(420px, calc(100vw - 2 * var(--rt-gutter)));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.ds-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-3) var(--rt-space-4);
+  color: var(--rt-text);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-md);
+  box-shadow: var(--rt-shadow-float);
+  pointer-events: auto;
+  animation: ds-toast-in var(--rt-dur-slow) var(--rt-ease-out);
+}
+
+.ds-toast__icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--rt-primary);
+}
+
+.ds-toast--error .ds-toast__icon {
+  color: var(--rt-danger);
+}
+
+.ds-toast--warning .ds-toast__icon {
+  color: var(--rt-warning);
+}
+
+.ds-toast__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.ds-toast__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--rt-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--rt-radius-sm);
+  cursor: pointer;
+}
+
+.ds-toast__close:hover {
+  color: var(--rt-text);
+  background: var(--rt-surface-hover);
+}
+
+@keyframes ds-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   17. SHEET (bottom sheet on mobile, centred dialog on desktop)
+   One component. On a narrow viewport it slides up from the bottom edge and
+   respects the safe area; on a wide one it is a plain centred dialog. This is
+   the Android pattern the brief asks for, without maintaining two components.
+   --------------------------------------------------------------------------- */
+
+.ds-sheet-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  background: var(--rt-overlay);
+  backdrop-filter: blur(3px);
+  animation: ds-fade-in var(--rt-dur-base) var(--rt-ease);
+}
+
+.ds-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 92dvh;
+  color: var(--rt-text);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-bottom: 0;
+  border-radius: var(--rt-radius-xl) var(--rt-radius-xl) 0 0;
+  box-shadow: var(--rt-shadow-lg);
+  animation: ds-sheet-up var(--rt-dur-sheet) var(--rt-ease-out);
+}
+
+/* The grab handle is the mobile affordance for "this can be dismissed by
+   dragging"; it is decorative, so it is hidden from assistive technology. */
+.ds-sheet__handle {
+  width: 38px;
+  height: 4px;
+  margin: 10px auto 0;
+  border-radius: var(--rt-radius-pill);
+  background: var(--rt-border-strong);
+}
+
+.ds-sheet__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-4) var(--rt-space-5) var(--rt-space-3);
+}
+
+.ds-sheet__title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: var(--rt-tracking-tight);
+}
+
+.ds-sheet__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 var(--rt-space-5) var(--rt-space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ds-sheet__footer {
+  display: flex;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-4) var(--rt-space-5);
+  /* The bottom inset is what keeps a sheet's primary action clear of the
+     Android gesture bar. */
+  padding-bottom: calc(var(--rt-space-4) + var(--rt-safe-bottom));
+  border-top: 1px solid var(--rt-border-subtle);
+  background: var(--rt-card);
+}
+
+.ds-sheet__footer .ds-button {
+  flex: 1 1 0;
+}
+
+@keyframes ds-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes ds-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Desktop: the same component becomes a centred dialog, and the handle and
+   safe-area padding are no longer meaningful. */
+@media (min-width: 720px) {
+  .ds-sheet-backdrop {
+    align-items: center;
+    padding: var(--rt-space-6);
+  }
+
+  .ds-sheet {
+    max-width: 560px;
+    max-height: 86dvh;
+    border-bottom: 1px solid var(--rt-border);
+    border-radius: var(--rt-radius-xl);
+    animation-name: ds-dialog-in;
+  }
+
+  .ds-sheet__handle {
+    display: none;
+  }
+
+  .ds-sheet__footer {
+    padding-bottom: var(--rt-space-4);
+  }
+}
+
+@keyframes ds-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   18. PAGE HEADER
+   Title, optional description, optional actions. Pages use this instead of
+   inventing their own heading block.
+   --------------------------------------------------------------------------- */
+
+.ds-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--rt-space-5);
+  flex-wrap: wrap;
+  margin-bottom: var(--rt-space-6);
+}
+
+.ds-page-header__eyebrow {
+  display: block;
+  margin-bottom: var(--rt-space-2);
+  color: var(--rt-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: var(--rt-tracking-wide);
+  text-transform: uppercase;
+}
+
+.ds-page-header__title {
+  margin: 0;
+  color: var(--rt-text-strong);
+  font: var(--rt-text-title);
+  letter-spacing: var(--rt-tracking-tight);
+}
+
+.ds-page-header__description {
+  max-width: var(--rt-content-max-text);
+  margin: var(--rt-space-2) 0 0;
+  color: var(--rt-muted);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.ds-page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--rt-space-3);
+  flex-wrap: wrap;
+}
+
+/* ---------------------------------------------------------------------------
+   19. SECTION HEADER
+   --------------------------------------------------------------------------- */
+
+.ds-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rt-space-4);
+  margin-bottom: var(--rt-space-4);
+}
+
+.ds-section-header__title {
+  margin: 0;
+  color: var(--rt-text-strong);
+  font: var(--rt-text-section);
+  letter-spacing: var(--rt-tracking-tight);
+}
+
+.ds-section-header__description {
+  margin: var(--rt-space-1) 0 0;
+  color: var(--rt-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.ds-section-header__action {
+  flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------------------
+   20. TRUST STRIP
+   Compact horizontal reassurance on Home. Deliberately small: three cards, one
+   row on desktop, a scroller on mobile.
+   --------------------------------------------------------------------------- */
+
+.ds-trust {
+  display: grid;
+  gap: var(--rt-space-3);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.ds-trust__item {
+  display: flex;
+  align-items: center;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-4);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+}
+
+.ds-trust__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: var(--rt-radius-md);
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.ds-trust__title {
+  display: block;
+  color: var(--rt-text);
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.ds-trust__body {
+  display: block;
+  margin-top: 1px;
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------------
+   20b. HOW IT WORKS
+   A numbered journey explanation. The connector line is drawn between the
+   markers only, and only when there is a next step - so the rail never dangles
+   past the final card on a narrow screen where the grid has wrapped.
+   --------------------------------------------------------------------------- */
+
+.ds-how {
+  display: grid;
+  gap: var(--rt-space-4);
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: ds-how;
+}
+
+.ds-how__step {
+  position: relative;
+  display: flex;
+  gap: var(--rt-space-3);
+  padding: var(--rt-space-5);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+  box-shadow: var(--rt-shadow-xs);
+}
+
+.ds-how__marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  border-radius: var(--rt-radius-md);
+  color: var(--rt-primary-deep);
+  background: var(--rt-primary-soft);
+}
+
+.ds-how__body {
+  display: block;
+  min-width: 0;
+}
+
+.ds-how__count {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--rt-primary);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ds-how__title {
+  display: block;
+  color: var(--rt-text);
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.ds-how__description {
+  display: block;
+  margin-top: 5px;
+  color: var(--rt-muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+@media (max-width: 640px) {
+  .ds-how {
+    grid-template-columns: 1fr;
+  }
+
+  .ds-how__step {
+    padding: var(--rt-space-4);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   20c. JOURNEY PLANNER
+   The home page's find/offer control. One card holds the mode switch, the two
+   location fields and the journey details, so the whole first action of the
+   product is a single object the eye can land on.
+
+   The two LocationSearch fields are stacked with a connector between them
+   rather than side by side: they carry long place labels, and two long labels
+   side by side on a phone means two truncated ones.
+   --------------------------------------------------------------------------- */
+
+.rt-planner {
+  display: grid;
+  gap: var(--rt-space-4);
+  padding: var(--rt-space-5);
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-2xl);
+  box-shadow: var(--rt-shadow-lg);
+}
+
+.rt-planner__tabs .ds-segment {
+  background: var(--rt-surface-muted);
+}
+
+.rt-planner__route {
+  display: grid;
+  gap: var(--rt-space-3);
+}
+
+.rt-planner__location {
+  position: relative;
+}
+
+.rt-planner__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--rt-space-3);
+}
+
+.rt-planner__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--rt-space-2);
+  margin: 0;
+  padding: var(--rt-space-3);
+  border: 1px solid var(--rt-danger-ring);
+  border-radius: var(--rt-radius-md);
+  color: var(--rt-danger-text);
+  background: var(--rt-danger-soft);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.rt-planner__error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.rt-planner__note {
+  margin: 0;
+  color: var(--rt-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+@media (max-width: 520px) {
+  .rt-planner {
+    padding: var(--rt-space-4);
+  }
+
+  .rt-planner__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   21. RESPONSIVE
+   --------------------------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .ds-page-header {
+    align-items: flex-start;
+    margin-bottom: var(--rt-space-5);
+  }
+
+  .ds-page-header__actions {
+    width: 100%;
+  }
+
+  .ds-page-header__actions .ds-button {
+    flex: 1 1 auto;
+  }
+
+  /* Major actions get the full 48px+ target on touch. */
+  .ds-button--lg {
+    min-height: 52px;
+  }
+
+  .ds-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 380px) {
+  .ds-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ds-button--lg {
+    padding: 0 var(--rt-space-4);
+  }
+
+  .ds-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   21b. GROUPS, ROWS AND METRICS
+   The vocabulary for "a page made of labelled sections of settings-like lines".
+   Profile, Vehicles, Safety and Settings are all built from these, which is what
+   keeps four very different pages reading as one product.
+   --------------------------------------------------------------------------- */
+
+.ds-group {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+}
+
+.ds-group__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-inline: 2px;
+}
+
+.ds-group__headline {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.ds-group__action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.ds-group__title {
+  margin: 0;
+  color: var(--rt-text-strong);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ds-group__description {
+  margin: 0;
+  color: var(--rt-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.ds-group__body {
+  display: flex;
+  flex-direction: column;
+  background: var(--rt-card);
+  border: 1px solid var(--rt-border);
+  border-radius: var(--rt-radius-card);
+  box-shadow: var(--rt-shadow-card);
+  overflow: hidden;
+}
+
+/* Consecutive rows share separators, so a group reads as one list rather than
+   as a stack of individually outlined boxes. */
+.ds-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 15px 17px;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--rt-border);
+}
+
+.ds-row:last-child {
+  border-bottom: 0;
+}
+
+.ds-row__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  color: var(--rt-primary-strong);
+  background: var(--rt-primary-soft);
+}
+
+.ds-row__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ds-row__title {
+  color: var(--rt-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.ds-row__description {
+  color: var(--rt-muted);
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+
+/* The whole row is the hit target for its control, so the description has to be
+   excluded - otherwise selecting the sentence switches the setting. */
+.ds-row__description,
+.ds-row__value {
+  user-select: none;
+}
+
+.ds-row__action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.ds-row__value {
+  color: var(--rt-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-align: right;
+  word-break: break-word;
+}
+
+.ds-row--danger .ds-row__title {
+  color: var(--rt-danger);
+}
+
+.ds-row--danger .ds-row__icon {
+  color: var(--rt-danger);
+  background: var(--rt-danger-soft);
+}
+
+.ds-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px 15px;
+  border-radius: var(--rt-radius-md);
+  background: var(--rt-surface-subtle);
+  border: 1px solid var(--rt-border);
+}
+
+.ds-metric__icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 5px;
+  border-radius: 10px;
+  color: var(--rt-primary-strong);
+  background: var(--rt-primary-soft);
+}
+
+.ds-metric__value {
+  color: var(--rt-text-strong);
+  font-size: 1.22rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.ds-metric__label {
+  color: var(--rt-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.ds-metric--brand .ds-metric__icon {
+  color: var(--rt-accent);
+  background: var(--rt-warning-soft);
+}
+
+.ds-metric--accent .ds-metric__icon {
+  color: var(--rt-info-text);
+  background: var(--rt-info-soft);
+}
+
+/* ---------------------------------------------------------------------------
+   21c. THE OPTIONAL UPI FIELD
+   --------------------------------------------------------------------------- */
+
+.ds-upi {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 17px;
+}
+
+.ds-upi__head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.ds-upi__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  color: var(--rt-primary-strong);
+  background: var(--rt-primary-soft);
+}
+
+.ds-upi__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ds-upi__title {
+  color: var(--rt-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.ds-upi__description {
+  color: var(--rt-muted);
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+
+.ds-upi__badge {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--rt-primary-strong);
+  background: var(--rt-primary-soft);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ds-upi__badge--empty {
+  color: var(--rt-muted);
+  background: var(--rt-surface-muted);
+}
+
+.ds-upi__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ds-upi__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 42px;
+  padding: 0 13px;
+  border: 1px solid var(--rt-border-strong);
+  border-radius: var(--rt-radius-sm);
+  background: var(--rt-surface);
+  color: var(--rt-text);
+  font-size: 0.875rem;
+  transition:
+    border-color var(--rt-dur-base) var(--rt-ease),
+    box-shadow var(--rt-dur-base) var(--rt-ease);
+}
+
+.ds-upi__input::placeholder {
+  color: var(--rt-muted);
+}
+
+.ds-upi__input:focus-visible {
+  outline: none;
+  border-color: var(--rt-primary-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 20%, transparent);
+}
+
+.ds-upi__input[aria-invalid="true"] {
+  border-color: var(--rt-danger);
+}
+
+.ds-upi__hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--rt-muted);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.ds-upi__hint svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--rt-primary-strong);
+}
+
+.ds-upi__message {
+  margin: 0;
+  color: var(--rt-primary-strong);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.ds-upi__message--error {
+  color: var(--rt-danger);
+}
+
+@media (max-width: 560px) {
+  /* The row cannot hold an input plus two buttons at 320px, so it wraps and the
+     input takes the full width rather than being squeezed to nothing. */
+  .ds-upi__row {
+    flex-wrap: wrap;
+  }
+
+  .ds-upi__input {
+    flex-basis: 100%;
+  }
+
+  .ds-upi__row .ds-button {
+    flex: 1 1 auto;
+  }
+
+  .ds-upi__clear-label {
+    display: none;
+  }
+
+  .ds-row {
+    gap: 11px;
+    padding: 14px 15px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   22. REDUCED MOTION
+   Non-essential movement only. Colour and border transitions are kept, because
+   they are what communicates state; transforms and pulses are not.
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-button,
+  .ds-card--interactive,
+  .ds-icon-button,
+  .ds-tab,
+  .ds-segment__option,
+  .ds-input,
+  .ds-select,
+  .ds-textarea,
+  .ds-sheet,
+  .ds-sheet-backdrop,
+  .ds-toast {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .ds-button:hover:not(:disabled),
+  .ds-card--interactive:hover {
+    transform: none;
+  }
+
+  .ds-button:active:not(:disabled),
+  .ds-icon-button:active:not(:disabled) {
+    transform: none;
+  }
+
+  .ds-skeleton,
+  .ds-badge--live .ds-badge__dot,
+  .ds-button__spinner {
+    animation: none;
+  }
+
+  /* A skeleton with no shimmer still needs to read as "loading", so it holds a
+     static tint rather than the animated gradient's mid-tone. */
+  .ds-skeleton {
+    background: var(--rt-surface-muted);
+  }
+}

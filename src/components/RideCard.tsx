@@ -10,6 +10,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { Stars } from "./Stars";
+import { RideStatusBadge } from "./StatusBadge";
 import { formatRupees } from "../services/fare";
 import type { Ride, User, Vehicle } from "../types";
 
@@ -110,7 +111,10 @@ export function RideCard({
             ) : null}
           </div>
         </div>
-        {ride.status !== "active" ? <span className={`ride-card__status ride-card__status--${ride.status}`}>{ride.status}</span> : null}
+        {/* The database's own state name, never rendered raw. `in_progress` is
+            what the column is called; "On the road" is what it means to someone
+            reading this card. */}
+        {ride.status !== "active" ? <RideStatusBadge status={ride.status} /> : null}
       </div>
 
       <div className="ride-card__route" aria-label="Ride route">

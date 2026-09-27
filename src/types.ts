@@ -110,8 +110,14 @@ export interface Payment {
 export interface PickupPoint extends Coordinates {
   /** How far the rider walks from their requested origin to the agreed point. */
   walkDistanceKm?: number;
-  /** Extra road distance the host drives to collect this passenger. */
+  /** Extra road distance the host drives to reach this end of the passenger's leg. */
   detourKm?: number;
+  /**
+   * Extra minutes at this end. Only set when the time was actually attributed to
+   * this end; a re-route measures the total for the leg, so the figure for the
+   * whole pickup and drop-off belongs on `MatchScore.totalDetourMinutes` rather
+   * than being copied onto both points as though each had its own.
+   */
   detourMinutes?: number;
 }
 
@@ -145,15 +151,27 @@ export interface Booking {
 export interface MatchScore {
   /** 0-100. Higher is a better fit. Not a probability. */
   score: number;
-  /** Minutes the host's departure differs from the rider's ideal. */
-  timeDifferenceMinutes: number;
+  /**
+   * Minutes the host's departure differs from the rider's ideal, or null when the
+   * rider did not give a time. Null is not zero: a search with no time has not
+   * measured this, and must not imply the host departs exactly on the minute.
+   */
+  timeDifferenceMinutes: number | null;
   /** Distance from the rider's requested origin to the agreed pickup point. */
   walkDistanceKm: number;
-  /** Extra road distance and time for the host, pickup and drop-off combined. */
-  totalDetourKm: number;
-  totalDetourMinutes: number;
-  /** Share of the host route the passenger's leg lies along, 0-1. */
-  overlap: number;
+  /**
+   * Extra road distance the passenger costs the host, or null when the re-route
+   * could not be measured. A failed measurement is never reported as a zero
+   * detour, which would be a claim the app cannot support.
+   */
+  totalDetourKm: number | null;
+  /** The same measurement in minutes, or null alongside an unmeasured distance. */
+  totalDetourMinutes: number | null;
+  /**
+   * Share of the host route the passenger's leg lies along, 0-1, or null when the
+   * ride has no stored corridor to measure it against.
+   */
+  overlap: number | null;
   seatsAvailable: number;
 }
 

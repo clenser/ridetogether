@@ -21,6 +21,7 @@ import LoginPage from "./pages/auth/LoginPage";
 import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
 import SignUpPage from "./pages/auth/SignUpPage";
 import AuthCallbackPage from "./pages/auth/AuthCallbackPage";
+import { ToastProvider } from "./components/ui/Toast";
 
 const notFoundStyles = `
 .rt-not-found {
@@ -28,16 +29,16 @@ const notFoundStyles = `
   display: grid;
   place-items: center;
   padding: clamp(32px, 6vw, 72px) 20px;
-  color: #17231c;
+  color: var(--rt-text-strong);
   background:
     radial-gradient(circle at 50% 10%, rgba(185, 235, 202, .58), transparent 32%),
-    linear-gradient(145deg, #f7fbf8, #eef8f1);
+    linear-gradient(145deg, var(--rt-surface-subtle), var(--rt-surface-subtle));
 }
 .rt-not-found__card {
   position: relative;
   width: min(720px, 100%);
   overflow: hidden;
-  border: 1px solid #d5e6da;
+  border: 1px solid var(--rt-border);
   border-radius: 28px;
   background: rgba(255, 255, 255, .94);
   box-shadow: 0 24px 64px rgba(24, 77, 43, .12);
@@ -52,7 +53,7 @@ const notFoundStyles = `
   padding: 34px 24px 20px;
   background:
     radial-gradient(circle at 24% 18%, rgba(255, 255, 255, .74), transparent 24%),
-    linear-gradient(135deg, #159447, #0d7d3c);
+    linear-gradient(135deg, var(--rt-primary), var(--rt-primary-strong));
 }
 .rt-not-found__visual::before,
 .rt-not-found__visual::after {
@@ -84,7 +85,7 @@ const notFoundStyles = `
   padding: 9px 14px;
   border: 1px solid rgba(255, 255, 255, .2);
   border-radius: 999px;
-  color: #fff;
+  color: var(--rt-text-inverse);
   background: rgba(7, 93, 43, .25);
   box-shadow: 0 10px 28px rgba(5, 70, 31, .16);
   font-size: .8rem;
@@ -102,8 +103,8 @@ const notFoundStyles = `
   margin: 2px auto 0;
   border: 1px solid rgba(255, 255, 255, .24);
   border-radius: 24px;
-  color: #159447;
-  background: #fff;
+  color: var(--rt-primary);
+  background: var(--rt-card);
   box-shadow: 0 15px 30px rgba(5, 70, 31, .2);
   transform: rotate(-5deg);
 }
@@ -114,7 +115,7 @@ const notFoundStyles = `
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #148642;
+  color: var(--rt-primary-strong);
   font-size: .72rem;
   font-weight: 850;
   letter-spacing: .08em;
@@ -122,7 +123,7 @@ const notFoundStyles = `
 }
 .rt-not-found h1 {
   margin: 11px 0 10px;
-  color: #183c25;
+  color: var(--rt-text-strong);
   font-size: clamp(1.75rem, 5vw, 2.65rem);
   line-height: 1.08;
   letter-spacing: -.045em;
@@ -130,7 +131,7 @@ const notFoundStyles = `
 .rt-not-found__description {
   max-width: 520px;
   margin: 0 auto;
-  color: #6b7c72;
+  color: var(--rt-muted);
   font-size: .92rem;
   line-height: 1.65;
 }
@@ -142,10 +143,10 @@ const notFoundStyles = `
   min-width: 0;
   margin: 22px auto 0;
   padding: 11px 13px;
-  border: 1px solid #dce8df;
+  border: 1px solid var(--rt-border);
   border-radius: 12px;
-  color: #67786e;
-  background: #f5f9f6;
+  color: var(--rt-text);
+  background: var(--rt-surface-subtle);
   font-size: .73rem;
   text-align: left;
 }
@@ -156,7 +157,7 @@ const notFoundStyles = `
 .rt-not-found__path code {
   min-width: 0;
   overflow: hidden;
-  color: #28533a;
+  color: var(--rt-text);
   font-family: inherit;
   font-weight: 750;
   text-overflow: ellipsis;
@@ -185,44 +186,44 @@ const notFoundStyles = `
   transition: transform .18s ease, background .18s ease, border-color .18s ease;
 }
 .rt-not-found__button--primary {
-  color: #fff;
-  background: #159447;
-  box-shadow: 0 9px 20px rgba(21, 148, 71, .2);
+  color: var(--rt-text-inverse);
+  background: var(--rt-primary);
+  box-shadow: 0 9px 20px color-mix(in srgb, var(--rt-primary) 20%, transparent);
 }
 .rt-not-found__button--primary:hover {
-  background: #10813b;
+  background: var(--rt-primary-strong);
   transform: translateY(-1px);
 }
 .rt-not-found__button--secondary {
-  border-color: #cfe0d5;
-  color: #345343;
-  background: #fff;
+  border-color: var(--rt-border);
+  color: var(--rt-text);
+  background: var(--rt-card);
 }
 .rt-not-found__button--secondary:hover {
-  border-color: #a8cfb5;
-  background: #f1f9f3;
+  border-color: var(--rt-border);
+  background: var(--rt-surface-subtle);
   transform: translateY(-1px);
 }
 [data-theme="dark"] .rt-not-found {
-  color: #eef7f1;
-  background: radial-gradient(circle at 50% 10%, rgba(39, 102, 62, .4), transparent 32%), linear-gradient(145deg, #101712, #142219);
+  color: var(--rt-text);
+  background: radial-gradient(circle at 50% 10%, rgba(39, 102, 62, .4), transparent 32%), linear-gradient(145deg, var(--rt-surface-subtle), #142219);
 }
 [data-theme="dark"] .rt-not-found__card {
-  border-color: #2b3a30;
+  border-color: var(--rt-border);
   background: rgba(23, 33, 26, .96);
   box-shadow: 0 24px 64px rgba(0, 0, 0, .25);
 }
-[data-theme="dark"] .rt-not-found__copy h1 { color: #eef7f1; }
-[data-theme="dark"] .rt-not-found__description { color: #a6b5ac; }
+[data-theme="dark"] .rt-not-found__copy h1 { color: var(--rt-text); }
+[data-theme="dark"] .rt-not-found__description { color: var(--rt-muted); }
 [data-theme="dark"] .rt-not-found__path {
-  border-color: #34463a;
-  color: #a6b5ac;
-  background: #1b271f;
+  border-color: var(--rt-border);
+  color: var(--rt-muted);
+  background: var(--rt-surface-raised);
 }
 [data-theme="dark"] .rt-not-found__path code { color: #d5eadc; }
 [data-theme="dark"] .rt-not-found__button--secondary {
-  border-color: #3b4e41;
-  color: #eef7f1;
+  border-color: var(--rt-border-strong);
+  color: var(--rt-text);
   background: #1a251e;
 }
 @media (max-width: 560px) {
@@ -298,7 +299,8 @@ export default function App() {
   }, [location.pathname]);
 
   return (
-    <Routes>
+    <ToastProvider>
+      <Routes>
       <Route
         path="/login"
         element={
@@ -351,6 +353,7 @@ export default function App() {
             <Route path="rides" element={<MyRidesPage />} />
             <Route path="rides/:rideId" element={<RideDetailsPage />} />
             <Route path="bookings" element={<MyBookingsPage />} />
+            <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:rideId" element={<ChatPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="profile" element={<ProfilePage />} />
@@ -362,5 +365,6 @@ export default function App() {
         </Route>
       </Route>
     </Routes>
+    </ToastProvider>
   );
 }

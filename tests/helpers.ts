@@ -203,3 +203,30 @@ export const expectNoHorizontalOverflow = async (page: Page): Promise<void> => {
     `content overflows horizontally: ${overflow.scrollWidth}px in ${overflow.clientWidth}px`,
   ).toBeLessThanOrEqual(overflow.clientWidth + 1);
 };
+
+const OFFER_STEP_TESTIDS = ["offer-step-route", "offer-step-schedule", "offer-step-review"] as const;
+
+/**
+ * Moves the Offer Ride wizard to a step.
+ *
+ * The form is a three step flow, so a test that wants a field on a later step
+ * has to walk there the way a host would. Forward movement is deliberately not
+ * forced: `Continue` stays disabled until the current step is genuinely valid,
+ * and that per-step gate is itself worth asserting. Callers that need to reach
+ * a later step must therefore fill in the earlier ones first - or pass
+ * `force` to click through regardless, for tests that are about something else.
+ */
+export const gotoOfferStep = async (page: Page, step: 0 | 1 | 2, options: { force?: boolean } = {}): Promise<void> => {
+  for (let current = 0; current < step; current += 1) {
+    const continueButton = page.getByTestId("offer-continue");
+    if (options.force) {
+      await continueButton.click({ force: true, timeout: 10_000 });
+    } else {
+      await expect(continueButton).toBeEnabled({ timeout: 15_000 });
+      await continueButton.click();
+    }
+    await expect(page.getByTestId(OFFER_STEP_TESTIDS[current + 1])).toBeVisible();
+  }
+  await expect(page.getByTestId(OFFER_STEP_TESTIDS[step])).toBeVisible();
+};
+

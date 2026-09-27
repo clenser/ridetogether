@@ -25,8 +25,11 @@ import {
 } from "lucide-react";
 import { EmptyState } from "../components/EmptyState";
 import { PageHeader } from "../components/PageHeader";
+import { Tabs } from "../components/ui/Tabs";
 import { useApp } from "../context/AppContext";
 import type { AppNotification, NotificationType } from "../types";
+
+type NotificationFilter = "all" | "unread" | "read";
 
 interface NotificationVisual {
   label: string;
@@ -35,64 +38,66 @@ interface NotificationVisual {
 }
 
 const notificationStyles = `
-.rt-notifications-page { min-height: 100%; padding: 28px 20px 60px; color: var(--rt-text, #17231c); background: var(--rt-surface-subtle, #f6faf7); }
+.rt-notifications-page { min-height: 100%; padding: 28px 20px 60px; color: var(--rt-text, var(--rt-text-strong)); background: var(--rt-surface-subtle, var(--rt-surface-subtle)); }
 .rt-notifications-shell { max-width: 980px; margin: 0 auto; }
-.rt-notifications-heading { display: flex; align-items: center; gap: 7px; color: #148642; font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.rt-notifications-mark-all { min-height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border: 1px solid #cfe1d5; border-radius: 12px; color: #137a3d; background: #f0faf4; font: inherit; font-size: .8rem; font-weight: 760; cursor: pointer; }
-.rt-notifications-mark-all:hover:not(:disabled) { background: #e0f4e7; }
+.rt-notifications-heading { display: flex; align-items: center; gap: 7px; color: var(--rt-primary-strong); font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.rt-notifications-mark-all { min-height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border: 1px solid var(--rt-border); border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-surface-subtle); font: inherit; font-size: .8rem; font-weight: 760; cursor: pointer; }
+.rt-notifications-mark-all:hover:not(:disabled) { background: var(--rt-surface-muted); }
 .rt-notifications-mark-all:disabled { opacity: .48; cursor: not-allowed; }
 .rt-notifications-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 25px; }
-.rt-notifications-stat { display: flex; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--rt-border, #dce7df); border-radius: 17px; background: var(--rt-card, #fff); box-shadow: 0 8px 24px rgba(29,64,42,.045); }
-.rt-notifications-stat-icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: #148642; background: #e2f5e8; }
-.rt-notifications-stat:nth-child(2) .rt-notifications-stat-icon { color: #2563a7; background: #e9f2fb; }
-.rt-notifications-stat:nth-child(3) .rt-notifications-stat-icon { color: #6e7780; background: #eef1f2; }
+.rt-notifications-stat { display: flex; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--rt-border, var(--rt-border)); border-radius: 17px; background: var(--rt-card, var(--rt-card)); box-shadow: 0 8px 24px color-mix(in srgb, var(--rt-primary) 5%, transparent); }
+.rt-notifications-stat-icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-notifications-stat:nth-child(2) .rt-notifications-stat-icon { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-notifications-stat:nth-child(3) .rt-notifications-stat-icon { color: var(--rt-muted); background: var(--rt-info-soft); }
 .rt-notifications-stat strong { display: block; font-size: 1.16rem; line-height: 1; }
-.rt-notifications-stat span:last-child { display: block; margin-top: 5px; color: #748178; font-size: .72rem; }
-.rt-notifications-alert { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid #efb9b9; border-radius: 13px; color: #a43131; background: #fff1f1; font-size: .81rem; line-height: 1.45; }
+.rt-notifications-stat span:last-child { display: block; margin-top: 5px; color: var(--rt-muted); font-size: .72rem; }
+.rt-notifications-alert { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--rt-danger-border); border-radius: 13px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .81rem; line-height: 1.45; }
 .rt-notifications-alert svg { flex: 0 0 auto; margin-top: 1px; }
 .rt-notifications-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .rt-notifications-toolbar h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.018em; }
-.rt-notifications-toolbar p { margin: 4px 0 0; color: #748178; font-size: .76rem; }
-.rt-notifications-sort { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; color: #718078; font-size: .72rem; }
+.rt-notifications-toolbar p { margin: 4px 0 0; color: var(--rt-muted); font-size: .76rem; }
+.rt-notifications-sort { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; color: var(--rt-muted); font-size: .72rem; }
+.rt-notifications-filters { margin: 0 0 14px; }
+.rt-notifications-filtered-empty { border: 1px solid var(--rt-border); border-radius: 17px; background: var(--rt-card); }
 .rt-notifications-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.rt-notification { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 0; overflow: hidden; border: 1px solid var(--rt-border, #dce7df); border-radius: 17px; background: var(--rt-card, #fff); box-shadow: 0 7px 22px rgba(29,64,42,.045); transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
-.rt-notification:hover { transform: translateY(-1px); border-color: #c7dccf; box-shadow: 0 11px 28px rgba(29,64,42,.07); }
-.rt-notification--unread { border-color: #bcdcc6; background: linear-gradient(135deg, #f1faf4, #fff 58%); }
-.rt-notification--unread::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: #159447; }
+.rt-notification { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 0; overflow: hidden; border: 1px solid var(--rt-border, var(--rt-border)); border-radius: 17px; background: var(--rt-card, var(--rt-card)); box-shadow: 0 7px 22px color-mix(in srgb, var(--rt-primary) 5%, transparent); transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.rt-notification:hover { transform: translateY(-1px); border-color: var(--rt-border); box-shadow: 0 11px 28px color-mix(in srgb, var(--rt-primary) 7%, transparent); }
+.rt-notification--unread { border-color: var(--rt-border); background: linear-gradient(135deg, var(--rt-surface-subtle), var(--rt-card) 58%); }
+.rt-notification--unread::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--rt-primary); }
 .rt-notification-link { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 15px 9px 15px 17px; color: inherit; text-decoration: none; }
-.rt-notification-icon { width: 43px; height: 43px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 13px; color: #2563a7; background: #eaf2fb; }
-.rt-notification-icon--request { color: #94600a; background: #fff2d8; }
-.rt-notification-icon--success { color: #11743a; background: #e2f5e9; }
-.rt-notification-icon--warning { color: #9a6207; background: #fff3dc; }
-.rt-notification-icon--danger { color: #a33a3a; background: #fdeaea; }
-.rt-notification-icon--message { color: #2563a7; background: #eaf2fb; }
-.rt-notification-icon--rating { color: #7955a5; background: #f1eafb; }
-.rt-notification-icon--travel { color: #1a6a72; background: #e2f4f5; }
-.rt-notification-icon--payment { color: #8a5a12; background: #fbeed6; }
+.rt-notification-icon { width: 43px; height: 43px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 13px; color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-notification-icon--request { color: var(--rt-warning-text); background: var(--rt-warning-border); }
+.rt-notification-icon--success { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-notification-icon--warning { color: var(--rt-warning-text); background: var(--rt-warning-border); }
+.rt-notification-icon--danger { color: var(--rt-danger-text); background: var(--rt-danger-soft); }
+.rt-notification-icon--message { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-notification-icon--rating { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-notification-icon--travel { color: var(--rt-info-text); background: var(--rt-info-soft); }
+.rt-notification-icon--payment { color: var(--rt-warning-text); background: var(--rt-warning-border); }
 .rt-notification-copy { min-width: 0; }
 .rt-notification-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
-.rt-notification-type { color: #6f7c74; font-size: .65rem; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
-.rt-notification-unread { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 999px; color: #116f38; background: #dff4e6; font-size: .61rem; font-weight: 800; }
+.rt-notification-type { color: var(--rt-muted); font-size: .65rem; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
+.rt-notification-unread { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 999px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); font-size: .61rem; font-weight: 800; }
 .rt-notification-title { margin: 5px 0 0; overflow: hidden; font-size: .88rem; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.rt-notification-body { margin: 4px 0 0; color: #68766e; font-size: .77rem; line-height: 1.48; }
-.rt-notification-time { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: #87928c; font-size: .67rem; }
-.rt-notification-chevron { color: #8b9790; }
-.rt-notification-read { align-self: center; width: 38px; height: 38px; display: grid; place-items: center; margin-right: 10px; border: 1px solid #d9e3dc; border-radius: 11px; color: #68776e; background: #fff; cursor: pointer; }
-.rt-notification-read:hover:not(:disabled) { border-color: #b9d6c3; color: #137c3e; background: #eef9f2; }
+.rt-notification-body { margin: 4px 0 0; color: var(--rt-text); font-size: .77rem; line-height: 1.48; }
+.rt-notification-time { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: var(--rt-muted); font-size: .67rem; }
+.rt-notification-chevron { color: var(--rt-muted); }
+.rt-notification-read { align-self: center; width: 38px; height: 38px; display: grid; place-items: center; margin-right: 10px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-text); background: var(--rt-card); cursor: pointer; }
+.rt-notification-read:hover:not(:disabled) { border-color: var(--rt-border); color: var(--rt-primary-strong); background: var(--rt-surface-subtle); }
 .rt-notification-read:disabled { opacity: .5; cursor: wait; }
-.rt-notification-read--checked { border-color: transparent; color: #13813f; background: transparent; cursor: default; }
+.rt-notification-read--checked { border-color: transparent; color: var(--rt-primary-strong); background: transparent; cursor: default; }
 .rt-notification-spin { animation: rt-notifications-spin .8s linear infinite; }
 @keyframes rt-notifications-spin { to { transform: rotate(360deg); } }
-.rt-notifications-empty { min-height: 400px; display: grid; place-items: center; border: 1px dashed #cad8cf; border-radius: 22px; background: rgba(255,255,255,.58); }
+.rt-notifications-empty { min-height: 400px; display: grid; place-items: center; border: 1px dashed var(--rt-border); border-radius: 22px; background: rgba(255,255,255,.58); }
 .rt-notifications-empty .empty-state { max-width: 520px; padding: 30px; text-align: center; }
-[data-theme="dark"] .rt-notifications-page { --rt-surface-subtle: #101712; --rt-card: #17211a; --rt-border: #2b3a30; --rt-text: #eef7f1; }
-[data-theme="dark"] .rt-notifications-stat, [data-theme="dark"] .rt-notifications-empty { background: #17211a; border-color: #2b3a30; }
+[data-theme="dark"] .rt-notifications-page { --rt-surface-subtle: var(--rt-surface-subtle); --rt-card: var(--rt-surface); --rt-border: var(--rt-border); --rt-text: var(--rt-text); }
+[data-theme="dark"] .rt-notifications-stat, [data-theme="dark"] .rt-notifications-empty { background: var(--rt-surface); border-color: var(--rt-border); }
 [data-theme="dark"] .rt-notifications-mark-all { color: #a8e3ba; background: #19321f; border-color: #315a3c; }
-[data-theme="dark"] .rt-notifications-toolbar p { color: #a6b5ac; }
-[data-theme="dark"] .rt-notification { background: #17211a; border-color: #2b3a30; }
-[data-theme="dark"] .rt-notification--unread { background: linear-gradient(135deg, #19301f, #17211a); border-color: #31533d; }
-[data-theme="dark"] .rt-notification-body { color: #a6b5ac; }
-[data-theme="dark"] .rt-notification-read { color: #c5d0c9; background: #1a251e; border-color: #35453b; }
+[data-theme="dark"] .rt-notifications-toolbar p { color: var(--rt-muted); }
+[data-theme="dark"] .rt-notification { background: var(--rt-surface); border-color: var(--rt-border); }
+[data-theme="dark"] .rt-notification--unread { background: linear-gradient(135deg, #19301f, var(--rt-surface)); border-color: #31533d; }
+[data-theme="dark"] .rt-notification-body { color: var(--rt-muted); }
+[data-theme="dark"] .rt-notification-read { color: var(--rt-muted); background: #1a251e; border-color: #35453b; }
 /*
  * Dark values for the eight notification tones.
  *
@@ -103,10 +108,10 @@ const notificationStyles = `
  * still distinguishable at a glance, and the label beside it carries the meaning
  * in either theme.
  */
-[data-theme="dark"] .rt-notification-icon--request { color: #f0d199; background: #33290f; }
-[data-theme="dark"] .rt-notification-icon--success { color: #a9e0c1; background: #16301f; }
+[data-theme="dark"] .rt-notification-icon--request { color: var(--rt-warning-text); background: #33290f; }
+[data-theme="dark"] .rt-notification-icon--success { color: var(--rt-success-text); background: #16301f; }
 [data-theme="dark"] .rt-notification-icon--warning { color: #f5c877; background: #362a10; }
-[data-theme="dark"] .rt-notification-icon--danger { color: #f0b4b4; background: #341c1c; }
+[data-theme="dark"] .rt-notification-icon--danger { color: var(--rt-danger-text); background: #341c1c; }
 [data-theme="dark"] .rt-notification-icon--message { color: #bcd8f0; background: #1d2c3a; }
 [data-theme="dark"] .rt-notification-icon--rating { color: #d3bdf0; background: #2a1f3d; }
 [data-theme="dark"] .rt-notification-icon--travel { color: #a5dfe3; background: #143034; }
@@ -192,6 +197,31 @@ export function NotificationsPage() {
       return (Number.isFinite(secondTime) ? secondTime : 0) - (Number.isFinite(firstTime) ? firstTime : 0);
     }), [activeUserId, notifications]);
   const unreadCount = userNotifications.filter((notification) => !notification.read).length;
+  const readCount = userNotifications.length - unreadCount;
+
+  /**
+   * The filter is a view, not a fetch: the same rows are already loaded, so
+   * switching tabs is instant and cannot fail. It is kept in component state
+   * rather than the URL because it is not a shareable destination - but it is
+   * reset when the member switches profile, since the counts change entirely.
+   */
+  const [filter, setFilter] = useState<NotificationFilter>("all");
+
+  useEffect(() => {
+    setFilter("all");
+  }, [activeUserId]);
+
+  const visibleNotifications = useMemo(() => {
+    if (filter === "unread") return userNotifications.filter((notification) => !notification.read);
+    if (filter === "read") return userNotifications.filter((notification) => notification.read);
+    return userNotifications;
+  }, [filter, userNotifications]);
+
+  const filterTabs = [
+    { id: "all" as const, label: "All", count: userNotifications.length },
+    { id: "unread" as const, label: "Unread", count: unreadCount },
+    { id: "read" as const, label: "Read", count: readCount },
+  ];
 
   const markOneRead = async (notificationId: string) => {
     if (busyIds.includes(notificationId) || markingAll) return;
@@ -261,8 +291,33 @@ export function NotificationsPage() {
               </div>
               <span className="rt-notifications-sort"><Clock3 size={14} /> Newest first</span>
             </div>
+            <div className="rt-notifications-filters">
+              <Tabs
+                items={filterTabs}
+                activeId={filter}
+                onChange={(id) => setFilter(id as NotificationFilter)}
+                label="Filter notifications"
+                idPrefix="notification-filter"
+              />
+            </div>
+            {visibleNotifications.length === 0 ? (
+              <div className="rt-notifications-filtered-empty">
+                <EmptyState
+                  icon={filter === "unread" ? CheckCheck : Bell}
+                  title={filter === "unread" ? "Nothing unread" : "Nothing read yet"}
+                  description={filter === "unread"
+                    ? "Every update has been read. New booking requests and messages will show up here."
+                    : "Updates you have read will collect here so you can look back at them."}
+                  action={filter === "unread" && unreadCount > 0 ? (
+                    <button className="rt-notifications-mark-all" type="button" onClick={() => void markEverythingRead()}>
+                      <CheckCheck size={16} /> Mark all read
+                    </button>
+                  ) : undefined}
+                />
+              </div>
+            ) : (
             <ol className="rt-notifications-list">
-              {userNotifications.map((notification) => {
+              {visibleNotifications.map((notification) => {
                 const visual = notificationVisuals[notification.type];
                 const Icon = visual.icon;
                 const target = notificationTarget(notification);
@@ -325,6 +380,7 @@ export function NotificationsPage() {
                 );
               })}
             </ol>
+            )}
           </section>
         )}
       </div>

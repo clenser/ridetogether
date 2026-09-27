@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowRight,
@@ -6,12 +7,14 @@ import {
   Check,
   Clock3,
   Crosshair,
+  Expand,
   LoaderCircle,
   MapPin,
   MapPinned,
   Navigation,
   Route as RouteIcon,
   Search,
+  Shrink,
   Users,
 } from "lucide-react";
 import LocationSearch from "../components/LocationSearch";
@@ -22,6 +25,7 @@ import { BOOKING_STATUS_META } from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
 import { useDraft } from "../services/drafts";
 import { reverseGeocodeLocation } from "../services/geocoding";
+import { readJourneyParams } from "../services/journeyParams";
 import { getRoute } from "../services/routing";
 import {
   applyDetourResults,
@@ -85,138 +89,151 @@ const formatDuration = (minutes: number) => {
 };
 
 const findStyles = `
-.rt-find-page { min-height: 100%; color: #17231c; background: #f7fbf8; }
+.rt-find-page { min-height: 100%; color: var(--rt-text-strong); background: var(--rt-surface-subtle); }
 .rt-find-page .container { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
 .rt-find-page .page-container { padding: 38px 0 66px; }
 .rt-find-page h1, .rt-find-page h2, .rt-find-page h3, .rt-find-page p { margin-top: 0; }
 .rt-find-page .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 25px; }
-.rt-find-page .page-heading h1 { margin: 8px 0 7px; color: #183c25; font-size: clamp(1.8rem, 3vw, 2.55rem); letter-spacing: -.05em; }
-.rt-find-page .page-heading p { margin: 0; color: #6e7e74; font-size: .91rem; }
-.rt-find-page .section-kicker { color: #148642; font-size: .72rem; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
-.rt-find-page .page-heading-icon { width: 54px; height: 54px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 17px; color: #148642; background: #e1f5e7; }
-.rt-find-page .card { border: 1px solid #dbe8de; border-radius: 21px; background: #fff; box-shadow: 0 13px 34px rgba(32,75,45,.07); }
-.rt-find-page .find-layout { display: grid; grid-template-columns: minmax(340px, .82fr) minmax(0, 1.18fr); gap: 20px; align-items: stretch; }
+.rt-find-page .page-heading h1 { margin: 8px 0 7px; color: var(--rt-text-strong); font-size: clamp(1.8rem, 3vw, 2.55rem); letter-spacing: -.05em; }
+.rt-find-page .page-heading p { margin: 0; color: var(--rt-muted); font-size: .91rem; }
+.rt-find-page .section-kicker { color: var(--rt-primary-strong); font-size: .72rem; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
+.rt-find-page .page-heading-icon { width: 54px; height: 54px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 17px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-find-page .card { border: 1px solid var(--rt-border); border-radius: 21px; background: var(--rt-card); box-shadow: 0 13px 34px rgba(32,75,45,.07); }
+.rt-find-page .find-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, .86fr); gap: 20px; align-items: start; }
+.rt-find-page .find-main { display: grid; gap: 20px; min-width: 0; }
+.rt-find-page .find-map { position: sticky; top: 18px; min-width: 0; }
 .rt-find-page .search-form { padding: 24px; }
-.rt-find-page .form-section-title { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; color: #2c4835; }
-.rt-find-page .form-section-title > svg { color: #159447; }
+.rt-find-page .form-section-title { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; color: var(--rt-text); }
+.rt-find-page .form-section-title > svg { color: var(--rt-primary-strong); }
 .rt-find-page .form-section-title h2 { margin: 0; font-size: 1rem; letter-spacing: -.015em; }
-.rt-find-page .form-section-title p { margin: 3px 0 0; color: #7a887f; font-size: .75rem; font-weight: 400; }
+.rt-find-page .form-section-title p { margin: 3px 0 0; color: var(--rt-muted); font-size: .75rem; font-weight: 400; }
 .rt-find-page .location-fields { display: grid; gap: 14px; }
 .rt-find-page .field-group { display: grid; gap: 7px; min-width: 0; }
-.rt-find-page .field-group > label, .rt-find-page .location-search__label { color: #405448; font-size: .78rem; font-weight: 760; }
+.rt-find-page .field-group > label, .rt-find-page .location-search__label { color: var(--rt-text); font-size: .78rem; font-weight: 760; }
 .rt-find-page .location-search { position: relative; }
 .rt-find-page .location-search__label { display: block; margin-bottom: 7px; }
 .rt-find-page .location-search__control { position: relative; }
-.rt-find-page .location-search__input { width: 100%; min-height: 45px; padding: 10px 40px 10px 37px; border: 1px solid #d7e3da; border-radius: 11px; color: #263d2e; background: #fff; outline: none; font: inherit; font-size: .84rem; transition: border-color .18s ease, box-shadow .18s ease; }
-.rt-find-page .location-search__input:focus { border-color: #159447; box-shadow: 0 0 0 3px rgba(21,148,71,.11); }
-.rt-find-page .location-search__search-icon { position: absolute; z-index: 1; top: 13px; left: 12px; color: #809087; pointer-events: none; }
+.rt-find-page .location-search__input { width: 100%; min-height: 45px; padding: 10px 40px 10px 37px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-text-strong); background: var(--rt-card); outline: none; font: inherit; font-size: .84rem; transition: border-color .18s ease, box-shadow .18s ease; }
+.rt-find-page .location-search__input:focus { border-color: var(--rt-primary-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 11%, transparent); }
+.rt-find-page .location-search__search-icon { position: absolute; z-index: 1; top: 13px; left: 12px; color: var(--rt-muted); pointer-events: none; }
 .rt-find-page .location-search__spinner, .rt-find-page .location-search__selected-icon, .rt-find-page .location-search__clear { position: absolute; top: 12px; right: 10px; }
-.rt-find-page .location-search__spinner { color: #159447; animation: rt-find-spin .8s linear infinite; }
-.rt-find-page .location-search__selected-icon { color: #159447; }
-.rt-find-page .location-search__clear { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 7px; color: #78877e; background: transparent; cursor: pointer; }
-.rt-find-page .location-search__clear:hover { color: #b33d3d; background: #fff0f0; }
-.rt-find-page .location-search__dropdown { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; left: 0; overflow: auto; border: 1px solid #d8e5db; border-radius: 13px; background: #fff; box-shadow: 0 16px 30px rgba(24,64,38,.14); }
-.rt-find-page .location-search__option { display: flex; align-items: center; gap: 9px; padding: 11px 12px; color: #405448; font-size: .78rem; cursor: pointer; }
-.rt-find-page .location-search__option:hover, .rt-find-page .location-search__option.is-active { background: #eff9f2; }
-.rt-find-page .location-search__option-icon { color: #159447; }
-.rt-find-page .location-search__state { display: flex; align-items: center; gap: 8px; padding: 12px; color: #77857c; font-size: .76rem; }
-.rt-find-page .location-search__state--error { color: #ad3838; }
-.rt-find-page .location-search__state button { margin-left: auto; border: 0; color: #148642; background: transparent; font: inherit; font-size: .74rem; font-weight: 750; cursor: pointer; }
+.rt-find-page .location-search__spinner { color: var(--rt-primary-strong); animation: rt-find-spin .8s linear infinite; }
+.rt-find-page .location-search__selected-icon { color: var(--rt-primary-strong); }
+.rt-find-page .location-search__clear { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 7px; color: var(--rt-muted); background: transparent; cursor: pointer; }
+.rt-find-page .location-search__clear:hover { color: var(--rt-danger); background: var(--rt-danger-soft); }
+.rt-find-page .location-search__dropdown { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; left: 0; overflow: auto; border: 1px solid var(--rt-border); border-radius: 13px; background: var(--rt-card); box-shadow: 0 16px 30px rgba(24,64,38,.14); }
+.rt-find-page .location-search__option { display: flex; align-items: center; gap: 9px; padding: 11px 12px; color: var(--rt-text); font-size: .78rem; cursor: pointer; }
+.rt-find-page .location-search__option:hover, .rt-find-page .location-search__option.is-active { background: var(--rt-surface-subtle); }
+.rt-find-page .location-search__option-icon { color: var(--rt-primary-strong); }
+.rt-find-page .location-search__state { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--rt-muted); font-size: .76rem; }
+.rt-find-page .location-search__state--error { color: var(--rt-danger-text); }
+.rt-find-page .location-search__state button { margin-left: auto; border: 0; color: var(--rt-primary-strong); background: transparent; font: inherit; font-size: .74rem; font-weight: 750; cursor: pointer; }
 .rt-find-page .location-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.rt-find-page .location-button, .rt-find-page .map-pick-button { display: inline-flex; align-items: center; gap: 5px; justify-self: start; padding: 0; border: 0; color: #148642; background: transparent; font: inherit; font-size: .72rem; font-weight: 750; cursor: pointer; }
-.rt-find-page .location-button:hover, .rt-find-page .map-pick-button:hover, .rt-find-page .map-pick-button.is-active { color: #0c5f2d; }
-.rt-find-page .map-pick-button.is-active { color: #0b6e32; text-decoration: underline; text-underline-offset: 3px; }
+.rt-find-page .location-button, .rt-find-page .map-pick-button { display: inline-flex; align-items: center; gap: 5px; justify-self: start; padding: 0; border: 0; color: var(--rt-primary-strong); background: transparent; font: inherit; font-size: .72rem; font-weight: 750; cursor: pointer; }
+.rt-find-page .location-button:hover, .rt-find-page .map-pick-button:hover, .rt-find-page .map-pick-button.is-active { color: var(--rt-primary-strong); }
+.rt-find-page .map-pick-button.is-active { color: var(--rt-primary-strong); text-decoration: underline; text-underline-offset: 3px; }
 .rt-find-page .map-pick-cancel { min-height: 30px; display: inline-flex; align-items: center; padding: 0 9px; border: 0; border-radius: 8px; color: inherit; background: rgba(255,255,255,.88); font: inherit; font-size: .7rem; font-weight: 760; cursor: pointer; }
-.rt-find-page .map-pick-banner { position: absolute; z-index: 4; top: 12px; left: 12px; right: 58px; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid #b9ddc5; border-radius: 12px; color: #24543a; background: rgba(255,255,255,.95); box-shadow: 0 8px 24px rgba(20,55,32,.16); font-size: .74rem; font-weight: 720; }
-.rt-find-page .map-pick-banner > svg { flex: 0 0 auto; color: #159447; }
+.rt-find-page .map-pick-banner { position: absolute; z-index: 4; top: 12px; left: 12px; right: 58px; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--rt-border); border-radius: 12px; color: var(--rt-text); background: rgba(255,255,255,.95); box-shadow: 0 8px 24px rgba(20,55,32,.16); font-size: .74rem; font-weight: 720; }
+.rt-find-page .map-pick-banner > svg { flex: 0 0 auto; color: var(--rt-primary-strong); }
 .rt-find-page .map-pick-banner > span { min-width: 0; flex: 1; }
 .rt-find-page .spin { animation: rt-find-spin .8s linear infinite; }
- .rt-find-page .empty-icon { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 18px; color: #148642; background: #e1f5e7; }
- .rt-find-page .form-divider { height: 1px; margin: 22px 0; background: #edf2ee; }
+ .rt-find-page .empty-icon { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 18px; color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+ .rt-find-page .form-divider { height: 1px; margin: 22px 0; background: var(--rt-surface-muted); }
 .rt-find-page .form-grid { display: grid; gap: 13px; }
 .rt-find-page .form-grid-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .rt-find-page .form-grid-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.rt-find-page input:not([type="checkbox"]), .rt-find-page select, .rt-find-page textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #d7e3da; border-radius: 11px; color: #263d2e; background: #fff; outline: none; font: inherit; font-size: .83rem; }
-.rt-find-page input:focus, .rt-find-page select:focus, .rt-find-page textarea:focus { border-color: #159447; box-shadow: 0 0 0 3px rgba(21,148,71,.11); }
-.rt-find-page .field-hint { color: #849189; font-size: .69rem; line-height: 1.35; }
+.rt-find-page input:not([type="checkbox"]), .rt-find-page select, .rt-find-page textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--rt-border); border-radius: 11px; color: var(--rt-text-strong); background: var(--rt-card); outline: none; font: inherit; font-size: .83rem; }
+.rt-find-page input:focus, .rt-find-page select:focus, .rt-find-page textarea:focus { border-color: var(--rt-primary-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rt-primary) 11%, transparent); }
+.rt-find-page .field-hint { color: var(--rt-muted); font-size: .69rem; line-height: 1.35; }
 .rt-find-page .btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border: 1px solid transparent; border-radius: 11px; font: inherit; font-size: .82rem; font-weight: 780; text-decoration: none; cursor: pointer; }
-.rt-find-page .btn-primary { color: #fff; background: #159447; box-shadow: 0 8px 18px rgba(21,148,71,.18); }
-.rt-find-page .btn-primary:hover:not(:disabled) { background: #10813b; }
+.rt-find-page .btn-primary { color: var(--rt-text-inverse); background: var(--rt-primary-strong); box-shadow: 0 8px 18px color-mix(in srgb, var(--rt-primary) 18%, transparent); }
+.rt-find-page .btn-primary:hover:not(:disabled) { background: var(--rt-primary-strong); }
 .rt-find-page .btn:disabled { opacity: .52; cursor: not-allowed; box-shadow: none; }
 .rt-find-page .btn-block { width: 100%; margin-top: 22px; }
 .rt-find-page .map-panel { min-width: 0; overflow: hidden; }
+.rt-find-page .map-panel-actions { display: flex; align-items: center; gap: 12px; }
+.rt-find-page .map-expand { display: none; min-height: 34px; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--rt-border); border-radius: 9px; color: var(--rt-text); background: var(--rt-card); font: inherit; font-size: .72rem; font-weight: 760; white-space: nowrap; cursor: pointer; }
+.rt-find-page .map-expand:hover { border-color: var(--rt-primary-strong); color: var(--rt-primary-strong); }
 .rt-find-page .map-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 21px 22px 16px; }
-.rt-find-page .map-panel-header h2 { margin: 6px 0 0; color: #1d3b27; font-size: 1.08rem; letter-spacing: -.02em; }
-.rt-find-page .route-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 11px; color: #6f7f75; font-size: .71rem; }
+.rt-find-page .map-panel-header h2 { margin: 6px 0 0; color: var(--rt-text-strong); font-size: 1.08rem; letter-spacing: -.02em; }
+.rt-find-page .route-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 11px; color: var(--rt-muted); font-size: .71rem; }
 .rt-find-page .route-summary span { display: inline-flex; align-items: center; gap: 5px; }
-.rt-find-page .route-summary svg { color: #159447; }
-.rt-find-page .map-wrap { position: relative; min-height: 420px; height: 100%; overflow: hidden; background: #eaf3ec; }
+.rt-find-page .route-summary svg { color: var(--rt-primary-strong); }
+.rt-find-page .map-wrap { position: relative; min-height: 420px; height: 100%; overflow: hidden; background: var(--rt-surface-muted); }
 .rt-find-page .ride-map { width: 100%; height: 100%; min-height: 420px; }
-.rt-find-page .map-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 9px; color: #45604f; background: rgba(247,252,248,.72); font-size: .8rem; font-weight: 700; pointer-events: none; }
-.rt-find-page .map-overlay-empty { flex-direction: column; color: #6c8173; }
-.rt-find-page .map-overlay-empty svg { color: #159447; }
-.rt-find-page .map-error { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; color: #a13b3b; background: #fff3f3; font-size: .75rem; line-height: 1.45; }
+.rt-find-page .map-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--rt-text); background: rgba(247,252,248,.72); font-size: .8rem; font-weight: 700; pointer-events: none; }
+.rt-find-page .map-overlay-empty { flex-direction: column; color: var(--rt-muted); }
+.rt-find-page .map-overlay-empty svg { color: var(--rt-primary-strong); }
+.rt-find-page .map-error { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; color: var(--rt-danger-text); background: var(--rt-danger-soft); font-size: .75rem; line-height: 1.45; }
 .rt-find-page .map-error svg { flex: 0 0 auto; margin-top: 1px; }
 .rt-find-page .form-message { display: flex; align-items: flex-start; gap: 7px; margin: 12px 0 0; padding: 10px 11px; border-radius: 10px; font-size: .75rem; line-height: 1.45; }
-.rt-find-page .error-message { color: #a73737; background: #fff0f0; }
-.rt-find-page .success-message { color: #126e39; background: #eaf8ee; }
-.rt-find-page .notice-message { color: #7b611e; background: #fff8e5; }
+.rt-find-page .error-message { color: var(--rt-danger-text); background: var(--rt-danger-soft); }
+.rt-find-page .success-message { color: var(--rt-primary-strong); background: var(--rt-surface-muted); }
+.rt-find-page .notice-message { color: var(--rt-warning-text); background: var(--rt-warning-border); }
 .rt-find-page .form-message svg { flex: 0 0 auto; margin-top: 1px; }
-.rt-find-page .results-section { margin-top: 48px; }
+.rt-find-page .results-section { margin-top: 0; }
 .rt-find-page .results-section .section-heading { margin-bottom: 17px; }
-.rt-find-page .results-section h2 { margin: 6px 0 0; color: #1d3b27; font-size: 1.35rem; letter-spacing: -.03em; }
-.rt-find-page .results-caption { color: #7b897f; font-size: .75rem; }
-.rt-find-page .results-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rt-find-page .results-section h2 { margin: 6px 0 0; color: var(--rt-text-strong); font-size: 1.35rem; letter-spacing: -.03em; }
+.rt-find-page .results-caption { color: var(--rt-muted); font-size: .75rem; }
+.rt-find-page .results-grid { grid-template-columns: minmax(0, 1fr); }
 .rt-find-page .result-card-wrap { display: flex; flex-direction: column; min-width: 0; }
 .rt-find-page .result-card-wrap .ride-card { flex: 1 1 auto; }
-.rt-find-page .match-card { margin-bottom: 12px; padding: 13px 14px; border: 1px solid #dbe8de; border-top: 0; border-radius: 0 0 16px 16px; background: #f6fbf8; box-shadow: 0 10px 24px rgba(32,75,45,.05); }
+.rt-find-page .match-card { margin-bottom: 12px; padding: 13px 14px; border: 1px solid var(--rt-border); border-top: 0; border-radius: 0 0 16px 16px; background: var(--rt-surface-subtle); box-shadow: 0 10px 24px rgba(32,75,45,.05); }
 .rt-find-page .match-score { display: flex; align-items: center; gap: 10px; }
-.rt-find-page .match-score-value { display: inline-flex; align-items: baseline; gap: 3px; padding: 5px 9px; border-radius: 9px; color: #12633a; background: #ddf2e5; font-size: .95rem; font-weight: 800; letter-spacing: -.02em; }
+.rt-find-page .match-score-value { display: inline-flex; align-items: baseline; gap: 3px; padding: 5px 9px; border-radius: 9px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); font-size: .95rem; font-weight: 800; letter-spacing: -.02em; }
 .rt-find-page .match-score-value small { font-size: .58rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; opacity: .72; }
-.rt-find-page .match-score-note { color: #64766b; font-size: .67rem; line-height: 1.35; }
+.rt-find-page .match-score-note { color: var(--rt-text); font-size: .67rem; line-height: 1.35; }
 .rt-find-page .match-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin: 11px 0 0; padding: 0; list-style: none; }
-.rt-find-page .match-facts li { display: flex; align-items: flex-start; gap: 6px; color: #4d6356; font-size: .68rem; line-height: 1.35; }
-.rt-find-page .match-facts svg { flex: 0 0 auto; margin-top: 1px; color: #159447; }
-.rt-find-page .match-facts strong { color: #2a4634; font-weight: 800; }
-.rt-find-page .match-weak { color: #8a6a1f; }
-.rt-find-page .match-unmeasured { color: #7b611e; }
-.rt-find-page .pickup-toggle { display: inline-flex; align-items: center; gap: 5px; margin-top: 11px; padding: 0; border: 0; color: #116b39; background: transparent; font: inherit; font-size: .71rem; font-weight: 780; cursor: pointer; }
-.rt-find-page .pickup-toggle:hover { color: #0b5228; text-decoration: underline; text-underline-offset: 3px; }
-.rt-find-page .pickup-panel { margin-top: 11px; padding: 12px; border: 1px solid #d5e7da; border-radius: 13px; background: #fff; }
-.rt-find-page .pickup-panel h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; color: #2b4634; font-size: .78rem; }
-.rt-find-page .pickup-panel h4 svg { color: #159447; }
-.rt-find-page .pickup-panel > p { margin: 0 0 10px; color: #6d7c72; font-size: .68rem; line-height: 1.45; }
+.rt-find-page .match-facts li { display: flex; align-items: flex-start; gap: 6px; color: var(--rt-text); font-size: .68rem; line-height: 1.35; }
+.rt-find-page .match-facts svg { flex: 0 0 auto; margin-top: 1px; color: var(--rt-primary-strong); }
+.rt-find-page .match-facts strong { color: var(--rt-text-strong); font-weight: 800; }
+.rt-find-page .match-weak { color: var(--rt-warning-text); }
+.rt-find-page .match-unmeasured { color: var(--rt-warning-text); }
+.rt-find-page .pickup-toggle { display: inline-flex; align-items: center; gap: 5px; margin-top: 11px; padding: 0; border: 0; color: var(--rt-primary-strong); background: transparent; font: inherit; font-size: .71rem; font-weight: 780; cursor: pointer; }
+.rt-find-page .pickup-toggle:hover { color: var(--rt-text-strong); text-decoration: underline; text-underline-offset: 3px; }
+.rt-find-page .pickup-panel { margin-top: 11px; padding: 12px; border: 1px solid var(--rt-border); border-radius: 13px; background: var(--rt-card); }
+.rt-find-page .pickup-panel h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; color: var(--rt-text); font-size: .78rem; }
+.rt-find-page .pickup-panel h4 svg { color: var(--rt-primary-strong); }
+.rt-find-page .pickup-panel > p { margin: 0 0 10px; color: var(--rt-muted); font-size: .68rem; line-height: 1.45; }
 .rt-find-page .pickup-group + .pickup-group { margin-top: 12px; }
-.rt-find-page .pickup-group > span { display: block; margin-bottom: 6px; color: #405448; font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-.rt-find-page .pickup-option { display: flex; align-items: flex-start; gap: 8px; width: 100%; margin-top: 6px; padding: 8px 9px; border: 1px solid #e0eae2; border-radius: 10px; color: #3c5445; background: #fff; font: inherit; font-size: .69rem; line-height: 1.4; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
-.rt-find-page .pickup-option:hover { border-color: #9fd3b1; background: #f4fbf6; }
-.rt-find-page .pickup-option.is-selected { border-color: #159447; background: #eff9f2; box-shadow: inset 0 0 0 1px rgba(21,148,71,.28); }
-.rt-find-page .pickup-option-radio { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 1px; border: 1.5px solid #b6c9bc; border-radius: 50%; }
-.rt-find-page .pickup-option.is-selected .pickup-option-radio { border-color: #159447; background: radial-gradient(circle, #159447 0 45%, transparent 48%); }
+.rt-find-page .pickup-group > span { display: block; margin-bottom: 6px; color: var(--rt-text); font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.rt-find-page .pickup-option { display: flex; align-items: flex-start; gap: 8px; width: 100%; margin-top: 6px; padding: 8px 9px; border: 1px solid var(--rt-border); border-radius: 10px; color: var(--rt-text); background: var(--rt-card); font: inherit; font-size: .69rem; line-height: 1.4; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.rt-find-page .pickup-option:hover { border-color: var(--rt-green-200); background: var(--rt-surface-subtle); }
+.rt-find-page .pickup-option.is-selected { border-color: var(--rt-primary-strong); background: var(--rt-surface-subtle); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rt-primary) 28%, transparent); }
+.rt-find-page .pickup-option-radio { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 1px; border: 1.5px solid var(--rt-border); border-radius: 50%; }
+.rt-find-page .pickup-option.is-selected .pickup-option-radio { border-color: var(--rt-primary-strong); background: radial-gradient(circle, var(--rt-primary-strong) 0 45%, transparent 48%); }
 .rt-find-page .pickup-option-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rt-find-page .pickup-option-label { color: #2c4a37; font-weight: 750; }
-.rt-find-page .pickup-option-walk { color: #718077; }
-.rt-find-page .pickup-notice { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 9px 10px; border-radius: 10px; color: #7b611e; background: #fff8e5; font-size: .68rem; line-height: 1.45; }
+.rt-find-page .pickup-option-label { color: var(--rt-text); font-weight: 750; }
+.rt-find-page .pickup-option-walk { color: var(--rt-muted); }
+.rt-find-page .pickup-notice { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 9px 10px; border-radius: 10px; color: var(--rt-warning-text); background: var(--rt-warning-border); font-size: .68rem; line-height: 1.45; }
 .rt-find-page .pickup-notice svg { flex: 0 0 auto; margin-top: 1px; }
-.rt-find-page .pickup-verified { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #e6efe8; color: #12633a; font-size: .67rem; font-weight: 750; }
-.rt-find-page .result-booking-bar { display: flex; align-items: center; gap: 7px; min-height: 67px; margin-top: auto; padding: 10px; border: 1px solid #dbe8de; border-top: 0; border-radius: 0 0 16px 16px; background: #fff; box-shadow: 0 10px 24px rgba(32,75,45,.05); }
-.rt-find-page .result-booking-bar label { margin-right: auto; color: #67776d; font-size: .69rem; font-weight: 700; }
+.rt-find-page .pickup-verified { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--rt-surface-muted); color: var(--rt-primary-strong); font-size: .67rem; font-weight: 750; }
+.rt-find-page .result-booking-bar { display: flex; align-items: center; gap: 7px; min-height: 67px; margin-top: auto; padding: 10px; border: 1px solid var(--rt-border); border-top: 0; border-radius: 0 0 16px 16px; background: var(--rt-card); box-shadow: 0 10px 24px rgba(32,75,45,.05); }
+.rt-find-page .result-booking-bar label { margin-right: auto; color: var(--rt-text); font-size: .69rem; font-weight: 700; }
 .rt-find-page .result-booking-bar select { width: 48px; min-height: 36px; padding: 5px 7px; }
 .rt-find-page .result-booking-bar .btn { min-height: 36px; padding: 0 10px; font-size: .72rem; }
 .rt-find-page .empty-state { min-height: 245px; display: grid; place-items: center; padding: 28px; text-align: center; }
-.rt-find-page .empty-state h3 { margin: 15px 0 6px; color: #27432f; }
-.rt-find-page .empty-state p { max-width: 390px; margin: 0; color: #75837a; font-size: .82rem; line-height: 1.5; }
-.rt-find-page .ride-card-skeleton { min-height: 400px; background: linear-gradient(135deg, #eef7f0, #f9fcfa); }
-.rt-find-page .info-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 48px; padding: 18px; border: 1px solid #dce9df; border-radius: 17px; background: #eef8f1; }
-.rt-find-page .info-strip > div { display: flex; align-items: flex-start; gap: 9px; color: #148642; font-size: .71rem; line-height: 1.45; }
-.rt-find-page .info-strip > div + div { padding-left: 15px; border-left: 1px solid #d3e5d7; }
-.rt-find-page .info-strip span { color: #718077; }
-.rt-find-page .info-strip strong { color: #2e4b37; }
+.rt-find-page .empty-state h3 { margin: 15px 0 6px; color: var(--rt-text-strong); }
+.rt-find-page .empty-state p { max-width: 390px; margin: 0; color: var(--rt-muted); font-size: .82rem; line-height: 1.5; }
+.rt-find-page .ride-card-skeleton { min-height: 400px; background: linear-gradient(135deg, var(--rt-surface-subtle), var(--rt-surface-subtle)); }
+.rt-find-page .info-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 48px; padding: 18px; border: 1px solid var(--rt-border); border-radius: 17px; background: var(--rt-surface-subtle); }
+.rt-find-page .info-strip > div { display: flex; align-items: flex-start; gap: 9px; color: var(--rt-primary-strong); font-size: .71rem; line-height: 1.45; }
+.rt-find-page .info-strip > div + div { padding-left: 15px; border-left: 1px solid var(--rt-border); }
+.rt-find-page .info-strip span { color: var(--rt-muted); }
+.rt-find-page .info-strip strong { color: var(--rt-text); }
 @keyframes rt-find-spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) {
-  .rt-find-page .find-layout { grid-template-columns: 1fr; }
+  /* Stacking the columns is not enough: the map has to land between the search
+     form and the results, which are siblings inside the find-main wrapper.
+     Letting that wrapper generate no box hands its children to the grid
+     directly, so the order below can place them. minmax(0, 1fr) rather than 1fr
+     so a long place name cannot push the column wider than the viewport. */
+  .rt-find-page .find-main { display: contents; }
+  .rt-find-page .find-layout { grid-template-columns: minmax(0, 1fr); }
+  .rt-find-page .find-map { position: static; order: 2; }
+  .rt-find-page .search-form { order: 1; }
+  .rt-find-page .results-section { order: 3; }
   .rt-find-page .map-wrap, .rt-find-page .ride-map { min-height: 380px; }
-  .rt-find-page .results-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {
   .rt-find-page .container { width: min(100% - 28px, 1180px); }
@@ -227,20 +244,28 @@ const findStyles = `
   .rt-find-page .form-grid-three, .rt-find-page .form-grid-two, .rt-find-page .results-grid { grid-template-columns: 1fr; }
   .rt-find-page .map-panel-header { display: block; padding: 18px; }
   .rt-find-page .route-summary { justify-content: flex-start; margin-top: 10px; }
+  .rt-find-page .map-panel-actions { display: block; }
+  .rt-find-page .map-expand { display: inline-flex; margin-top: 12px; }
   .rt-find-page .map-wrap, .rt-find-page .ride-map { min-height: 310px; }
-  .rt-find-page .results-section { margin-top: 36px; }
+  .rt-find-page .results-section { margin-top: 0; }
   .rt-find-page .match-facts { grid-template-columns: 1fr; }
   .rt-find-page .result-booking-bar { flex-wrap: wrap; }
   .rt-find-page .result-booking-bar label { width: 100%; }
   .rt-find-page .result-booking-bar select { flex: 1; }
   .rt-find-page .result-booking-bar .btn { flex: 1; }
   .rt-find-page .info-strip { grid-template-columns: 1fr; }
-  .rt-find-page .info-strip > div + div { padding: 12px 0 0; border-top: 1px solid #d3e5d7; border-left: 0; }
+  .rt-find-page .info-strip > div + div { padding: 12px 0 0; border-top: 1px solid var(--rt-border); border-left: 0; }
+  /* Expanding the map takes over the viewport on a phone, so the collapsed
+     default has to stay short enough that the results are still reachable. */
+  .rt-find-page .find-map--expanded { position: fixed; z-index: 40; inset: 0; padding: 12px; background: rgba(20,42,28,.55); }
+  .rt-find-page .find-map--expanded .map-panel { display: flex; flex-direction: column; height: 100%; }
+  .rt-find-page .find-map--expanded .map-wrap, .rt-find-page .find-map--expanded .ride-map { flex: 1 1 auto; min-height: 0; }
 }
 `;
 
 export default function FindRidePage() {
   const { loading, activeUserId, users, vehicles, rides, bookings, requestBooking, searchRides } = useApp();
+  const [searchParams] = useSearchParams();
   /**
    * Search parameters survive a reload or a recreated PWA. `searched` records
    * that the user already ran this search, so restoring the parameters does not
@@ -264,6 +289,29 @@ export default function FindRidePage() {
   const setSeats = (value: number | ((current: number) => number)) =>
     setFormValue((c) => ({ ...c, seats: typeof value === "function" ? value(c.seats) : value }));
 
+  /**
+   * A route handed over from the home page planner.
+   *
+   * Applied once per mount, and it marks the date as user-chosen so the
+   * suggested-date effect does not immediately overwrite the date that came
+   * with the route. It deliberately does not run the search: the member has
+   * arrived on the Find Ride form, and firing a search - and a burst of route
+   * requests - before they have looked at what was carried over would be
+   * presumptuous. They press Search.
+   */
+  const handoffApplied = useRef(false);
+  useEffect(() => {
+    if (handoffApplied.current) return;
+    const params = readJourneyParams(searchParams);
+    if (!params) return;
+    handoffApplied.current = true;
+    if (params.origin) setOrigin(params.origin);
+    if (params.destination) setDestination(params.destination);
+    if (params.date) setDate(params.date);
+    if (params.time) setTime(params.time);
+    if (params.seats) setSeats(params.seats);
+  }, [searchParams]);
+
   const [searchRoute, setSearchRoute] = useState<RouteResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState("");
@@ -282,6 +330,7 @@ export default function FindRidePage() {
    const [bookingSeatsByRide, setBookingSeatsByRide] = useState<Record<string, number>>({});
   const [bookingError, setBookingError] = useState("");
    const [bookingSuccess, setBookingSuccess] = useState("");
+const [mapExpanded, setMapExpanded] = useState(false);
   const mapPanelRef = useRef<HTMLElement>(null);
   const pickRequest = useRef(0);
   const pickController = useRef<AbortController | null>(null);
@@ -538,6 +587,31 @@ export default function FindRidePage() {
     pickController.current?.abort();
   }, []);
 
+  // The expanded map covers the whole screen, so it has to behave like the modal
+  // it effectively is: Escape dismisses it, the page behind it cannot scroll, and
+  // focus moves into the map and returns to the button that opened it.
+  useEffect(() => {
+    if (!mapExpanded) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => mapPanelRef.current?.focus());
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMapExpanded(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus?.();
+    };
+  }, [mapExpanded]);
+
   const handleSearch = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     setBookingError("");
@@ -619,10 +693,22 @@ export default function FindRidePage() {
           `${offCorridor} of ${candidates.length} ${offCorridor === 1 ? "ride does" : "rides do"} not travel along a road through both your pickup and your drop-off.`,
         );
       }
-      const overDetour = localMatches.length - measured.length - unmeasured.length;
-      if (overDetour > 0) {
+      // Counted from the measurement itself rather than by subtracting list
+      // lengths. A re-route that failed leaves a ride in the results without a
+      // detour figure, and working it out by subtraction reported those as
+      // "adds too much driving" - the opposite of what went wrong.
+      const overBudget = [...detours.values()].filter(
+        (detour) => detour.detourKm !== null && detour.detourKm > MATCH_DEFAULTS.maxDetourKm,
+      ).length;
+      if (overBudget > 0) {
         notices.push(
-          `${overDetour} ${overDetour === 1 ? "ride adds" : "rides add"} more than ${MATCH_DEFAULTS.maxDetourKm} km of extra driving to your journey.`,
+          `${overBudget} ${overBudget === 1 ? "ride adds" : "rides add"} more than ${MATCH_DEFAULTS.maxDetourKm} km of extra driving to your journey.`,
+        );
+      }
+      const failedToMeasure = [...detours.values()].filter((detour) => detour.detourKm === null).length;
+      if (failedToMeasure > 0) {
+        notices.push(
+          `The extra driving for ${failedToMeasure} ${failedToMeasure === 1 ? "ride could" : "rides could"} not be measured, so ${failedToMeasure === 1 ? "it is" : "they are"} ranked on the road the driver published.`,
         );
       }
       if (unmeasured.length > 0) {
@@ -755,6 +841,7 @@ export default function FindRidePage() {
         ) : null}
 
         <div className="find-layout">
+          <div className="find-main">
           <form className="card search-form" onSubmit={(event) => void handleSearch(event)}>
             <div className="form-section-title"><MapPinned size={19} /><h2>Your journey</h2></div>
             <div className="location-fields">
@@ -813,7 +900,9 @@ export default function FindRidePage() {
               <div className="field-group">
                 <label htmlFor="ride-time">Time</label>
                 <input id="ride-time" data-testid="find-time" type="time" value={time} onChange={(event) => { setTime(event.target.value); clearResults(); }} />
-                <span className="field-hint">Optional · ± 3 hours</span>
+                <span className="field-hint">
+                  Optional · leave blank for any time that day, or set it to match a departure within {Math.round(MATCH_DEFAULTS.maxTimeWindowMinutes / 60 * 10) / 10} hours
+                </span>
               </div>
               <div className="field-group">
                 <label htmlFor="ride-seats">Seats</label>
@@ -828,46 +917,6 @@ export default function FindRidePage() {
             </button>
             {searchError && <p className="form-message error-message" role="alert" data-testid="find-error"><AlertCircle size={16} />{searchError}</p>}
           </form>
-
-          <section ref={mapPanelRef} className="card map-panel" aria-label="Journey map">
-            <div className="map-panel-header">
-              <div>
-                <span className="section-kicker">Route preview</span>
-                <h2>Your journey on the map</h2>
-              </div>
-              {searchRoute && (
-                <div className="route-summary">
-                  <span><RouteIcon size={16} /> {searchRoute.distanceKm.toFixed(1)} km</span>
-                  <span><Clock3 size={16} /> {formatDuration(searchRoute.durationMinutes)}</span>
-                </div>
-              )}
-            </div>
-            <div className="map-wrap">
-              <RideMap
-                origin={origin ?? undefined}
-                destination={destination ?? undefined}
-                waypoints={[]}
-                route={searchRoute?.geometry}
-                selectionTarget={pickTarget}
-                onPickLocation={(point) => {
-                  if (pickTarget === "origin" || pickTarget === "destination") {
-                    void selectMapPoint(pickTarget, point);
-                  }
-                }}
-              />
-              {pickTarget && (
-                <div className="map-pick-banner" role="status">
-                  {locationLoading ? <LoaderCircle className="spin" size={18} /> : <MapPinned size={18} />}
-                  <span>{locationLoading ? "Identifying that point…" : `Click the map to choose ${pickTarget === "origin" ? "From" : "To"}.`}</span>
-                  <button className="map-pick-cancel" type="button" onClick={cancelPendingLocation}>Cancel</button>
-                </div>
-              )}
-              {routeLoading && <div className="map-overlay"><LoaderCircle className="spin" size={23} /> Calculating your real route…</div>}
-              {!routeLoading && !pickTarget && !origin && !destination && <div className="map-overlay map-overlay-empty"><MapPinned size={23} />Choose From and To to see the route</div>}
-            </div>
-            {routeError && <div className="map-error" role="alert"><AlertCircle size={17} /><span>{routeError} The map and your selected markers are still available.</span></div>}
-          </section>
-        </div>
 
         <section className="results-section" aria-live="polite">
           <div className="section-heading compact-heading">
@@ -915,11 +964,15 @@ export default function FindRidePage() {
                         </span>
                       </div>
                       <ul className="match-facts">
-                        <li>
+                        <li className={match.onCorridor ? undefined : "match-unmeasured"}>
                           <RouteIcon size={13} aria-hidden="true" />
-                          <span>
-                            <strong>{Math.round(match.score.overlap * 100)}%</strong> of your trip follows this road
-                          </span>
+                          {match.onCorridor ? (
+                            <span>
+                              <strong>{Math.round((match.score.overlap ?? 0) * 100)}%</strong> of your trip follows this road
+                            </span>
+                          ) : (
+                            <span>This ride has no stored road, so the shared stretch could not be measured</span>
+                          )}
                         </li>
                         <li>
                           <MapPin size={13} aria-hidden="true" />
@@ -927,20 +980,22 @@ export default function FindRidePage() {
                             <strong>{match.score.walkDistanceKm} km</strong> average walk to the meeting point
                           </span>
                         </li>
-                        <li className={unmatched ? "match-unmeasured" : undefined}>
+                        <li className={unmatched || match.score.totalDetourKm === null ? "match-unmeasured" : undefined}>
                           <ArrowRight size={13} aria-hidden="true" />
-                          {unmatched ? (
-                            <span>Extra driving not measured</span>
+                          {unmatched || match.score.totalDetourKm === null ? (
+                            <span>Extra driving could not be measured</span>
                           ) : (
                             <span>
                               Adds <strong>{match.score.totalDetourKm} km</strong>
-                              {match.score.totalDetourMinutes > 0 ? ` / ${match.score.totalDetourMinutes} min` : ""} to the driver
+                              {match.score.totalDetourMinutes ? ` / ${match.score.totalDetourMinutes} min` : ""} to the driver
                             </span>
                           )}
                         </li>
-                        <li>
+                        <li className={match.score.timeDifferenceMinutes === null ? "match-unmeasured" : undefined}>
                           <Clock3 size={13} aria-hidden="true" />
-                          {match.score.timeDifferenceMinutes === 0 ? (
+                          {match.score.timeDifferenceMinutes === null ? (
+                            <span>You did not ask for a particular time</span>
+                          ) : match.score.timeDifferenceMinutes === 0 ? (
                             <span>Departs at your time</span>
                           ) : (
                             <span>
@@ -1093,6 +1148,72 @@ export default function FindRidePage() {
             </div>
           )}
         </section>
+          </div>
+
+          <aside
+            className={mapExpanded ? "find-map find-map--expanded" : "find-map"}
+            aria-label="Journey map"
+            {...(mapExpanded ? { role: "dialog", "aria-modal": true } : {})}
+          >
+            <section
+              id="find-map-panel"
+              ref={mapPanelRef}
+              tabIndex={-1}
+              className="card map-panel"
+              aria-label="Journey map"
+            >
+              <div className="map-panel-header">
+                <div>
+                  <span className="section-kicker">Route preview</span>
+                  <h2>Your journey on the map</h2>
+                </div>
+                <div className="map-panel-actions">
+                  {searchRoute && (
+                    <div className="route-summary">
+                      <span><RouteIcon size={16} /> {searchRoute.distanceKm.toFixed(1)} km</span>
+                      <span><Clock3 size={16} /> {formatDuration(searchRoute.durationMinutes)}</span>
+                    </div>
+                  )}
+                  <button
+                    className="map-expand"
+                    type="button"
+                    data-testid="find-map-expand"
+                    aria-expanded={mapExpanded}
+                    aria-controls="find-map-panel"
+                    onClick={() => setMapExpanded((current) => !current)}
+                  >
+                    {mapExpanded ? <Shrink size={17} aria-hidden="true" /> : <Expand size={17} aria-hidden="true" />}
+                    <span>{mapExpanded ? "Collapse" : "Expand"}</span>
+                  </button>
+                </div>
+              </div>
+              <div className="map-wrap">
+                <RideMap
+                  origin={origin ?? undefined}
+                  destination={destination ?? undefined}
+                  waypoints={[]}
+                  route={searchRoute?.geometry}
+                  selectionTarget={pickTarget}
+                  onPickLocation={(point) => {
+                    if (pickTarget === "origin" || pickTarget === "destination") {
+                      void selectMapPoint(pickTarget, point);
+                    }
+                  }}
+                />
+                {pickTarget && (
+                  <div className="map-pick-banner" role="status">
+                    {locationLoading ? <LoaderCircle className="spin" size={18} /> : <MapPinned size={18} />}
+                    <span>{locationLoading ? "Identifying that point…" : `Click the map to choose ${pickTarget === "origin" ? "From" : "To"}.`}</span>
+                    <button className="map-pick-cancel" type="button" onClick={cancelPendingLocation}>Cancel</button>
+                  </div>
+                )}
+                {routeLoading && <div className="map-overlay"><LoaderCircle className="spin" size={23} /> Calculating your real route…</div>}
+                {!routeLoading && !pickTarget && !origin && !destination && <div className="map-overlay map-overlay-empty"><MapPinned size={23} />Choose From and To to see the route</div>}
+              </div>
+              {routeError && <div className="map-error" role="alert"><AlertCircle size={17} /><span>{routeError} The map and your selected markers are still available.</span></div>}
+            </section>
+          </aside>
+        </div>
 
         <div className="info-strip">
           <div><ShieldIcon /><span><strong>Real route matching</strong><br />We verify that your pickup and drop-off sit along each ride.</span></div>
