@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -38,6 +38,11 @@ import {
 } from "../components/StatusBadge";
 import { useApp } from "../context/AppContext";
 import { useRideLocation } from "../hooks/useRideLocation";
+import { useDemoSimulation } from "../hooks/useDemoSimulation";
+import { useDetourEngine } from "../hooks/useDetourEngine";
+import { DemoSimulationControls } from "../components/DemoSimulationControls";
+import { PassengerConfirmation } from "../components/PassengerConfirmation";
+import { GpsPermissionPrompt } from "../components/GpsPermissionPrompt";
 import { formatRupees } from "../services/fare";
 import { getRoute } from "../services/routing";
 import { PAYMENT_DISCLAIMER } from "../services/payment";
@@ -385,6 +390,39 @@ const rideDetailsStyles = `
   .rt-details-page .safety-note { grid-column: auto; }
   .rt-details-page .trip-route-card, .rt-details-page .rating-card, .rt-details-page .driver-card, .rt-details-page .booking-panel, .rt-details-page .ride-info-card { padding: 17px; }
 }
+
+.demo-simulation-card { padding: 17px; }
+.demo-simulation { display: grid; gap: 12px; }
+.demo-simulation__header { display: flex; align-items: center; justify-content: space-between; }
+.demo-simulation__label { color: var(--rt-text-strong); font-size: .82rem; font-weight: 800; }
+.demo-simulation__status { padding: 3px 10px; border-radius: 999px; font-size: .68rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.demo-simulation__status--off { color: var(--rt-muted); background: var(--rt-surface-muted); }
+.demo-simulation__status--playing { color: #ffffff; background: var(--rt-primary); }
+.demo-simulation__status--paused { color: var(--rt-text); background: var(--rt-surface-muted); }
+.demo-simulation__status--finished { color: var(--rt-primary-strong); background: var(--rt-primary-soft); }
+.demo-simulation__controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.demo-simulation__speed { display: grid; gap: 7px; }
+.demo-simulation__speed-label { color: var(--rt-muted); font-size: .72rem; font-weight: 700; }
+.demo-simulation__speed-options { display: flex; gap: 6px; flex-wrap: wrap; }
+.demo-simulation__progress { display: grid; gap: 6px; }
+.demo-simulation__progress-bar { height: 6px; border-radius: 999px; background: var(--rt-surface-muted); overflow: hidden; }
+.demo-simulation__progress-fill { height: 100%; border-radius: 999px; background: var(--rt-primary); transition: width .3s ease; }
+.demo-simulation__progress-info { display: flex; justify-content: space-between; color: var(--rt-muted); font-size: .72rem; font-weight: 700; }
+.demo-simulation__error { margin: 0; color: var(--rt-danger-text); font-size: .74rem; }
+
+.gps-permission-prompt { display: flex; align-items: flex-start; gap: 14px; margin: 0 0 16px; padding: 16px; border: 1px solid var(--rt-border); border-radius: 14px; background: var(--rt-card); }
+.gps-permission-prompt__icon { display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); }
+.gps-permission-prompt__content { flex: 1 1 auto; min-width: 0; }
+.gps-permission-prompt__title { margin: 0 0 4px; color: var(--rt-text-strong); font-size: .9rem; font-weight: 800; }
+.gps-permission-prompt__message { margin: 0 0 12px; color: var(--rt-muted); font-size: .78rem; line-height: 1.5; }
+.gps-permission-prompt__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.passenger-confirmation { display: flex; align-items: flex-start; gap: 14px; margin: 0 0 16px; padding: 16px; border: 1px solid var(--rt-border); border-radius: 14px; background: var(--rt-card); }
+.passenger-confirmation__icon { display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px; color: var(--rt-primary-strong); background: var(--rt-primary-soft); }
+.passenger-confirmation__content { flex: 1 1 auto; min-width: 0; }
+.passenger-confirmation__title { margin: 0 0 4px; color: var(--rt-text-strong); font-size: .9rem; font-weight: 800; }
+.passenger-confirmation__description { margin: 0 0 12px; color: var(--rt-muted); font-size: .78rem; line-height: 1.5; }
+.passenger-confirmation__actions { display: flex; gap: 8px; flex-wrap: wrap; }
 `;
 
 export default function RideDetailsPage() {
@@ -570,18 +608,67 @@ export default function RideDetailsPage() {
      currentBooking
      && (ACTIVE_BOOKING_STATUSES.includes(currentBooking.status) || currentBooking.status === "completed"),
    );
-   /**
-    * Only the host publishes a position, and only while the trip is running.
-    * Passengers read it, so the hook is active for them too - it is the
-    * subscription that fills the map, not the write.
-    */
-   const live = useRideLocation({
-     rideId: ride?.id ?? "",
-     share: isDriver,
-     isRunning: ride?.status === "in_progress",
-   });
-   const liveLocation = live.location;
-   const isConfirmedRider = currentBooking?.status === "confirmed" || currentBooking?.status === "completed";
+    const simulation = useDemoSimulation({
+      rideId: ride?.id ?? "",
+      driverId: activeUserId ?? "",
+      routeGeometry: ride?.routeGeometry,
+      isActive: isDriver && ride?.status === "in_progress",
+    });
+
+    const simulationActive = simulation.status !== "off";
+
+    /**
+     * Only the host publishes a position, and only while the trip is running.
+     * Passengers read it, so the hook is active for them too - it is the
+     * subscription that fills the map, not the write.
+     *
+     * When demo simulation is active, GPS publishing is suspended so the two
+     * location sources never race each other.
+     */
+    const live = useRideLocation({
+      rideId: ride?.id ?? "",
+      share: isDriver && !simulationActive,
+      isRunning: ride?.status === "in_progress",
+    });
+    const liveLocation = simulation.frame
+      ? { lat: simulation.frame.lat, lon: simulation.frame.lon, heading: simulation.frame.heading }
+      : live.location;
+
+    const detourEngine = useDetourEngine({
+      ride: ride ?? null,
+      bookings: confirmedBookings,
+      driverPosition: liveLocation ? { lat: liveLocation.lat, lon: liveLocation.lon, label: "Driver" } : null,
+      isDriver,
+      isRunning: ride?.status === "in_progress",
+      enabled: isDriver && ride?.status === "in_progress",
+    });
+
+    const [gpsPermissionNeeded, setGpsPermissionNeeded] = useState(false);
+    const [gpsPermissionLoading, setGpsPermissionLoading] = useState(false);
+
+    const requestGpsPermission = useCallback(async () => {
+      if (!navigator.geolocation) {
+        setGpsPermissionNeeded(true);
+        return;
+      }
+      setGpsPermissionLoading(true);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            () => resolve(),
+            () => reject(new Error("Permission denied")),
+            { enableHighAccuracy: true, timeout: 10_000 },
+          );
+        });
+        setGpsPermissionNeeded(false);
+      } catch {
+        setGpsPermissionNeeded(true);
+      } finally {
+        setGpsPermissionLoading(false);
+      }
+    }, []);
+
+    const isConfirmedRider = currentBooking?.status === "confirmed" || currentBooking?.status === "completed";
    const reviewTargets = isDriver
      ? reviewableBookings
          .map((booking) => users.find((user) => user.id === booking.riderId))
@@ -796,6 +883,40 @@ export default function RideDetailsPage() {
         {actionError && <p className="form-message error-message" role="alert"><AlertCircle size={16} />{actionError}</p>}
         {actionSuccess && <p className="form-message success-message" role="status"><CheckCircle2 size={16} />{actionSuccess}</p>}
 
+        {gpsPermissionNeeded && isDriver && isRunning ? (
+          <GpsPermissionPrompt
+            message="ShareRide needs your location to provide live navigation, detect pickup/drop-off arrival, and share your trip location."
+            onRequestPermission={() => void requestGpsPermission()}
+            onCancel={() => setGpsPermissionNeeded(false)}
+            loading={gpsPermissionLoading}
+          />
+        ) : null}
+
+        {detourEngine.navigationState === "AWAITING_PICKUP_CONFIRMATION" && detourEngine.activeStop ? (
+          <PassengerConfirmation
+            type="pickup"
+            stop={detourEngine.activeStop}
+            onConfirm={() => void detourEngine.confirmPickup(detourEngine.activeStop!.bookingId)}
+            onDeny={() => void detourEngine.denyPickup(detourEngine.activeStop!.bookingId)}
+          />
+        ) : null}
+
+        {detourEngine.navigationState === "AWAITING_DROP_CONFIRMATION" && detourEngine.activeStop ? (
+          <PassengerConfirmation
+            type="dropoff"
+            stop={detourEngine.activeStop}
+            onConfirm={() => void detourEngine.confirmDropoff(detourEngine.activeStop!.bookingId)}
+            onDeny={() => void detourEngine.denyDropoff(detourEngine.activeStop!.bookingId)}
+          />
+        ) : null}
+
+        {detourEngine.error ? (
+          <p className="form-message error-message" role="alert">
+            <AlertCircle size={16} />
+            {detourEngine.error}
+          </p>
+        ) : null}
+
         <div className="ride-details-layout">
           <div className="ride-details-main">
             <section className="card details-map-card">
@@ -820,12 +941,14 @@ export default function RideDetailsPage() {
               {liveLocation ? (
                 <p className={`live-status${live.isStale ? " live-status--stale" : ""}`}>
                   <Navigation size={14} />
-                  {live.isStale
-                    ? `Driver's last position was ${live.ageSeconds}s ago.`
-                    : "Showing the driver's live position."}
+                  {simulationActive
+                    ? "Demo simulation active — passengers see the simulated position."
+                    : live.isStale
+                      ? `Driver's last position was ${live.ageSeconds}s ago.`
+                      : "Showing the driver's live position."}
                 </p>
               ) : null}
-              {isRunning && live.error ? <p className="live-status live-status--error" role="alert"><AlertCircle size={14} />{live.error}</p> : null}
+              {isRunning && live.error && !simulationActive ? <p className="live-status live-status--error" role="alert"><AlertCircle size={14} />{live.error}</p> : null}
               {routeError && <div className="map-error" role="alert"><AlertCircle size={17} /><span>{routeError} The map and ride markers remain available.</span></div>}
               <div className="route-facts">
                 <div><RouteIcon size={18} /><span><strong>{route?.distanceKm !== undefined ? `${route.distanceKm.toFixed(1)} km` : ride.distanceKm !== undefined ? `${ride.distanceKm.toFixed(1)} km` : "Distance pending"}</strong><small>Distance</small></span></div>
@@ -833,6 +956,12 @@ export default function RideDetailsPage() {
                 <div><Users size={18} /><span><strong>{ride.availableSeats} available</strong><small>of {ride.totalSeats} seats</small></span></div>
               </div>
             </section>
+
+            {isDriver && isRunning ? (
+              <section className="card demo-simulation-card">
+                <DemoSimulationControls simulation={simulation} />
+              </section>
+            ) : null}
 
             <section className="card trip-route-card">
               <div className="card-title-row"><div><span className="section-kicker">The journey</span><h2>Pickup and drop-off</h2></div><RouteIcon size={20} /></div>
