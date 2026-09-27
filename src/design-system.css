@@ -1267,7 +1267,7 @@
 
 .ds-toast-stack {
   position: fixed;
-  z-index: 90;
+  z-index: 110;
   left: 50%;
   bottom: calc(var(--rt-mobile-nav-inset) + var(--rt-space-4));
   display: flex;
@@ -1349,7 +1349,7 @@
 
 .ds-sheet-backdrop {
   position: fixed;
-  z-index: 100;
+  z-index: 120;
   inset: 0;
   display: flex;
   align-items: flex-end;

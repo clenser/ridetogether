@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, CarFront, CloudOff, Ellipsis } from "lucide-react";
+import { Bell, CarFront, CloudOff, Ellipsis, Sun, Moon } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { UserMenu } from "./UserMenu";
 import { GlobalSearch } from "./GlobalSearch";
@@ -7,6 +7,7 @@ import { AppLoadingScreen, InlineRefreshIndicator } from "./LoadingScreen";
 import { useApp } from "../context/AppContext";
 import { useAuth } from "../context/AuthContext";
 import { navigationItems } from "../config/navigation";
+import { readAppearance, saveAppearance } from "../services/theme";
 import type { AppNotification } from "../types";
 
 const primaryMobileItems = navigationItems.slice(0, 5);
@@ -74,6 +75,8 @@ export function Layout() {
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const unreadCount = getUnreadCount(notifications, activeUser?.id);
   const isMoreRoute = moreMobileItems.some((item) => location.pathname.startsWith(item.to));
+
+  const appearance = readAppearance();
 
   useEffect(() => {
     setIsMoreOpen(false);
@@ -168,6 +171,18 @@ export function Layout() {
               <Bell size={21} aria-hidden="true" />
               {unreadCount > 0 ? <span className="app-notification-dot">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
             </NavLink>
+            <button
+              type="button"
+              className="app-icon-button"
+              onClick={() => saveAppearance(appearance === "dark" ? "light" : "dark")}
+              aria-label={appearance === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            >
+              {appearance === "dark" ? (
+                <Sun size={16} aria-hidden="true" />
+              ) : (
+                <Moon size={16} aria-hidden="true" />
+              )}
+            </button>
             <div className="app-topbar__user">
               <UserMenu user={activeUser} email={authUser?.email ?? ""} compact />
             </div>
