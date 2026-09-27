@@ -1792,7 +1792,7 @@ alter table public.rides add column if not exists reminder_sent_at timestamptz;
 -- forbids subqueries in CHECK constraints. This immutable helper is the
 -- supported way to express "no repeated weekdays", and because it is a plain
 -- SQL function with no privileges it needs no grants and no SECURITY DEFINER.
-create or replace function public.array_has_no_duplicates(values smallint[])
+create or replace function public.array_has_no_duplicates(input_values smallint[])
 returns boolean
 language sql
 immutable
@@ -1934,9 +1934,16 @@ alter table public.bookings add constraint bookings_match_score_range check (
 -- because `create unique index if not exists` would keep the narrower predicate
 -- and let a rider request a second seat while a payment was still pending.
 drop index if exists public.bookings_one_active_per_rider;
+
 create unique index if not exists bookings_one_active_per_rider
   on public.bookings (ride_id, rider_id)
-  where status::text in ('pending', 'payment_pending', 'confirmed', 'picked_up', 'completed');
+  where status in (
+    'pending',
+    'payment_pending',
+    'confirmed',
+    'picked_up',
+    'completed'
+  );
 
 -- Live location, one row per ride. The host writes it; confirmed passengers of
 -- that same ride read it. There is no policy that lets anyone else select it, so
@@ -2598,7 +2605,7 @@ $$;
 -- booking, and a second write would be a no-op that exists only to confuse.
 create or replace function public.release_refund_for_closed_booking()
 returns trigger
-plpgsql
+language plpgsql
 security definer
 set search_path = ''
 as $$
@@ -3183,6 +3190,7 @@ set search_path = ''
 as $$
 declare
   claimed record;
+  reminder record;
   reminded integer := 0;
 begin
   if lead_minutes is null or lead_minutes < 0 then

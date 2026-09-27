@@ -258,15 +258,13 @@ export function RideMap({
     }
   }, [destination, isMapReady, origin, route, waypointKey]);
 
-  /**
-   * Driver position, tracked on primitives rather than on the object identity
-   * so a parent re-render with a freshly built object does not tear the marker
-   * down and put it back. Deliberately no `fitBounds` here.
-   */
   const liveLat = liveLocation?.lat ?? null;
   const liveLon = liveLocation?.lon ?? null;
   const liveHeading = liveLocation?.heading ?? null;
   const liveStale = liveLocation?.stale ?? false;
+
+  const liveLocationRef = useRef<LivePosition | null>(null);
+  liveLocationRef.current = liveLocation;
 
   useEffect(() => {
     const map = readyMapRef.current;
@@ -306,6 +304,28 @@ export function RideMap({
       .setLngLat([liveLon, liveLat])
       .addTo(map);
   }, [isMapReady, liveHeading, liveLat, liveLon, liveStale]);
+
+  // When the tab becomes visible again, immediately sync the marker to the
+  // latest known location from the ref. This handles the case where realtime
+  // events were received while the page was hidden but the effect didn't fire.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      const location = liveLocationRef.current;
+      if (!location) return;
+      const map = readyMapRef.current;
+      if (!map || !isMapReady) return;
+      const lat = location.lat;
+      const lon = location.lon;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      const existing = liveMarkerRef.current;
+      if (existing) {
+        existing.setLngLat([lon, lat]);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [isMapReady]);
 
   return (
     <div
