@@ -291,7 +291,17 @@ const insertStops = async (rideId: string, waypoints: Coordinates[]): Promise<vo
       lon: stop.lon,
     })),
   );
-  if (error) throw toDataError(error, "create");
+  if (error) {
+    console.error("[rides:create] insertStops failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      rideId,
+      stopCount: waypoints.length,
+    });
+    throw toDataError(error, "create");
+  }
 };
 
 /**
@@ -373,7 +383,10 @@ export const listRides = async (options: { includePast?: boolean } = {}): Promis
     .eq("rider_id", driverId)
     .order("created_at", { ascending: false })
     .limit(100);
-  if (bookedError) throw toDataError(bookedError, "load");
+  if (bookedError) {
+    console.error("[rides:list] bookedError:", { code: bookedError?.code, message: bookedError?.message });
+    throw toDataError(bookedError, "load");
+  }
 
   const bookedIds = [...new Set(((bookedRideIds ?? []) as { ride_id: string }[]).map((row) => row.ride_id))];
   const branches = [
@@ -390,7 +403,10 @@ export const listRides = async (options: { includePast?: boolean } = {}): Promis
     .limit(options.includePast ? 200 : 100)
     .returns<RideRow[]>();
 
-  if (error) throw toDataError(error, "load");
+  if (error) {
+    console.error("[rides:list] mainError:", { code: error?.code, message: error?.message });
+    throw toDataError(error, "load");
+  }
   return attachRelations(data ?? []);
 };
 
@@ -509,12 +525,7 @@ export const createRide = async (input: RideInput): Promise<Ride> => {
       duration_minutes: Math.max(1, Math.round(input.durationMinutes as number)),
       base_fare: baseFare,
       contribution,
-      // `upcoming` is the published state. The app calls it `active` on screen;
-      // writing the database's own name keeps the two honest about which state
-      // the host still has to start.
       status: "upcoming",
-      // The road corridor Valhalla produced, stored so Find Ride can match
-      // passengers against the route actually driven instead of a straight line.
       route_geometry: input.routeGeometry?.length ? input.routeGeometry : null,
       series_id: input.seriesId || null,
       occurrence_index: input.occurrenceIndex ?? null,
@@ -523,6 +534,18 @@ export const createRide = async (input: RideInput): Promise<Ride> => {
     .single<RideRow>();
 
   if (error) {
+    console.error("[rides:create] INSERT failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      driverId,
+      vehicleId: input.vehicleId,
+      distanceKm: input.distanceKm,
+      totalSeats: input.totalSeats,
+      baseFare,
+      contribution,
+    });
     if (error.code === "23514") {
       const message = error.message ?? "";
       if (/base_fare/i.test(message)) {

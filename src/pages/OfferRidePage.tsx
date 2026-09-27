@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import LocationSearch from "../components/LocationSearch";
 import RideMap, { type MapCoordinate, type RideMapSelectionTarget } from "../components/RideMap";
-import { DraftBanner } from "../components/DraftBanner";
+
 import { StepIndicator } from "../components/ui/Stats";
 import { useApp } from "../context/AppContext";
 import { useDraft } from "../services/drafts";
@@ -736,6 +736,7 @@ export default function OfferRidePage() {
 
   const handlePublish = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (publishing) return;
     setPublishError("");
     setPublished(false);
     if (!origin || !destination) {
@@ -920,15 +921,6 @@ export default function OfferRidePage() {
 
         <form className="offer-layout" onSubmit={handlePublish}>
           <div className="offer-form-column">
-            {offerDraft.restored ? (
-              <DraftBanner
-                savedAt={offerDraft.savedAt}
-                workflow="ride offer"
-                onDiscard={offerDraft.discard}
-                onDismiss={offerDraft.dismissBanner}
-              />
-            ) : null}
-
             {step === 0 ? (
             <section className="card form-card" data-testid="offer-step-route">
               <div className="form-section-title"><MapPin size={19} /><div><h2>Route details</h2><p>Add the places you will pass through.</p></div></div>

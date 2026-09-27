@@ -213,7 +213,7 @@ export const toDataError = (error: unknown, action: DataErrorAction): DataError 
   if (code === "42501" || status === "403" || FORBIDDEN_PATTERN.test(haystack)) {
     return fail("You do not have permission to do that.", "forbidden");
   }
-  if (code === "PGRST205" || code === "PGRST204" || SCHEMA_CACHE_PATTERN.test(haystack)) {
+  if (code === "PGRST205" || code === "PGRST204") {
     return fail("The app is not in sync with the database. Please try again in a moment.", "schema");
   }
   if (SERVER_MISSING_OBJECT_CODES.has(code) || SERVER_MISSING_OBJECT_PATTERN.test(haystack)) {
