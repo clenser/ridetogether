@@ -123,7 +123,7 @@ const EMPTY_RESULT_PATTERN = /pgrst116|json object requested, multiple \(or no\)
  * app is genuinely out of step with the database, so this is the only case that
  * deserves the "not in sync" wording.
  */
-const SCHEMA_CACHE_PATTERN = /schema cache|pgrst205|pgrst204/i;
+const SCHEMA_CACHE_CODES = new Set(["PGRST205", "PGRST204"]);
 /**
  * A bare `relation ... does not exist` / `column ... does not exist` is NOT the
  * same thing. The request resolved fine; something on the server raised the
@@ -213,7 +213,7 @@ export const toDataError = (error: unknown, action: DataErrorAction): DataError 
   if (code === "42501" || status === "403" || FORBIDDEN_PATTERN.test(haystack)) {
     return fail("You do not have permission to do that.", "forbidden");
   }
-  if (code === "PGRST205" || code === "PGRST204") {
+  if (SCHEMA_CACHE_CODES.has(code)) {
     return fail("The app is not in sync with the database. Please try again in a moment.", "schema");
   }
   if (SERVER_MISSING_OBJECT_CODES.has(code) || SERVER_MISSING_OBJECT_PATTERN.test(haystack)) {
