@@ -43,6 +43,7 @@ import { useDetourEngine } from "../hooks/useDetourEngine";
 import { DemoSimulationControls } from "../components/DemoSimulationControls";
 import { PassengerConfirmation } from "../components/PassengerConfirmation";
 import { GpsPermissionPrompt } from "../components/GpsPermissionPrompt";
+import { PassengerLiveMap } from "../components/PassengerLiveMap";
 import { formatRupees } from "../services/fare";
 import { getRoute } from "../services/routing";
 import { PAYMENT_DISCLAIMER } from "../services/payment";
@@ -964,15 +965,25 @@ export default function RideDetailsPage() {
                 </div>
               ) : null}
               <div className="map-wrap map-wrap-tall">
-                <RideMap
-                  origin={ride.origin}
-                  destination={ride.destination}
-                  waypoints={ride.waypoints}
-                  route={route?.geometry}
-                  liveLocation={liveLocation
-                    ? { lat: liveLocation.lat, lon: liveLocation.lon, heading: liveLocation.heading, stale: live.isStale }
-                    : null}
-                />
+                {isDriver ? (
+                  <RideMap
+                    origin={ride.origin}
+                    destination={ride.destination}
+                    waypoints={ride.waypoints}
+                    route={route?.geometry}
+                    liveLocation={liveLocation
+                      ? { lat: liveLocation.lat, lon: liveLocation.lon, heading: liveLocation.heading, stale: live.isStale }
+                      : null}
+                  />
+                ) : (
+                  <PassengerLiveMap
+                    rideId={ride.id}
+                    origin={ride.origin}
+                    destination={ride.destination}
+                    waypoints={ride.waypoints}
+                    routeGeometry={route?.geometry ?? []}
+                  />
+                )}
                 {routeLoading && <div className="map-overlay"><LoaderCircle className="spin" size={23} /> Refreshing your real route…</div>}
               </div>
               {liveLocation ? (
