@@ -99,6 +99,7 @@ export function useRideLocation({
     void getRideLocation(rideId)
       .then((stored) => {
         if (active && stored) {
+          locationRef.current = stored;
           setLocation(stored);
           setNow(Date.now());
         }
