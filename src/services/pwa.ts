@@ -292,7 +292,7 @@ export const showNotification = async (
     // Auto-close after 5 seconds if not user-interacted
     setTimeout(() => notification.close(), 5000);
 
-return true;
+    return true;
   } catch (error) {
     if (import.meta.env.DEV) console.warn("[notification] failed", error);
     return false;
@@ -302,16 +302,42 @@ return true;
 /**
  * Shows the browser's install prompt.
  *
- * Returns the outcome, or `"unavailable"` when the browser is not offering one -
- * which is normal on iOS Safari and in an already-installed window.
+ * `beforeinstallprompt` is a single-use event, so the stored prompt is consumed
+ * here and cleared on both outcomes. "installed" is never reported from this
+ * function: acceptance only means the user took the browser's prompt, and the
+ * app is genuinely installed only once `appinstalled` fires and the window
+ * reports `display-mode: standalone`.
+ *
+ * Returns `"unavailable"` when the browser is not offering a prompt, which is
+ * normal on iOS Safari and in an already-installed window.
  */
 export const requestInstall = async (): Promise<"accepted" | "dismissed" | "unavailable"> => {
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem(DISMISS_KEY, "1");
-  }
+  const prompt = deferredPrompt;
+  if (!prompt) return "unavailable";
+
+  // Single use: clear it before awaiting so a second click while the browser's
+  // dialog is open cannot fire the same event twice.
   deferredPrompt = null;
-  emit();
-  return "unavailable";
+
+  try {
+    await prompt.prompt();
+    const { outcome } = await prompt.userChoice;
+    // Only a deliberate "no" is remembered. Recording a dismissal here would
+    // suppress the prompt for someone who actually accepted it.
+    if (outcome === "dismissed") {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(DISMISS_KEY, "1");
+      }
+    } else if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(DISMISS_KEY);
+    }
+    emit();
+    return outcome;
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn("[pwa] install prompt failed", error);
+    emit();
+    return "unavailable";
+  }
 };
 
 /**

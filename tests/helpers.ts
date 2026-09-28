@@ -1,39 +1,47 @@
 import { expect, type Page, type ConsoleMessage, type Request } from "@playwright/test";
 
 /**
- * Console and network failures are treated as test failures, because a silent
+ * Runtime failures are treated as test failures, because a silent
  * `console.error` or a 500 from Supabase is exactly the kind of defect that
  * reaches production unnoticed.
  *
- * A small set of messages is expected: the service worker is not registered
- * outside a secure context, push subscription is unavailable in headless
- * Chromium, and MapLibre logs tile warnings on flaky networks. Those are
- * enumerated explicitly rather than blanket-ignored, so a new error still fails
- * the test.
+ * The previous version of this file blanket-ignored every Supabase REST call,
+ * every Supabase auth call and anything containing `realtime`, and additionally
+ * dropped every `console.warn` that did not match one of six hard-coded
+ * patterns. That meant a Supabase 500, an RLS `42501`, a `PGRST205` schema-cache
+ * miss or a permanently failing token refresh failed *zero* tests, and the suite
+ * reported green in an environment where every credentialed test had been
+ * skipped.
+ *
+ * The contract now is the opposite:
+ *
+ *   - a request is only excused if the test that provoked it said so, by
+ *     matching it against an allowance registered with {@link allowFailure};
+ *   - anything else from Supabase - including a 4xx - fails the test;
+ *   - a console warning is a failure by default, not a silent no-op.
+ *
+ * The remaining allowlist is limited to noise the *browser* generates, never to
+ * text the application logs to report a failure.
  */
 const IGNORED_CONSOLE: RegExp[] = [
   /Download the React DevTools/i,
-  /service worker|sw\.js|Failed to register service worker/i,
-  /Push subscription|Notification permission|notification\.requestPermission/i,
-  /maplibre|tile|webgl|WebGL|GL_INVALID/i,
-  /[Ee]rror connecting|Socket hang up|net::ERR_NETWORK|net::ERR_FAILED/i,
-  /PGRST|PostgREST|schema cache|permission denied|row-level security/i,
-  /\[drafts\]|\[auth\]|\[profile\]|\[realtime\]|\[bookings\]/i,
   /ResizeObserver loop/i,
-  /third-party cookie|cookie.*blocked|it looks like another site/i,
-  // The browser logs a bare "Failed to load resource" with no URL whenever any
-  // request 4xx/5xxs, including expected ones such as a rejected sign-in. The
-  // `response` listener below already records real HTTP failures with their URL,
-  // so this duplicate carries no extra signal.
+  // Chromium logs this whenever a request 4xx/5xxs, with no URL attached. The
+  // `response` listener below records the same failure *with* its URL, so this
+  // duplicate carries no extra signal.
   /Failed to load resource/i,
 ];
 
+/**
+ * Third-party endpoints whose failure is outside the application's control and
+ * which are not part of the product contract under test.
+ *
+ * Supabase deliberately does NOT appear here. Nor does realtime: a dropped
+ * websocket is a real defect, and the live-location spec asserts on it
+ * explicitly instead of muting it.
+ */
 const IGNORED_REQUEST_PATTERNS: RegExp[] = [
-  /supabase\.co\/rest\/v1\//i,
-  /supabase\.co\/auth\/v1\//i,
-  /realtime/i,
   /tiles\.openfreemap\.org/i,
-  /valhalla1\.openstreetmap\.de/i,
   /fonts\.(googleapis|gstatic)\.com/i,
   /unpkg\.com/i,
 ];
@@ -43,41 +51,57 @@ const shouldIgnoreConsole = (text: string): boolean => IGNORED_CONSOLE.some((re)
 const shouldIgnoreRequest = (url: string): boolean =>
   IGNORED_REQUEST_PATTERNS.some((re) => re.test(url));
 
-/** Errors that must never be swallowed, regardless of source. */
-const FATAL_PAGE_ERRORS: RegExp[] = [
-  /ResizeObserver loop/i,
-  /is not a function/i,
-  /Cannot read propert(y|ies) of undefined/i,
-  /Cannot access .* before initialization/i,
-  /Objects are not valid as a React child/i,
-  /Failed to compile|Internal Server Error/i,
-];
+export interface FailureAllowance {
+  match: RegExp;
+  why: string;
+}
 
-export interface ErrorCollector {
+export interface ErrorCollector extends ErrorCollectorControls {
   consoleErrors: string[];
   pageErrors: string[];
   failedRequests: string[];
 }
 
-/**
- * Watches for runtime failures for the lifetime of a test. Call it before the
- * first navigation and assert with {@link assertNoErrors} at the end.
- */
+export interface ErrorCollectorControls {
+  /**
+   * Registers one expected failure. Call this from inside the test that
+   * deliberately provokes the error, with a reason. An empty list is the
+   * default, which is what makes an unexpected Supabase failure fatal.
+   */
+  allowFailure: (match: RegExp, why: string) => void;
+}
+
+const describeResponse = (url: string, method: string, status: number | string): string =>
+  `HTTP ${status} ${method} ${url}`;
+
 export const collectErrors = (page: Page): ErrorCollector => {
-  const collector: ErrorCollector = { consoleErrors: [], pageErrors: [], failedRequests: [] };
+  const collector: ErrorCollector = {
+    consoleErrors: [],
+    pageErrors: [],
+    failedRequests: [],
+    allowFailure: (match, why) => {
+      allowances.push({ match, why });
+    },
+  };
+
+  const allowances: FailureAllowance[] = [];
+
+  /** Drops the failure only if a test explicitly declared it expected. */
+  const isAllowed = (line: string): boolean => allowances.some((allowance) => allowance.match.test(line));
 
   page.on("console", (message: ConsoleMessage) => {
     if (message.type() !== "error" && message.type() !== "warning") return;
     const text = message.text();
     if (shouldIgnoreConsole(text)) return;
-    // A warning is only recorded as an error when it is a real defect.
-    if (message.type() === "warning" && !FATAL_PAGE_ERRORS.some((re) => re.test(text))) return;
-    collector.consoleErrors.push(`${message.type()}: ${text}`);
+    const line = `${message.type()}: ${text}`;
+    if (isAllowed(line)) return;
+    collector.consoleErrors.push(line);
   });
 
   page.on("pageerror", (error) => {
     const text = error.message ?? String(error);
     if (shouldIgnoreConsole(text)) return;
+    if (isAllowed(text)) return;
     collector.pageErrors.push(text);
   });
 
@@ -87,15 +111,21 @@ export const collectErrors = (page: Page): ErrorCollector => {
     const reason = request.failure()?.errorText ?? "unknown";
     // A cancelled request is the normal result of navigating away mid-flight.
     if (reason.includes("ERR_ABORTED")) return;
-    collector.failedRequests.push(`${reason} ${request.method()} ${url}`);
+    const line = `${reason} ${request.method()} ${url}`;
+    if (isAllowed(line)) return;
+    collector.failedRequests.push(line);
   });
 
   page.on("response", (response) => {
     const url = response.url();
     if (shouldIgnoreRequest(url)) return;
     if (response.status() < 400) return;
-    if (shouldIgnoreRequest(response.request().url())) return;
-    collector.failedRequests.push(`HTTP ${response.status()} ${url}`);
+    const line = describeResponse(url, response.request().method(), response.status());
+    if (isAllowed(line)) return;
+    // Recorded whether or not it is from Supabase. The point of the change is
+    // that a 4xx/5xx from any origin, Supabase included, is a test failure
+    // unless a test asked for it.
+    collector.failedRequests.push(line);
   });
 
   return collector;

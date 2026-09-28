@@ -104,6 +104,13 @@ test.describe("login form", () => {
 
   test("shows a real message for wrong credentials without leaking internals", async ({ page }) => {
     const errors = collectErrors(page);
+    // Supabase Auth answers an unknown account with 400 Invalid Login
+    // Credentials. That rejection is the behaviour under test, so it is declared
+    // expected here with a reason rather than muted for the whole suite.
+    errors.allowFailure(
+      /HTTP 4\d\d .*(auth\/v1\/token|grant_type=password)/i,
+      "signing in with a non-existent account must be rejected by Supabase Auth with a 4xx",
+    );
     await page.goto("/login");
     await page.getByTestId("login-email").fill("definitely-not-a-real-user@example.com");
     await page.getByTestId("login-password").fill("WrongPassword1");

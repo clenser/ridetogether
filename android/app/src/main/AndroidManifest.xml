@@ -23,13 +23,20 @@
             </intent-filter>
 
             <!--
-                Google sign-in return path.
+                Google sign-in and password-recovery return paths.
 
                 Supabase redirects the browser to com.ridetogether.app:/auth/callback
-                once the member has chosen a Google account. Without this filter
-                Android has nowhere to send that URL and the sign-in silently
-                fails. BROWSABLE lets the system browser hand the link over, and
-                DEFAULT is required for an implicit intent to resolve.
+                once the member has chosen a Google account, and to
+                com.ridetogether.app:/reset-password when they follow a recovery
+                link. Without this filter Android has nowhere to send either URL
+                and both flows fail silently. BROWSABLE lets the system browser
+                hand the link over, and DEFAULT is required for an implicit intent
+                to resolve.
+
+                The filter deliberately constrains the scheme only, not the path,
+                so both routes are claimed by one filter. Anything narrower would
+                have to be kept in step with NATIVE_AUTH_REDIRECT_URL and
+                NATIVE_PASSWORD_RESET_URL in src/services/nativeAuth.ts.
 
                 singleTask above is what makes this return to the running app
                 instead of stacking a second copy, and the Capacitor App plugin
@@ -58,4 +65,49 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        Driver live location.
+
+        The app publishes the driver's position with the standard
+        `navigator.geolocation.watchPosition` inside this WebView, so the
+        permission has to be declared here before Android will ever grant it. The
+        manifest entry was the whole gap: `BridgeWebChromeClient
+        .onGeolocationPermissionsShowPrompt` already requests the runtime grant
+        itself and only calls back into the WebView once the app holds it, so
+        without these two lines `watchPosition` failed with PERMISSION_DENIED and
+        live location never worked on Android at all.
+
+        Both precisions are declared because the bridge checks the pair together
+        and falls back to coarse-only on Android 12+ when only coarse is granted.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!--
+        Declared optional so the app is not hidden from tablets and devices with
+        no GPS hardware. Live location degrades to unavailable there, which the
+        GPS permission prompt already handles, rather than the install being
+        blocked outright.
+    -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+
+    <!--
+        Notifications.
+
+        `POST_NOTIFICATIONS` became a runtime permission in Android 13, so without
+        it the service worker can hold a subscription and still be unable to
+        display anything. This is only the display permission: reliable delivery
+        to an installed Android app additionally needs an FCM channel
+        (@capacitor/push-notifications plus Firebase), which is not part of this
+        manifest change. Until that exists, push on Android is best-effort and
+        the app must not imply otherwise.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

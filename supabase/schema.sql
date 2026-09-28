@@ -932,9 +932,28 @@ create trigger rides_init_seats
   before insert on public.rides
   for each row execute function public.init_ride_seats();
 
+-- `seats_available` is derived, so it is recomputed on *every* write, not only
+-- when `total_seats` happens to be in the SET list.
+--
+-- The trigger used to be `before update of total_seats`, which left a hole: a
+-- driver could issue `update rides set seats_available = total_seats` on its own
+-- ride, the trigger would not fire, and the `rides_seats_available_range` check
+-- would accept it because the value is still within bounds. That inflated the
+-- advertised seat count with no booking behind it, and the next real booking
+-- then either drove the column negative or let a host confirm a seat that was
+-- never there.
+--
+-- Firing on every update makes the column database-owned by construction, which
+-- is what the booking rules require: `total_seats` is what a host may change,
+-- `seats_available` is always the result. Re-running the booked-seat sum on
+-- unrelated updates (`setRideStatus`, the internal decrement in
+-- `apply_booking_seat_change`) is harmless - the booking rows are already
+-- committed by then, so the recomputed value is the same one the incremental
+-- arithmetic arrived at - and the "cannot reduce total seats" guard can only
+-- fire in a state that is already forbidden.
 drop trigger if exists rides_sync_total_seats on public.rides;
 create trigger rides_sync_total_seats
-  before update of total_seats on public.rides
+  before update on public.rides
   for each row execute function public.sync_ride_total_seats();
 
 drop trigger if exists bookings_prevent_self_booking on public.bookings;
@@ -1327,6 +1346,13 @@ drop policy if exists rides_insert_own on public.rides;
 create policy rides_insert_own
   on public.rides for insert to authenticated with check (driver_id = auth.uid());
 
+-- Ownership cannot be transferred or orphaned by this policy even though it
+-- grants a blanket UPDATE: `with check` is evaluated on the row *after* the
+-- write, so a driver who sends a different (or null) `driver_id` fails the
+-- check. The derived `seats_available` column is writable in the payload but
+-- `rides_sync_total_seats` overwrites it on every update, so it is not a hole -
+-- see that trigger. What remains writable is the host's own itinerary, pricing
+-- and lifecycle state, and lifecycle order is still `enforce_ride_status_transition`.
 drop policy if exists rides_update_own on public.rides;
 create policy rides_update_own
   on public.rides for update to authenticated
@@ -1365,9 +1391,19 @@ create policy bookings_select_involved
   on public.bookings for select to authenticated
   using (rider_id = auth.uid() or public.is_ride_driver(ride_id));
 
+-- A booking can only ever be *created* as `pending`.
+--
+-- `bookings_enforce_status` is a `before update of status` trigger, so it never
+-- sees an INSERT. Without the status predicate below, a rider could skip the
+-- entire accept -> payment_pending -> confirmed sequence by inserting a booking
+-- that is already `confirmed`, which would also hand them the seat via
+-- `bookings_apply_seat_change` and let them reach a driver's chat and live map
+-- through `is_ride_passenger`. The database has to own that sequence, so the
+-- insert is pinned to the one state a rider is allowed to originate.
 drop policy if exists bookings_insert_own on public.bookings;
 create policy bookings_insert_own
-  on public.bookings for insert to authenticated with check (rider_id = auth.uid());
+  on public.bookings for insert to authenticated
+  with check (rider_id = auth.uid() and status = 'pending');
 
 drop policy if exists bookings_update_involved on public.bookings;
 create policy bookings_update_involved
@@ -3348,6 +3384,15 @@ create policy ride_locations_update_driver
   on public.ride_locations for update to authenticated
   using (driver_id = auth.uid() and public.is_ride_driver(ride_id))
   with check (driver_id = auth.uid() and public.is_ride_driver(ride_id));
+
+-- Without this, `clearRideLocation` deleted nothing: with RLS enabled and no
+-- DELETE policy, Postgres returns zero deleted rows and no error, so the caller
+-- believed it had stopped sharing while the last known position stayed on the
+-- row and kept being read by every passenger on the ride.
+drop policy if exists ride_locations_delete_driver on public.ride_locations;
+create policy ride_locations_delete_driver
+  on public.ride_locations for delete to authenticated
+  using (driver_id = auth.uid() and public.is_ride_driver(ride_id));
 
 -- payments ---------------------------------------------------------------------
 -- A payment is readable by the rider who owes it and the host who is owed. The

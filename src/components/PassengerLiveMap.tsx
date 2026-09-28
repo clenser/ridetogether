@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { Map as MapLibreMap, Marker as MapLibreMarker } from "maplibre-gl";
-import { Navigation } from "lucide-react";
+import { AlertCircle, Navigation, RefreshCw } from "lucide-react";
 import type { Coordinates, RideLocation } from "../types";
 import { getSupabaseClient } from "../services/supabase";
-import { rowToRideLocation, type RideLocationRow } from "../repositories/liveLocationRepository";
+import { readRideLocationRow, rowToRideLocation, type RideLocationRow } from "../repositories/liveLocationRepository";
 
 interface PassengerLiveMapProps {
   rideId: string;
@@ -15,7 +15,18 @@ interface PassengerLiveMapProps {
 }
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-const POLL_INTERVAL_MS = 2_000;
+
+/**
+ * The single fallback read interval.
+ *
+ * Realtime is the primary transport and feeds the same handler; this only covers
+ * a dropped socket or a browser that throttles websockets in a background tab.
+ * There is deliberately no second interval anywhere in the passenger path.
+ */
+const POLL_INTERVAL_MS = 3_000;
+
+/** A fix older than this is drawn dimmed rather than as the current position. */
+const STALE_AFTER_SECONDS = 45;
 
 function isValidCoordinate(lat: number, lon: number): boolean {
   return (
@@ -26,6 +37,12 @@ function isValidCoordinate(lat: number, lon: number): boolean {
     lon >= -180 &&
     lon <= 180
   );
+}
+
+function isStaleLocation(location: RideLocation, now: number): boolean {
+  const recordedAt = Date.parse(location.recordedAt);
+  if (Number.isNaN(recordedAt)) return true;
+  return (now - recordedAt) / 1000 > STALE_AFTER_SECONDS;
 }
 
 function createDriverMarkerElement(heading?: number): HTMLDivElement {
@@ -44,21 +61,100 @@ export function PassengerLiveMap({
   rideId,
   origin,
   destination,
-  waypoints,
   routeGeometry,
 }: PassengerLiveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
   const readyMapRef = useRef<MapLibreMap | null>(null);
   const driverMarkerRef = useRef<MapLibreMarker | null>(null);
-  const lastLocationKeyRef = useRef<string | null>(null);
+
+  /**
+   * The newest position we have been told about, held outside React state.
+   *
+   * A fix can arrive before the map style finishes loading. Keeping it here means
+   * the marker is drawn the moment the map is ready instead of waiting for the
+   * next write, and it means no consumer has to reason about a stale `isMapReady`
+   * closure to decide whether a location was worth storing.
+   */
+  const latestLocationRef = useRef<RideLocation | null>(null);
+  const lastRecordedAtRef = useRef<string | null>(null);
 
   const [location, setLocation] = useState<RideLocation | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [isMapReady, setIsMapReady] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
+
+  /**
+   * The one and only marker update path.
+   *
+   * Position, heading and staleness are written here and nowhere else, so there
+   * is no way for two handlers to disagree about where the car is. It reads the
+   * map from a ref rather than from state, so it is correct both when the map is
+   * already ready and when a fix arrived first. It returns whether the marker
+   * could be drawn, so the caller can keep the location queued for later.
+   */
+  const updateDriverMarker = useCallback((next: RideLocation | null): boolean => {
+    const map = readyMapRef.current;
+    if (!map) return false;
+
+    if (!next || !isValidCoordinate(next.lat, next.lon)) {
+      driverMarkerRef.current?.remove();
+      driverMarkerRef.current = null;
+      return true;
+    }
+
+    const stale = isStaleLocation(next, Date.now());
+    const existing = driverMarkerRef.current;
+
+    if (existing) {
+      // Moved, not rebuilt: the element is reused so the car turns instead of
+      // blinking out and back on every fix.
+      existing.setLngLat([next.lon, next.lat]);
+      const element = existing.getElement();
+      element.classList.toggle("ride-map-live--stale", stale);
+      const arrow = element.querySelector<HTMLElement>(".ride-map-live__arrow");
+      if (arrow && next.heading != null && Number.isFinite(next.heading)) {
+        arrow.style.transform = `rotate(${next.heading}deg)`;
+      }
+      return true;
+    }
+
+    driverMarkerRef.current = new maplibregl.Marker({
+      element: createDriverMarkerElement(next.heading),
+      anchor: "center",
+    })
+      .setLngLat([next.lon, next.lat])
+      .addTo(map);
+    driverMarkerRef.current.getElement().classList.toggle("ride-map-live--stale", stale);
+    return true;
+  }, []);
+
+  /**
+   * The one and only ingestion point.
+   *
+   * Realtime, the fallback poll and the manual refresh all land here, so a fix
+   * cannot be handled differently depending on which transport delivered it. An
+   * identical `recorded_at` is the same fix arriving twice and is dropped, which
+   * is what keeps realtime and the poll from fighting over the marker.
+   */
+  const receiveLocation = useCallback(
+    (next: RideLocation, options: { force?: boolean } = {}): void => {
+      if (!isValidCoordinate(next.lat, next.lon)) return;
+      if (!options.force && lastRecordedAtRef.current === next.recordedAt) return;
+
+      lastRecordedAtRef.current = next.recordedAt;
+      latestLocationRef.current = next;
+      setLocation(next);
+      setNow(Date.now());
+      // Safe to call before the map is ready: the location is already stored in
+      // `latestLocationRef`, and the readiness effect below redraws it.
+      updateDriverMarker(next);
+    },
+    [updateDriverMarker],
+  );
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current) return undefined;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -72,8 +168,6 @@ export function PassengerLiveMap({
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
-    mapRef.current = map;
-
     const handleStyleLoad = () => {
       readyMapRef.current = map;
       setIsMapReady(true);
@@ -82,25 +176,66 @@ export function PassengerLiveMap({
 
     return () => {
       map.remove();
-      mapRef.current = null;
       readyMapRef.current = null;
+      driverMarkerRef.current?.remove();
       driverMarkerRef.current = null;
+      setIsMapReady(false);
     };
+    // Primitives only: the map is built once for this ride. A new `origin`
+    // object with the same coordinates must never tear the map down.
   }, [origin.lat, origin.lon]);
 
+  /**
+   * Draws whatever we already know as soon as the map is usable.
+   *
+   * `updateDriverMarker` is stable and reads the map from a ref, so this cannot
+   * capture a stale readiness flag - it is the fix for a location that landed
+   * before `style.load` being thrown away.
+   */
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !readyMapRef.current) return;
+    if (!isMapReady) return;
+    updateDriverMarker(latestLocationRef.current);
+  }, [isMapReady, updateDriverMarker]);
 
-    const validRoute = routeGeometry.filter(
-      (pos) =>
-        Array.isArray(pos) &&
-        Number.isFinite(pos[0]) &&
-        Number.isFinite(pos[1]) &&
-        pos[0] >= -180 &&
-        pos[0] <= 180 &&
-        pos[1] >= -90 &&
-        pos[1] <= 90,
+  /**
+   * Stable identities for the route effect.
+   *
+   * `origin`, `destination` and the `routeGeometry` default are rebuilt on every
+   * parent render, so depending on them directly re-ran `fitBounds` roughly once
+   * a second and fought the user for the camera. These strings change only when
+   * the route actually changes.
+   */
+  const originKey = `${origin.lat},${origin.lon}`;
+  const destinationKey = `${destination.lat},${destination.lon}`;
+  const routeKey = useMemo(
+    () => routeGeometry.map((position) => `${position[0]},${position[1]}`).join("|"),
+    [routeGeometry],
+  );
+
+  const routePropsRef = useRef({ origin, destination, routeGeometry });
+  routePropsRef.current = { origin, destination, routeGeometry };
+
+  /**
+   * Route geometry and camera. This is the only place the camera is moved, and it
+   * runs only when the route itself changes - never when the driver moves.
+   */
+  useEffect(() => {
+    if (!isMapReady) return;
+    const map = readyMapRef.current;
+    if (!map) return;
+
+    const { origin: currentOrigin, destination: currentDestination, routeGeometry: currentRoute } =
+      routePropsRef.current;
+
+    const validRoute = currentRoute.filter(
+      (position) =>
+        Array.isArray(position) &&
+        Number.isFinite(position[0]) &&
+        Number.isFinite(position[1]) &&
+        position[0] >= -180 &&
+        position[0] <= 180 &&
+        position[1] >= -90 &&
+        position[1] <= 90,
     );
 
     const routeData = {
@@ -133,88 +268,19 @@ export function PassengerLiveMap({
 
     const bounds = new maplibregl.LngLatBounds();
     validRoute.forEach(([lon, lat]) => bounds.extend([lon, lat]));
-    bounds.extend([origin.lon, origin.lat]);
-    bounds.extend([destination.lon, destination.lat]);
+    bounds.extend([currentOrigin.lon, currentOrigin.lat]);
+    bounds.extend([currentDestination.lon, currentDestination.lat]);
     map.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 650 });
-  }, [routeGeometry, origin, destination]);
+  }, [isMapReady, originKey, destinationKey, routeKey]);
 
-  const liveLat = location?.lat ?? null;
-  const liveLon = location?.lon ?? null;
-  const liveHeading = location?.heading ?? null;
-  const liveStale = location ? (Date.now() - Date.parse(location.recordedAt)) / 1000 > 45 : false;
-
+  /**
+   * Realtime plus one fallback poll, both feeding `receiveLocation`.
+   */
   useEffect(() => {
-    const map = readyMapRef.current;
-    if (!map || !isMapReady) return;
-
-    if (
-      liveLat === null
-      || liveLon === null
-      || !Number.isFinite(liveLat)
-      || !Number.isFinite(liveLon)
-      || liveLat < -90
-      || liveLat > 90
-      || liveLon < -180
-      || liveLon > 180
-    ) {
-      driverMarkerRef.current?.remove();
-      driverMarkerRef.current = null;
-      return;
-    }
-
-    const existing = driverMarkerRef.current;
-    if (existing) {
-      existing.setLngLat([liveLon, liveLat]);
-      map.triggerRepaint();
-      const element = existing.getElement();
-      element.classList.toggle("ride-map-live--stale", liveStale);
-      const arrow = element.querySelector<HTMLElement>(".ride-map-live__arrow");
-      if (arrow && liveHeading !== null && Number.isFinite(liveHeading)) {
-        arrow.style.transform = `rotate(${liveHeading}deg)`;
-      }
-      return;
-    }
-
-    driverMarkerRef.current = new maplibregl.Marker({
-      element: createDriverMarkerElement(liveHeading ?? undefined),
-      anchor: "center",
-    })
-      .setLngLat([liveLon, liveLat])
-      .addTo(map);
-  }, [isMapReady, liveHeading, liveLat, liveLon, liveStale]);
-
-  useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) return undefined;
 
     let active = true;
     const client = getSupabaseClient();
-
-    const handleLocation = (loc: RideLocation) => {
-      if (!active) return;
-      const key = `${loc.lat},${loc.lon},${loc.recordedAt}`;
-      if (key === lastLocationKeyRef.current) return;
-      lastLocationKeyRef.current = key;
-      setLocation(loc);
-      setNow(Date.now());
-
-      const map = readyMapRef.current;
-      if (!map || !isMapReady) return;
-      const lat = loc.lat;
-      const lon = loc.lon;
-      if (!isValidCoordinate(lat, lon)) return;
-      const existing = driverMarkerRef.current;
-      if (existing) {
-        console.log("[LIVE-MAP] marker update", { lat: loc.lat, lon: loc.lon, recordedAt: loc.recordedAt });
-        existing.setLngLat([lon, lat]);
-        map.triggerRepaint();
-        const element = existing.getElement();
-        element.classList.toggle("ride-map-live--stale", false);
-        const arrow = element.querySelector<HTMLElement>(".ride-map-live__arrow");
-        if (arrow && loc.heading != null && Number.isFinite(loc.heading)) {
-          arrow.style.transform = `rotate(${loc.heading}deg)`;
-        }
-      }
-    };
 
     const channel = client
       .channel(`passenger-live-location:${rideId}`)
@@ -227,82 +293,133 @@ export function PassengerLiveMap({
           filter: `ride_id=eq.${rideId}`,
         },
         (payload) => {
+          if (!active) return;
           const next = (payload.new ?? payload.old) as Partial<RideLocationRow> | undefined;
           if (!next?.ride_id) return;
-          const parsed = rowToRideLocation(next as RideLocationRow);
-          console.log("[LIVE-MAP] realtime received", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
-          handleLocation(parsed);
+          receiveLocation(rowToRideLocation(next as RideLocationRow));
         },
       )
-      .subscribe((status) => {
-        console.log("[LIVE-MAP] realtime status", { status, rideId });
-      });
+      .subscribe();
 
     const poll = async () => {
       if (!active) return;
       try {
-        const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/ride_locations?ride_id=eq.${rideId}&select=*`;
-        const { data: { session } } = await client.auth.getSession();
-        const response = await fetch(url, {
-          headers: {
-            Authorization: `Bearer ${session?.access_token ?? ""}`,
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-            cache: "no-store",
-          },
-        });
-        console.log("[LIVE-MAP] poll response", {
-          status: response.status,
-          lat: (await response.clone().json())[0]?.lat,
-          lon: (await response.clone().json())[0]?.lon,
-          recordedAt: (await response.clone().json())[0]?.recorded_at,
-        });
-        if (!response.ok) {
-          const body = await response.text();
-          console.log("[LIVE-MAP] REST ERROR", { status: response.status, body });
-          return;
-        }
-        const rows = (await response.json()) as RideLocationRow[];
-        const stored = rows[0];
-        if (!stored) return;
-        const parsed = rowToRideLocation(stored);
-        console.log("[LIVE-MAP] poll data", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
-        handleLocation(parsed);
+        const stored = await readRideLocationRow(rideId);
+        if (!active || !stored) return;
+        receiveLocation(stored);
       } catch (error) {
-        console.log("[LIVE-MAP] poll error", error);
+        // Realtime may still be delivering, so a failed read is not surfaced as a
+        // user-facing error here. The repository already logged status and body.
+        if (import.meta.env.DEV) {
+          console.warn("[live-location] fallback poll failed", error);
+        }
       }
     };
 
     const interval = window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+    // Read once on arrival so a passenger joining mid-journey sees the car
+    // immediately rather than waiting a full interval.
+    void poll();
 
     return () => {
       active = false;
       window.clearInterval(interval);
       void client.removeChannel(channel);
     };
-  }, [rideId]);
+  }, [receiveLocation, rideId]);
 
+  /**
+   * Re-evaluates the stale badge on a tick.
+   *
+   * This calls the same `updateDriverMarker` as every other source. It changes
+   * only the dimmed styling, because that depends on wall-clock time rather than
+   * on a new fix - but it goes through the one marker path so the two can never
+   * disagree.
+   */
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      updateDriverMarker(latestLocationRef.current);
+    }, 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [updateDriverMarker]);
 
-  const ageSeconds = location
+  /**
+   * Manual refresh of the driver's position.
+   *
+   * This is deliberately not "refresh route": no route is recalculated, the map
+   * is not recreated and the camera does not move. It reads the stored position
+   * once and pushes it straight through the marker path. If the read fails the
+   * existing marker stays exactly where it is and the reason is shown, because a
+   * marker that jumps to the origin is worse than one that admits it is old.
+   */
+  const handleRefreshLocation = useCallback(async () => {
+    if (!rideId || isRefreshing) return;
+    setIsRefreshing(true);
+    setRefreshError("");
+    try {
+      const stored = await readRideLocationRow(rideId);
+      if (!stored) {
+        setRefreshError("The driver has not shared a position for this trip yet.");
+        return;
+      }
+      receiveLocation(stored, { force: true });
+    } catch (error) {
+      setRefreshError(
+        error instanceof Error && error.message
+          ? error.message
+          : "We could not refresh the driver's position.",
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [isRefreshing, receiveLocation, rideId]);
+
+  const ageSeconds = location && Number.isFinite(now)
     ? Math.max(0, Math.round((now - Date.parse(location.recordedAt)) / 1000))
     : null;
+  const isStale = location ? isStaleLocation(location, now) : false;
 
   return (
     <div className="passenger-live-map">
-      <div ref={containerRef} className="passenger-live-map__container" />
-      {location ? (
-        <p className="live-status">
-          <Navigation size={14} />
-          {ageSeconds !== null && ageSeconds > 45
-            ? `Driver's last position was ${ageSeconds}s ago.`
-            : "Showing the driver's live position."}
+      <div className="passenger-live-map__toolbar">
+        <p
+          className={`live-status${isStale ? " live-status--stale" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          <Navigation size={14} aria-hidden="true" />
+          {location === null
+            ? "Waiting for driver location…"
+            : isStale
+              ? `Driver's last position was ${ageSeconds ?? 0}s ago.`
+              : "Showing the driver's live position."}
         </p>
-      ) : (
-        <p className="live-status live-status--waiting">Waiting for driver location…</p>
-      )}
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => void handleRefreshLocation()}
+          disabled={isRefreshing}
+          aria-label="Refresh driver location"
+          title="Refresh driver location"
+          data-testid="live-location-refresh"
+        >
+          <RefreshCw className={isRefreshing ? "spin" : undefined} size={16} aria-hidden="true" />
+        </button>
+      </div>
+
+      <div
+        ref={containerRef}
+        className="passenger-live-map__container"
+        data-testid="passenger-live-map"
+      />
+
+      {refreshError ? (
+        <p className="live-status live-status--error" role="alert" data-testid="live-location-error">
+          <AlertCircle size={14} aria-hidden="true" />
+          {refreshError}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -4,7 +4,9 @@ import {
   isAuthCallbackUrl,
   isCapacitorShellOrigin,
   isNativeApp,
+  isPasswordResetUrl,
   NATIVE_AUTH_REDIRECT_URL,
+  NATIVE_PASSWORD_RESET_URL,
   openAuthWindow,
   readSessionFromDeepLink,
 } from "./nativeAuth";
@@ -289,7 +291,32 @@ const resolveRedirectTo = (): string => {
  * to the OAuth callback, so reusing it here would drop the member on the sign-in
  * screen instead of the password form.
  */
-const resolveRecoveryRedirect = (): string => `${appOrigin()}${PASSWORD_RESET_PATH}`;
+const resolveRecoveryRedirect = (): string => {
+  // Recovery is not an OAuth flow, so the custom scheme is not taken from the
+  // configured OAuth redirect - but the reason it cannot use the WebView origin
+  // is the same: Supabase opens the emailed link in the system browser, and
+  // `https://localhost` inside the shell is not something a browser can serve.
+  if (isNativeApp()) return NATIVE_PASSWORD_RESET_URL;
+
+  const explicit = import.meta.env.VITE_AUTH_REDIRECT_URL?.trim();
+  if (explicit) {
+    // Only the origin is meaningful here; the path decides whether the member
+    // reaches the password form or the sign-in screen.
+    try {
+      return new URL(PASSWORD_RESET_PATH, explicit).toString();
+    } catch {
+      // Fall through to the origin-derived default below.
+    }
+  }
+
+  if (isCapacitorShellOrigin()) {
+    throw new Error(
+      "RideTogether could not work out where to return you from the app. Please reopen RideTogether and try in a moment.",
+    );
+  }
+
+  return `${appOrigin()}${PASSWORD_RESET_PATH}`;
+};
 
 /**
  * Starts the Google sign-in flow.
@@ -343,6 +370,16 @@ export const signInWithGoogle = async (): Promise<void> => {
 };
 
 /**
+ * What a settled deep link turned out to be.
+ *
+ * `sign-in` and `recovery` produce the same kind of session in the URL fragment,
+ * so the caller cannot tell them apart from the session alone. It matters:
+ * a recovered member has to land on the password form, and a signed-in member
+ * must not be pushed out of the app they were already using.
+ */
+export type NativeAuthSettlement = "sign-in" | "recovery";
+
+/**
  * Finishes a native sign-in once the deep link brings the app back.
  *
  * The session arrives in the URL fragment, exactly as it does on the web, but the
@@ -350,13 +387,18 @@ export const signInWithGoogle = async (): Promise<void> => {
  * tokens are handed to the client explicitly, which persists them and fires
  * `onAuthStateChange` for `AuthContext` like any other sign-in.
  *
+ * Recovery uses the same mechanism. A recovery link carries an ordinary session
+ * whose subject is the member being reset, so establishing it is all that is
+ * needed for `ResetPasswordPage` to see `isAuthenticated` and offer the form.
+ *
  * Safe to call for any app URL: unrelated links resolve to `null` and are
  * ignored, and a second call after a successful settle is a no-op because the
  * client already holds the session.
  */
-export const settleNativeAuthRedirect = async (url: string): Promise<boolean> => {
-  if (!isNativeApp()) return false;
+export const settleNativeAuthRedirect = async (url: string): Promise<NativeAuthSettlement | null> => {
+  if (!isNativeApp()) return null;
 
+  const isRecovery = isPasswordResetUrl(url);
   const result = readSessionFromDeepLink(url);
   if (!result) {
     // A callback with no session in it is still ours: this sign-in opened that
@@ -365,7 +407,7 @@ export const settleNativeAuthRedirect = async (url: string): Promise<boolean> =>
     // also what a rejected redirect looks like, so dismissing is what lets the
     // member see the app at all.
     if (isAuthCallbackUrl(url)) await closeAuthWindow();
-    return false;
+    return null;
   }
 
   // The provider can hand back a usable-looking deep link alongside an error, so
@@ -386,7 +428,7 @@ export const settleNativeAuthRedirect = async (url: string): Promise<boolean> =>
   }
 
   await closeAuthWindow();
-  return true;
+  return isRecovery ? "recovery" : "sign-in";
 };
 
 /**

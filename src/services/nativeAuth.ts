@@ -30,6 +30,24 @@ export const NATIVE_AUTH_SCHEME = "com.ridetogether.app";
 export const NATIVE_AUTH_REDIRECT_URL = `${NATIVE_AUTH_SCHEME}:/auth/callback`;
 
 /**
+ * Where a recovery link must come back to on native.
+ *
+ * Recovery cannot use the WebView origin. Supabase opens the emailed link in the
+ * system browser, and inside the Android shell that origin is
+ * `https://localhost`, which is the Capacitor WebView's own private scheme - no
+ * browser can serve it, so the member got a connection error instead of a reset
+ * form. The custom scheme is claimed by the manifest, so the link lands back in
+ * the app where the deep-link listener can settle it.
+ */
+export const NATIVE_PASSWORD_RESET_URL = `${NATIVE_AUTH_SCHEME}:/reset-password`;
+
+/** The two routes the app claims on its own scheme. */
+const NATIVE_REDIRECT_PATHS: ReadonlySet<string> = new Set([
+  "/auth/callback",
+  "/reset-password",
+]);
+
+/**
  * Origins the native shell serves this bundle from. They are not a deployment:
  * the Capacitor WebView loads the local `dist` folder over a scheme it owns, so
  * nothing is listening on them for an OAuth callback to land on. Android uses
@@ -156,16 +174,37 @@ export const readSessionFromDeepLink = (
 };
 
 /**
- * Whether a URL is this app's own OAuth callback, as opposed to any other link
- * the scheme is registered for. Decides when the system browser was opened by
- * this sign-in attempt and should be dismissed.
+ * Whether a URL is one this app's own redirect claims, as opposed to any other
+ * link the scheme is registered for. Decides when the system browser was opened
+ * by a sign-in or recovery attempt and should be dismissed.
+ *
+ * Both routes are covered because both are handed to the system browser by this
+ * app. Matching only the OAuth callback meant a recovery link left the browser
+ * sitting on top of the app after the reset had already been settled.
  */
 export const isAuthCallbackUrl = (url: string): boolean => {
   try {
     const parsed = new URL(url);
     return (
       parsed.protocol === `${NATIVE_AUTH_SCHEME}:` &&
-      parsed.pathname === "/auth/callback"
+      NATIVE_REDIRECT_PATHS.has(parsed.pathname)
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Whether a URL is the password-recovery return specifically, as opposed to an
+ * OAuth callback. Both carry a session in the fragment, so this is what decides
+ * whether the member should land on the reset form or continue into the app.
+ */
+export const isPasswordResetUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === `${NATIVE_AUTH_SCHEME}:` &&
+      parsed.pathname === "/reset-password"
     );
   } catch {
     return false;

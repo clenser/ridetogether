@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
+import { useNavigate } from "react-router-dom";
 import {
   describeProfileFailure,
   describeProfileGaps,
@@ -29,6 +30,7 @@ import {
   settleNativeAuthRedirect,
   signOut as supabaseSignOut,
   signUp as supabaseSignUp,
+  PASSWORD_RESET_PATH,
   type SignInInput,
   type SignUpInput,
   type SignUpResult,
@@ -129,6 +131,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [status, setStatus] = useState<AuthStatus>(() =>
     CONFIG.configured ? "initializing" : "unavailable",
   );
+  // Declared here, at the top level of the provider, because the native
+  // recovery return path below has to route a member to the password form. It
+  // has to be a top-level hook call: inside the effect the hook order would
+  // change between renders and React would throw.
+  const navigate = useNavigate();
   const [session, setSession] = useState<Session | null>(null);
   const [authUser, setAuthUser] = useState<SupabaseUser | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
@@ -329,15 +336,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   /**
-   * Native OAuth return path.
+   * Native OAuth and password-recovery return path.
    *
    * On the web the Supabase client settles the callback itself, so there is
    * nothing to do here and the effect tears down immediately. In the Android
    * shell the system browser is a separate app, so the return arrives as a
-   * `com.ridetogether.app:/auth/callback` deep link instead of a navigation. This
-   * subscribes for the app's whole lifetime rather than only during a sign-in,
-   * because the OS may have killed the process and restarted the app with that
-   * URL, which is what `consumeLaunchUrl` covers.
+   * `com.ridetogether.app:/auth/callback` or
+   * `com.ridetogether.app:/reset-password` deep link instead of a navigation.
+   * This subscribes for the app's whole lifetime rather than only during a
+   * sign-in, because the OS may have killed the process and restarted the app
+   * with that URL, which is what `consumeLaunchUrl` covers.
    */
   useEffect(() => {
     let cancelled = false;
@@ -349,7 +357,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           // A deep link with no session in it is not ours to report on: it can be
           // any link the app is registered for, so it is ignored silently.
           if (!settled) return;
+          if (cancelled) return;
           setSessionNotice(null);
+          // A recovered member is mid-journey with no way to reach the form on
+          // their own: the reset page only exists behind a link, and a cold
+          // start from that link lands on whatever route the app boots to. Route
+          // them there explicitly. `replace` so backing out does not re-open a
+          // completed reset.
+          if (settled === "recovery") {
+            navigate(PASSWORD_RESET_PATH, { replace: true });
+          }
         })
         .catch((error: unknown) => {
           if (cancelled) return;
@@ -377,7 +394,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       cancelled = true;
       teardown?.();
     };
-  }, []);
+    // `navigate` is stable across renders in React Router 6, so this still
+    // subscribes exactly once for the lifetime of the app.
+  }, [navigate]);
 
   const signUp = useCallback(
     async (input: SignUpInput): Promise<SignUpResult> => {

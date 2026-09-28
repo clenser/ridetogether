@@ -3,12 +3,12 @@ import { useNavigate } from "react-router-dom";
 import {
   Car,
   CarFront,
-  Compass,
   MapPin,
   PlusCircle,
   Route,
   Search,
   TicketCheck,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useApp } from "../context/AppContext";
@@ -240,7 +240,7 @@ export function GlobalSearch() {
               inputRef.current?.focus();
             }}
           >
-            <Compass size={15} aria-hidden="true" />
+            <X size={15} aria-hidden="true" />
           </button>
         ) : null}
       </div>

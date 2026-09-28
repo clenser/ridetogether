@@ -100,6 +100,71 @@ export const getRideLocations = async (rideIds: string[]): Promise<Map<string, R
 };
 
 /**
+ * Reads the stored position straight over HTTP, bypassing the PostgREST client.
+ *
+ * This exists for the passenger's live map, which polls on a fixed interval while
+ * the map is open and needs one guaranteed-fresh row per tick. Three details are
+ * deliberate and must not be "simplified" away:
+ *
+ *   - `cache: "no-store"`. Without it a browser or intermediary HTTP cache is
+ *     free to answer with a row from minutes ago, and the marker freezes while
+ *     every log line claims the read succeeded.
+ *   - no cache-busting query parameter. An unrecognised PostgREST parameter is
+ *     rejected outright by a strict deployment, which turns a read into a 400.
+ *   - the body is read as text once and parsed once. Reading it a second time to
+ *     log the lat/lon while also reading it to use the data is what previously
+ *     hid the real HTTP status behind a JSON parse error.
+ */
+export const readRideLocationRow = async (rideId: string): Promise<RideLocation | null> => {
+  if (!rideId) return null;
+  const client = getSupabaseClient();
+  const { data } = await client.auth.getSession();
+
+  const url =
+    `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/ride_locations`
+    + `?ride_id=eq.${encodeURIComponent(rideId)}&select=*`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${data.session?.access_token ?? ""}`,
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    },
+    cache: "no-store",
+  });
+
+  const body = await response.text();
+
+  if (!response.ok) {
+    console.error("[live-location] position read failed", {
+      status: response.status,
+      body: body.slice(0, 500),
+    });
+    throw new DataError(
+      "We could not read the driver's position. Please try again.",
+      response.status >= 500 ? "server-side" : "unknown",
+    );
+  }
+
+  let rows: unknown;
+  try {
+    rows = JSON.parse(body);
+  } catch (error) {
+    console.error("[live-location] unreadable position response", {
+      status: response.status,
+      body: body.slice(0, 500),
+    });
+    throw new DataError("The server returned an unreadable position. Please try again.", "server-side", error);
+  }
+
+  if (!Array.isArray(rows)) return null;
+  const stored = rows[0] as RideLocationRow | undefined;
+  if (!stored) return null;
+
+  const parsed = rowToRideLocation(stored);
+  return isFiniteNumber(parsed.lat) && isFiniteNumber(parsed.lon) ? parsed : null;
+};
+
+/**
  * Publishes the host's current position.
  *
  * `recorded_at` is the database's `now()`, not the browser's clock, so two
@@ -162,12 +227,24 @@ export const reportRideLocation = async (input: ReportPositionInput): Promise<Ri
   return rowToRideLocation(data as RideLocationRow);
 };
 
-/** Stops reporting. Used when the ride ends, and by the host when they pause. */
-export const clearRideLocation = async (rideId: string): Promise<void> => {
-  if (!rideId) return;
+/**
+ * Stops reporting. Used when the ride ends, and by the host when they pause.
+ *
+ * The matched row count is returned deliberately. A `delete` that matches
+ * nothing is indistinguishable from a successful one unless the count is
+ * checked, and a driver pressing "stop sharing" must be able to trust that the
+ * stored position is actually gone rather than assuming the call succeeded.
+ */
+export const clearRideLocation = async (rideId: string): Promise<boolean> => {
+  if (!rideId) return false;
   const client = getSupabaseClient();
-  const { error } = await client.from(LOCATION_TABLE).delete().eq("ride_id", rideId);
+  const { data, error } = await client
+    .from(LOCATION_TABLE)
+    .delete()
+    .eq("ride_id", rideId)
+    .select("id");
   if (error) throw toDataError(error, "update");
+  return (data ?? []).length > 0;
 };
 
 /**
