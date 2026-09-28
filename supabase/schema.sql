@@ -2773,6 +2773,7 @@ begin
   end if;
 
   new.driver_id := driver;
+  new.recorded_at := now();
   return new;
 end;
 $$;
