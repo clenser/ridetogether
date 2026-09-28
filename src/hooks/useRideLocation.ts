@@ -163,8 +163,22 @@ export function useRideLocation({
       try {
         const stored = await getRideLocation(rideId);
         if (!active || !stored) return;
+        const previousRecordedAt = locationRef.current?.recordedAt ?? null;
+        console.log("[LIVE-LOCATION] poll response", {
+          lat: stored.lat,
+          lon: stored.lon,
+          recordedAt: stored.recordedAt,
+          previousRecordedAt,
+          isNewer: !previousRecordedAt || stored.recordedAt > previousRecordedAt,
+        });
         const current = locationRef.current;
-        if (current && stored.recordedAt <= current.recordedAt) return;
+        if (current && stored.recordedAt <= current.recordedAt) {
+          console.log("[LIVE-LOCATION] poll skipped", {
+            storedRecordedAt: stored.recordedAt,
+            previousRecordedAt,
+          });
+          return;
+        }
         locationRef.current = stored;
         if (import.meta.env.DEV) {
           console.log("[LIVE-LOCATION] polling received", { lat: stored.lat, lon: stored.lon, recordedAt: stored.recordedAt });

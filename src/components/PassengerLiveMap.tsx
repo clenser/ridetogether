@@ -204,6 +204,7 @@ export function PassengerLiveMap({
       if (!isValidCoordinate(lat, lon)) return;
       const existing = driverMarkerRef.current;
       if (existing) {
+        console.log("[LIVE-MAP] marker update", { lat: loc.lat, lon: loc.lon, recordedAt: loc.recordedAt });
         existing.setLngLat([lon, lat]);
         map.triggerRepaint();
         const element = existing.getElement();
@@ -229,16 +230,12 @@ export function PassengerLiveMap({
           const next = (payload.new ?? payload.old) as Partial<RideLocationRow> | undefined;
           if (!next?.ride_id) return;
           const parsed = rowToRideLocation(next as RideLocationRow);
-          if (import.meta.env.DEV) {
-            console.log("[LIVE-LOCATION] realtime received", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
-          }
+          console.log("[LIVE-MAP] realtime received", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
           handleLocation(parsed);
         },
       )
       .subscribe((status) => {
-        if (import.meta.env.DEV) {
-          console.log("[LIVE-LOCATION] realtime status", { status, rideId });
-        }
+        console.log("[LIVE-MAP] realtime status", { status, rideId });
       });
 
     const poll = async () => {
@@ -253,17 +250,25 @@ export function PassengerLiveMap({
             cache: "no-store",
           },
         });
-        if (!response.ok) return;
+        console.log("[LIVE-MAP] poll response", {
+          status: response.status,
+          lat: (await response.clone().json())[0]?.lat,
+          lon: (await response.clone().json())[0]?.lon,
+          recordedAt: (await response.clone().json())[0]?.recorded_at,
+        });
+        if (!response.ok) {
+          const body = await response.text();
+          console.log("[LIVE-MAP] REST ERROR", { status: response.status, body });
+          return;
+        }
         const rows = (await response.json()) as RideLocationRow[];
         const stored = rows[0];
         if (!stored) return;
         const parsed = rowToRideLocation(stored);
-        if (import.meta.env.DEV) {
-          console.log("[LIVE-LOCATION] poll response", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
-        }
+        console.log("[LIVE-MAP] poll data", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
         handleLocation(parsed);
-      } catch {
-        // Polling failure is silent.
+      } catch (error) {
+        console.log("[LIVE-MAP] poll error", error);
       }
     };
 

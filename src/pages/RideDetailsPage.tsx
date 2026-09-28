@@ -250,6 +250,8 @@ const rideDetailsStyles = `
 .rt-details-page .map-panel-header h2 { margin: 6px 0 0; color: var(--rt-text-strong); font-size: 1.08rem; }
 .rt-details-page .section-kicker { color: var(--rt-primary-strong); font-size: .71rem; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
 .rt-details-page .map-wrap { position: relative; min-height: 405px; overflow: hidden; background: var(--rt-surface-muted); }
+.passenger-live-map { position: relative; min-height: 405px; overflow: hidden; background: var(--rt-surface-muted); }
+.passenger-live-map__container { position: absolute; inset: 0; width: 100%; height: 100%; }
 .rt-details-page .map-wrap-tall { min-height: 405px; }
 .rt-details-page .ride-map { width: 100%; height: 405px; min-height: 405px; }
 .rt-details-page .map-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--rt-text); background: rgba(247,252,248,.72); font-size: .8rem; font-weight: 700; pointer-events: none; }
@@ -986,16 +988,7 @@ export default function RideDetailsPage() {
                 )}
                 {routeLoading && <div className="map-overlay"><LoaderCircle className="spin" size={23} /> Refreshing your real route…</div>}
               </div>
-              {liveLocation ? (
-                <p className={`live-status${live.isStale ? " live-status--stale" : ""}`}>
-                  <Navigation size={14} />
-                  {simulationActive
-                    ? "Demo simulation active — passengers see the simulated position."
-                    : live.isStale
-                      ? `Driver's last position was ${live.ageSeconds}s ago.`
-                      : "Showing the driver's live position."}
-                </p>
-              ) : null}
+              {!isDriver && liveLocation ? null : null}
               {isRunning && live.error && !simulationActive ? <p className="live-status live-status--error" role="alert"><AlertCircle size={14} />{live.error}</p> : null}
               {routeError && <div className="map-error" role="alert"><AlertCircle size={17} /><span>{routeError} The map and ride markers remain available.</span></div>}
               <div className="route-facts">
