@@ -288,6 +288,7 @@ export function RideMap({
     const existing = liveMarkerRef.current;
     if (existing) {
       existing.setLngLat([liveLon, liveLat]);
+      map.triggerRepaint();
       const element = existing.getElement();
       element.classList.toggle("ride-map-live--stale", liveStale);
       const arrow = element.querySelector<HTMLElement>(".ride-map-live__arrow");
