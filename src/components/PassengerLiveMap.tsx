@@ -241,7 +241,7 @@ export function PassengerLiveMap({
     const poll = async () => {
       if (!active) return;
       try {
-        const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/ride_locations?ride_id=eq.${rideId}&select=*&_live_ts=${Date.now()}`;
+        const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/ride_locations?ride_id=eq.${rideId}&select=*`;
         const { data: { session } } = await client.auth.getSession();
         const response = await fetch(url, {
           headers: {
