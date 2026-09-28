@@ -117,7 +117,7 @@ export function useRideLocation({
   // The callback uses refs to avoid stale closures: `setLocation` and `setNow`
   // are stable, but the payload handler must never capture an old `location`
   // value or it will appear to "not update" when React batches renders.
-  const locationRef = useRef<RideLocationRow | null>(null);
+  const locationRef = useRef<RideLocation | null>(null);
   useEffect(() => {
     if (!rideId || !enabled) return undefined;
     const client = getSupabaseClient();
@@ -135,7 +135,10 @@ export function useRideLocation({
           const next = (payload.new ?? payload.old) as Partial<RideLocationRow> | undefined;
           if (!next?.ride_id) return;
           const parsed = rowToRideLocation(next as RideLocationRow);
-          locationRef.current = next as RideLocationRow;
+          locationRef.current = parsed;
+          if (import.meta.env.DEV) {
+            console.log("[LIVE-LOCATION] realtime received", { lat: parsed.lat, lon: parsed.lon, recordedAt: parsed.recordedAt });
+          }
           setLocation(parsed);
           setNow(Date.now());
         },
@@ -160,8 +163,11 @@ export function useRideLocation({
         const stored = await getRideLocation(rideId);
         if (!active || !stored) return;
         const current = locationRef.current;
-        if (current && stored.recordedAt <= current.recorded_at) return;
-        locationRef.current = stored as unknown as RideLocationRow;
+        if (current && stored.recordedAt <= current.recordedAt) return;
+        locationRef.current = stored;
+        if (import.meta.env.DEV) {
+          console.log("[LIVE-LOCATION] polling received", { lat: stored.lat, lon: stored.lon, recordedAt: stored.recordedAt });
+        }
         setLocation(stored);
         setNow(Date.now());
       } catch {
